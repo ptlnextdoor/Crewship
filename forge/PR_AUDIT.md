@@ -2,6 +2,57 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #12 · 2026-10-23T18:38:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #12 forge: merged/attempts per forge.py+prompts version in state.json and status
+What it changes: `Forge.__init__` computes `self.version`, the first 8 hex chars of a sha256 over `forge.py` plus every `prompts/*.md`. Both history writers (cycle() merged, fail() retry/blocked) add it to their entry. `status()` prints merged/attempts per version, with `pre` for older entries. README gets one line. The loop's control flow does not change.
+Findings:
+- medium forge/forge.py:79-82 The version is computed once in `__init__`, but the prompts are not loaded once. `prompt()` (:92-96) re-reads `prompts/<name>.md` on every call. `lane_loop` restarts a lane only when the mtime of `forge.py` changes (:570), so a prompt-only merge reaches the next session right away and the version never moves. Every entry after that change is stamped with the old hash until the next `forge.py` edit. That later edit then lumps both changes under one hash.
+  - Reproduced on the PR head with a throwaway Forge. I appended a line to reviewer.md. `prompt("reviewer")` returned the new text, but `f.version` stayed `3aebde83`, and a fresh process computed `84bfa5c2`. So `forge status`, which runs in a fresh process, would print `now 84bfa5c2` while the lanes keep writing `3aebde83`.
+  - This is the usual case, not an edge case. Of the last 6 loop-affecting commits on origin/forge, 4 changed prompts only: #11 85dffc06, 75f2647b, #2 46cff95e, #10 62d9c33f. Open PRs #1, #3 and #9 are prompt-only too.
+  - The code comment "Computed once; a change lands when the loop restarts" is false for prompts.
+  - Measuring prompt changes is the PR's only purpose, so as written it reports wrong numbers for exactly the changes it exists to measure.
+  - Not a gate or security issue.
+- low forge/forge.py:82 `glob("*.md")` also hashes `scout.md` and `pr_audit.md`. In the live checkout they sit in the same directory (~/Dev/Crewship/forge/prompts; reflex1.toml sets no `prompts_dir`), but no lane reads them: forge.py calls `prompt()` only with planner, builder, reviewer and steward. I reproduced it: a scout.md-only edit changed the hash to `de0c5d3c`. Each such change splits the tally with no change in behaviour, and the PR body itself says a version needs a day or two of tickets before its ratio means anything.
+- low forge/README.md:71 "a prompt change that does not move that number on fresh tickets did not help" claims cause and effect. The PR body's own Limits section contradicts it: it is a tally, not a controlled comparison, and the ticket mix differs between versions. Also, given the first finding, a prompt-only change never gets its own number.
+- ok (security trace) The diff does not touch:
+  - gate(), touched_protected(), the protected list or reviewer.md
+  - the VERDICT parse, claim(), recover() or discard_strays()
+  - agent(), its timeouts or the killpg path
+  - the gh/PR create and merge calls, or gpu.py
+  Other checks:
+  - The hash reads only local files. No ticket text reaches `sh()` or any f-string command.
+  - Each lane writes only its own state.json through `save()` (tmp file, then replace). `version` belongs to each process, so no new shared state.
+  - History is still capped at `[-200:]`. Each entry grows by about 23 bytes; live entries average 99-106 bytes. The steward's `STATE=json.dumps(self.state)[-6000:]` stays bounded, and lane 1's state is 1460 bytes today.
+  - No model calls, quota or GPU spend.
+  - On the PR head, `selftest.py` passed all checks and `py_compile` is clean.
+- nit forge/forge.py:613-618 `by_version` prints in dict insertion order (lane 1's entries first, then lane 2 and so on), not by time. The tally covers only the last 200 entries per lane. Cosmetic; no change needed.
+Change needed (only for MERGE WITH CHANGE):
+1. In forge/forge.py, delete PR lines 79-82: the 3-line `# Short hash of forge.py plus the prompts…` comment and the `self.version = hashlib.sha256(...)` line.
+2. Insert this property directly above `def prompt(`. The three uses of `self.version` (:469, :491, :618) stay as they are.
+```python
+    @property
+    def version(self) -> str:
+        """Short hash of forge.py and the four role prompts as they are on disk now; prompt() re-reads the
+        prompts on every call and a prompt-only merge does not restart the lanes, so hash at stamp time."""
+        files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward"))]
+        return hashlib.sha256(b"".join(p.read_bytes() for p in files)).hexdigest()[:8]
+```
+3. Replace forge/README.md:71 with:
+`` `status` also prints merged/attempts per forge version (a short hash of `forge.py` and the four role prompts, taken when each history entry is written); it is a tally over different tickets, not a controlled comparison. ``
+
+I ran this edit on a throwaway copy:
+- A scout.md edit leaves the version unchanged.
+- A reviewer.md edit moves the running object's version (`3087ceb7 -> 0a0e599f`).
+- `status()` prints `3087ceb7 1/1`.
+- `py_compile` is clean.
+
+One limit remains: a cycle that is running when a deploy lands gets stamped with the new hash, at most one entry per lane per deploy.
+
+
 ## PR #8 · 2026-10-23T18:20:37Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (selftest failed after the fix:
 python3: can't open file '/home/ubuntu/.local/state/forge/review/fix-8/forge/selftest.py': [Errno 2] No such file or directory
 )
