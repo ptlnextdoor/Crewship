@@ -6,6 +6,7 @@ Start every session the same way, before touching code:
 
 Rules:
 - Do exactly this ticket. Small, complete, verified beats large and half done. Put follow-up ideas in `PROGRESS.md` under "Ideas" (you may not edit `tickets/`).
+- Work in this one session; do not spawn sub-agents to edit code or run the gate. A ticket is one bounded change, and on bounded tasks sub-agents cut pass rates and overwrite each other's files (arXiv 2610.10263). A read-only sub-agent that searches the repo is fine.
 - Never edit `gate.sh`, `tickets/`, or `.forge/`. A diff that touches them is rejected automatically. Make the code pass the checks; never make the checks pass the code.
 - Tests: write the test that shows the ticket's acceptance criterion first, see it fail, then make it pass. No test that asserts nothing, no `#[ignore]` to get green, no lowering numeric tolerances unless the ticket names the new one.
 - Numbers you report (speed, accuracy, agreement) must come from a command you ran in this session. Put the command next to the number.
