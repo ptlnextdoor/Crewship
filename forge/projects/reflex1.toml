@@ -27,25 +27,33 @@ HF_HOME = "~/.cache/huggingface"
 model = "anthropic/claude-fable-5-1"
 thinking = "xhigh"
 timeout_min = 40
+fallback = ["openai-codex/gpt-6.1-sol"]
 
 [roles.builder]
 model = "openai-codex/gpt-6.1-sol"
 thinking = "high"
 timeout_min = 75
+# Codex 5-hour window runs out on Plus; Opus takes over until it resets.
+fallback = ["anthropic/claude-opus-5-5"]
 
 [roles.builder_hard]
 model = "anthropic/claude-opus-5-5"
 thinking = "xhigh"
 timeout_min = 90
+fallback = ["openai-codex/gpt-6.1-sol"]
 
 [roles.reviewer]
 model = "anthropic/claude-opus-5-5"
 thinking = "high"
+fallback = ["anthropic/claude-fable-5-1"]
 
 [roles.reviewer_alt]
 model = "openai-codex/gpt-6-astra"
 thinking = "high"
+# Same-vendor review is the compromise when Codex is out; Fable is a different model than the Opus builder.
+fallback = ["anthropic/claude-fable-5-1"]
 
 [roles.steward]
 model = "anthropic/claude-fable-5-1"
 thinking = "medium"
+fallback = ["openai-codex/gpt-6.1-sol"]

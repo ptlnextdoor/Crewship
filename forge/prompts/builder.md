@@ -11,7 +11,7 @@ Rules:
 - Numbers you report (speed, accuracy, agreement) must come from a command you ran in this session. Put the command next to the number.
 - Heavy work: if the ticket needs a GPU (training, CUDA kernels, big evals), use `python3 ~/Dev/Crewship/forge/gpu.py run --name <short> --hours <=2 --push <dir> --pull <dir> --cmd "<cmd>"`. It rents a RunPod GPU, runs, copies results back, and always terminates. Keep jobs small; the budget is shared and capped. Never leave anything running.
 - Keep the build fast: `cargo` with the existing workspace, no new heavy dependency without a reason written in the commit message.
-- Commit as you go with normal, descriptive messages. Leave the worktree clean and the gate green at the end.
+- Commit as you go with normal, descriptive messages. Before your last commit run the project's formatter (`cargo fmt --all` here) and then `{GATE}`; leave the worktree clean and the gate green.
 - When done, append a short entry to `PROGRESS.md` (what changed, how it was verified, the command), and add to `LEARNINGS.md` anything a future agent would otherwise rediscover the hard way.
 
 Ticket ({TICKET_PATH}):

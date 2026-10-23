@@ -37,6 +37,10 @@ OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 UTC = dt.timezone.utc
 
 
+class QuotaExhausted(Exception):
+    """Every model available to a role hit its provider's usage limit."""
+
+
 def now() -> str:
     return dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -54,6 +58,8 @@ class Forge:
             "cycle": 0, "merged": 0, "failed": 0, "started": now(), "history": []}
         self.tickets = self.repo / c.get("tickets_dir", "tickets")
         self.protected = c.get("protected_paths", ["gate.sh", "tickets/", ".forge/"])
+        self.exhausted: dict[str, float] = {}  # vendor -> when its quota ran out (cleared after an hour)
+        self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
         home = str(Path.home())
@@ -112,15 +118,30 @@ class Forge:
         return r
 
     def agent(self, role: str, prompt: str, cwd: Path, timeout_min: int | None = None) -> tuple[int, str]:
-        """Run one headless omp session for a role ({model, thinking}). Returns (rc, tail of output)."""
+        """Run one headless omp session for a role. On a provider quota error, try the role's
+        `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
-        timeout = 60 * (timeout_min or r.get("timeout_min", 60))
+        chain = [r["model"]] + r.get("fallback", [])
+        for model in chain:
+            if model.split("/")[0] in self.exhausted:
+                continue
+            rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
+            if re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", text[-3000:], re.I) and rc != 0:
+                self.exhausted[model.split("/")[0]] = time.time()
+                self.log(f"quota: {model} exhausted; trying the next model for {role}")
+                continue
+            self.last_model[role] = model
+            return rc, text
+        raise QuotaExhausted(role)
+
+    def _agent_once(self, role: str, model: str, thinking: str, prompt: str, cwd: Path, timeout_min: int) -> tuple[int, str]:
+        timeout = 60 * timeout_min
         logdir = self.home / "sessions"
         logdir.mkdir(exist_ok=True)
         out = logdir / f"{self.state['cycle']:05d}-{role}.log"
-        cmd = [OMP, "-p", "--no-session", f"--model={r['model']}", f"--thinking={r.get('thinking', 'high')}",
+        cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
                "--approval-mode=yolo", prompt]
-        self.log(f"agent {role} model={r['model']}:{r.get('thinking', 'high')} cwd={cwd.name}")
+        self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:
             p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
                                env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
@@ -137,9 +158,23 @@ class Forge:
         """Stop spending when the shared Claude/Codex windows are nearly used (the owner works too)."""
         floor = self.cfg.get("limits", {}).get("max_window_used_pct", 85)
         r = subprocess.run([OMP, "usage"], capture_output=True, text=True, timeout=120)
-        used = [float(x) for x in re.findall(r"([\d.]+)% used", r.stdout)]
-        if used and max(used) >= floor:
-            self.log(f"quota: a window is {max(used):.0f}% used (floor {floor}%), pausing")
+        # Pause only when every vendor the roles use is over the floor; one vendor out is handled
+        # by per-role fallback. A vendor is over when any of its windows passes the floor.
+        over = {}
+        for block in re.split(r"\n(?=\S)", r.stdout):
+            name = block.split("\n", 1)[0].lower()
+            vendor = "anthropic" if "anthropic" in name else "openai-codex" if "codex" in name else None
+            used = [float(x) for x in re.findall(r"([\d.]+)% used", block)]
+            if vendor and used:
+                over[vendor] = max(used) >= floor
+        for v, is_over in over.items():
+            if is_over:
+                self.exhausted.setdefault(v, time.time())
+            else:
+                self.exhausted.pop(v, None)
+        vendors = {x["model"].split("/")[0] for x in self.cfg["roles"].values()}
+        if vendors and all(over.get(v, False) for v in vendors):
+            self.log(f"quota: every vendor over {floor}% ({over}), pausing")
             return False
         return True
 
@@ -213,7 +248,7 @@ class Forge:
         self.sh(f"git push -q -u origin {branch}", cwd=wt, timeout=120)
         title = re.search(r"^# (.+)$", ticket.read_text(), re.M)
         title = f"[{ticket.stem[:4]}] {title.group(1) if title else ticket.stem}"
-        model = self.cfg["roles"][builder]["model"]
+        model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
         body = (f"Opened by forge (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
                 f"The gate result and the cross-vendor review are posted below as comments; forge squash-merges on approval.\n\n"
                 f"<details><summary>Ticket {ticket.relative_to(self.repo)}</summary>\n\n{ticket.read_text()}\n</details>")
@@ -293,13 +328,14 @@ class Forge:
                 if bad or not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
             diff = self.sh("git diff main...HEAD", cwd=wt).stdout
-            # Reviewer comes from the other vendor than the builder (cross-family review).
-            same = self.cfg["roles"][builder]["model"].split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
+            # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
+            built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
+            same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
             reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
             rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000]), wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
-            self.pr_comment(self.pr, f"**review by `{self.cfg['roles'][reviewer]['model']}`**\n\n{review[-12000:]}")
+            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
             # land: rebase on main, re-gate, then merge (through the PR when there is one)
@@ -307,7 +343,7 @@ class Forge:
             ok, gout = self.gate(wt)
             if not ok:
                 return self.fail(ticket, f"gate failed after rebase on main.\n{gout[-2000:]}")
-            done_note = f"Landed by {self.cfg['roles'][builder]['model']}, approved by {self.cfg['roles'][reviewer]['model']}." + (f" PR: {self.pr}" if self.pr else "")
+            done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
             merged_via_pr = self.pr_merge(self.pr, branch)
@@ -401,6 +437,10 @@ class Forge:
                 self.cycle()
                 if self.state["cycle"] % every == 0:
                     self.steward()
+            except QuotaExhausted as e:
+                self.log(f"quota: no model left for {e}; ticket back to the queue, sleeping 15 min")
+                self.recover()
+                time.sleep(900)
             except Exception as e:  # keep the loop alive; record and move on
                 self.log(f"cycle error: {type(e).__name__}: {str(e)[:500]}")
                 self.recover()
