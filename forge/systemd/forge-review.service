@@ -1,0 +1,9 @@
+[Unit]
+Description=forge reviewctl: audit, gate and land PRs against the forge branch
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Dev/Crewship-scout
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/python3 %h/Dev/Crewship-scout/forge/reviewctl.py run
+Nice=10
