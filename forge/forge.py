@@ -262,9 +262,13 @@ class Forge:
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
-    def touched_protected(self, cwd: Path) -> list[str]:
-        files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
+    def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
+        files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
+
+    def rev(self, cwd: Path) -> str:
+        """Short HEAD sha, so every PR comment says which revision its evidence is about."""
+        return self.sh("git rev-parse --short HEAD", cwd=cwd).stdout.strip()
 
     def plan(self) -> None:
         self.log("queue low: planner turn")
@@ -416,7 +420,7 @@ class Forge:
             if bad:
                 return self.fail(ticket, f"diff edits protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
             ok, gout = self.gate(wt)
-            self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
+            self.pr_comment(self.pr, f"**gate at `{self.rev(wt)}`: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
             if not ok:
                 # one in-session repair pass with the gate output before giving up
                 rc, out = self.agent(builder, f"The gate failed. Fix the code (never the gate or tests' expectations unless the ticket says so) until `{self.cfg.get('gate', './gate.sh')}` passes, then commit.\n\nGate output:\n{gout}", wt)
@@ -424,7 +428,7 @@ class Forge:
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 bad = self.touched_protected(wt)
                 ok, gout = self.gate(wt)
-                self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
+                self.pr_comment(self.pr, f"**gate after repair at `{self.rev(wt)}`: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if bad or not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
             diff = self.sh("git diff main...HEAD", cwd=wt).stdout
@@ -435,13 +439,18 @@ class Forge:
             rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000]), wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
-            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
+            self.pr_comment(self.pr, f"**review of `{self.rev(wt)}` by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
-            # land: bring up to date with main, re-gate, then merge (through the PR when there is one)
+            # land: bring up to date with main, re-check protected paths and re-gate on the revision that
+            # actually merges (a builder conflict resolution is new code the reviewer never saw), then merge
             if not self.rebase_onto_main(wt, builder):
                 return self.fail(ticket, "could not bring the branch up to date with main (conflicts the builder could not resolve)")
+            bad = self.touched_protected(wt, "origin/main")
+            if bad:
+                return self.fail(ticket, f"diff edits protected gate/ticket paths {bad} after updating from main; not allowed.")
             ok, gout = self.gate(wt)
+            self.pr_comment(self.pr, f"**gate on merged revision `{self.rev(wt)}`: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
             if not ok:
                 return self.fail(ticket, f"gate failed after updating from main.\n{gout[-2000:]}")
             done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
