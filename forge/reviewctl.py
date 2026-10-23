@@ -76,23 +76,37 @@ def audit(pr: dict) -> dict:
     out = STATE / f"pr{n}.audit.md"
     prompt = PROMPT.read_text().replace("{PR}", str(n)).replace("{GH_REPO}", GH_REPO).replace("{OUT}", str(out))
     log(f"PR #{n}: audit with {MODEL}:{THINKING}")
-    p = sh(f"timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo {json.dumps(prompt)}", timeout=2500)
+    pf = STATE / f"pr{n}.prompt.md"
+    pf.write_text(prompt)
+    p = sh(f"timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
+    (STATE / f"pr{n}.omp.log").write_text(f"exit={p.returncode}\n--- stdout\n{p.stdout}\n--- stderr\n{p.stderr}")
     text = out.read_text() if out.exists() else (p.stdout or "")
+    if p.returncode or not text.strip():
+        log(f"PR #{n}: audit agent failed (exit {p.returncode}), see {STATE}/pr{n}.omp.log")
     verdict = (re.search(r"^Verdict:\s*(MERGE WITH CHANGE|MERGE|REJECT)", text, re.M | re.I) or [None, "NONE"])[1].upper()
     risk = (re.search(r"^Risk:\s*(none|low|medium|high)", text, re.M | re.I) or [None, "unknown"])[1].lower()
     return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now()}
 
 
 def gate(pr: dict) -> tuple[bool, str]:
-    """Check out the PR head in a scratch worktree and run forge's own checks."""
+    """Merge the PR into base in a scratch worktree, then run the checks *base* defines.
+
+    The PR never supplies its own gate: a change cannot vouch for itself. A PR that
+    cannot merge cleanly fails here, which is the honest answer.
+    """
     n = pr["number"]
     wt = STATE / f"wt-{n}"
     sh(f"git worktree remove --force {wt} 2>/dev/null; rm -rf {wt}")
-    r = sh(f"git fetch -q origin pull/{n}/head:pr-{n} -f && git worktree add -q {wt} pr-{n}")
+    r = sh(f"git fetch -q origin pull/{n}/head:pr-{n} -f && git worktree add -q --detach {wt} origin/{BASE}")
     if r.returncode:
-        return False, f"could not check out PR head: {r.stderr[-400:]}"
+        return False, f"could not set up a worktree: {r.stderr[-400:]}"
     try:
-        c = sh("python3 -m py_compile forge/forge.py forge/gpu.py", cwd=wt)
+        m = sh(f"git -c user.email=f@f -c user.name=forge merge --no-edit pr-{n}", cwd=wt)
+        if m.returncode:
+            return False, f"does not merge into {BASE} cleanly, needs a rebase:\n{(m.stdout + m.stderr)[-800:]}"
+        # The gate itself comes from base, so a PR cannot weaken its own checks.
+        sh(f"git checkout origin/{BASE} -- forge/selftest.py", cwd=wt)
+        c = sh("python3 -m py_compile forge/forge.py forge/gpu.py forge/reviewctl.py", cwd=wt)
         if c.returncode:
             return False, f"py_compile failed:\n{c.stderr[-1500:]}"
         t = sh("python3 forge/selftest.py", cwd=wt, timeout=600)
