@@ -1,0 +1,9 @@
+[Unit]
+Description=forge hourly scout: HN, Reddit, X, GitHub, arXiv (+Consensus MCP) for better agent tooling
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/Dev/Crewship
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/bin/sh -c 'mkdir -p %h/.local/state/forge/scout && cd %h/Dev/Crewship && git checkout -q forge && git pull -q --rebase && timeout 1800 omp -p --no-session --model=anthropic/claude-fable-5-1 --thinking=high --approval-mode=yolo "$(cat forge/prompts/scout.md)" > %h/.local/state/forge/scout/$(date -u +%%Y%%m%%dT%%H%%M).log 2>&1; git checkout -q forge'
+Nice=10
