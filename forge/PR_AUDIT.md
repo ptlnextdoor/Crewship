@@ -2,6 +2,56 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #8 · 2026-10-23T18:49:33Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (selftest failed after the fix:
+python3: can't open file '/home/ubuntu/.local/state/forge/review/fix-8/forge/selftest.py': [Errno 2] No such file or directory
+)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #8 forge: protected-path check and gate evidence on the exact revision that merges
+What it changes: After `rebase_onto_main`, forge now calls `touched_protected(wt, "origin/main")` before the post-rebase gate and posts that gate's output to the PR (forge.py:449-453). `touched_protected` gets a `base` parameter that defaults to `"main"` (forge.py:265). A new `rev()` (forge.py:269) puts the short HEAD sha in every gate and review comment. README row 30 is reworded. Line numbers are from PR head 3adf3471.
+Findings:
+- ok forge/forge.py:449-451 This closes a real gate bypass.
+  - The gap before this PR: after APPROVE, nothing re-checked protected paths. Two ways in: the conflict builder (yolo, forge.py:329-335) followed by forge's own `git add -A && git commit`, or a commit the yolo reviewer leaves on HEAD. The re-gate then ran whatever `gate.sh` HEAD held.
+  - How I checked: a throwaway fixture drives the real `Forge.cycle()` (bare origin, lane clone, a second clone acting as another lane, `pull_requests=false`, `Forge.agent` stubbed). I ran it on base `forge` cfc8381b and on the merged PR tree.
+  - Scenario `conflict-gate`: the builder resolves the PROGRESS.md conflict and rewrites gate.sh without staging it. Base: the edited gate ran, the ticket became `done`, and origin/main's gate.sh became the tampered script. PR: `RETRY ... protected gate/ticket paths ['gate.sh'] after updating from main`, the edited gate never ran, and origin/main's gate.sh is unchanged.
+  - Scenario `reviewer-gate`: the reviewer commits a gate.sh edit and the rebase is clean. Same results as above.
+  - Cleanup after the fail: the ticket was pushed as `status: retry`, `git worktree list` shows only the main checkout, `git branch --list 'forge/*'` is empty, and the PR branch is never force-pushed because forge.py:458 comes after the check.
+- ok forge/forge.py:265,449 `origin/main` is the right base. The lane's local `main` stays at the claim commit until landing.
+  - In the fixture, right after `rebase_onto_main`, `main...HEAD` flags `['tickets/0002-y.md']`: that is another lane's claim commit, a false positive that would fail every landing. `origin/main...HEAD` gives `[]`.
+  - Scenarios `clean` and `conflict-ok` (another lane's ticket and PROGRESS.md commits, resolved without a gate edit) both still end `MERGED` under the PR, so the check adds no false-positive failure.
+  - Other callers (forge.py:419, 429, selftest.py:71) keep the default `main`, which is correct there because no rebase has happened yet.
+- low forge/README.md:30, forge/forge.py:445-446, forge/forge.py:453 The text claims more than the code does: "re-gate on the exact revision that merges", "gate on merged revision", "prevents ... approval recorded for a revision nobody checked".
+  - What the code gates is the rebased branch head. It posts that sha before the force-push at :458, whose return code is never checked. Then `gh pr merge --merge` (:383) creates a new merge commit on whatever main is at that moment. The fallback `git merge --no-ff` (:462) merges into a freshly synced main.
+  - ptlnextdoor/reflex1 `main` has no protection (`gh api .../branches/main/protection` → 404 "Branch not protected", `.../rules/branches/main` → `[]`), so GitHub does not require the branch to be up to date.
+  - main moves all the time. In the last 24 h, reflex1 origin/main had 37 `forge: lane N starts` claim commits, 7 planner commits and 4 steward commits. 3 of the 12 gaps between landings were under `gate_timeout_min = 30`.
+  - Code from the conflict resolution is still never reviewed. The PR blocks protected-path edits and makes the sha mismatch visible; it does not prevent unreviewed code from landing. Behavior is strictly better than before; only the claim is wrong.
+- nit forge/forge.py:442 `rev(wt)` for "review of" is taken after the yolo reviewer session (:439), not when the reviewed diff is taken (:434). reviewer.md:1 says "Do not edit files", but the `reviewer-gate` fixture shows a reviewer commit stays on HEAD. In that case the label names a commit the reviewer never saw as a diff. Optional fix: capture the sha next to `diff = ...`.
+- ok Security sweep of the added lines:
+  - No prompt text changed.
+  - `base` is a code literal and `rev()` runs a constant command, so no ticket text reaches a shell.
+  - No new shared state: the git calls run in the lane's own worktree, and `gh-body.md` is per-lane.
+  - The new `sh` calls use check=False, and the new fail path goes through the existing `fail()` and `finally`.
+  - No new model, quota or GPU call. The only addition is one PR comment per landing, with gate output capped at 3500 chars.
+  - `claim()`, `recover()`, `discard_strays()`, timeouts and the killpg path are untouched.
+  - Nothing parses the old comment headers (grep for `**gate`/`review by` finds only the posting sites).
+- ok Merge and selftest:
+  - `git merge-tree --write-tree origin/forge pr/8` is clean onto cfc8381b.
+  - `py_compile` passes on the merged forge.py.
+  - `python3 forge/selftest.py` on the merged tree: "all checks passed".
+  - reviewctl's first "gate fail" (missing forge/selftest.py) comes from the PR's stale base 8004ea85.
+Change needed (only for MERGE WITH CHANGE): Make the text say what the code does. Three text edits, no behavior change:
+- forge/README.md:30 becomes:
+  `| Rebase, re-check protected paths and re-gate the updated branch before merge; every gate and review comment on the PR names its commit | green branch, red main; a conflict resolution that edits the gate |`
+- forge/forge.py:445-446 become:
+  ```python
+              # land: bring up to date with main, re-check protected paths and re-gate the updated branch
+              # (a builder conflict resolution is new code the reviewer never saw), then merge
+  ```
+- forge/forge.py:453: replace `**gate on merged revision ` with `**gate after updating from main at `.
+
+
 ## PR #9 · 2026-10-23T18:43:54Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
