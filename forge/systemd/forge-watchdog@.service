@@ -1,0 +1,6 @@
+[Unit]
+Description=Restart forge@%i if its log has not moved for 2 hours (hung session guard)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'f=%h/.local/state/forge/%i/forge.log; [ -f "$f" ] || exit 0; age=$(( $(date +%%s) - $(stat -c %%Y "$f") )); if [ "$age" -gt 7200 ] && systemctl --user is-active -q forge@%i; then echo "forge@%i stalled $age s, restarting"; systemctl --user restart forge@%i; fi'

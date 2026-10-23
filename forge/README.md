@@ -42,7 +42,7 @@ Sources: Anthropic, "Effective harnesses for long-running agents" (2025) and "Ha
 | `gpu.py` | RunPod jobs with guards: `run`, `list`, `reap`, `balance` |
 | `prompts/{planner,builder,reviewer,steward}.md` | role prompts; `{PROJECT}`, `{GATE}`, `{TICKET}`, `{DIFF}`, `{STATE}` are filled in |
 | `projects/<name>.toml` | per-project config: repo, gate, roles (model + thinking), limits, env |
-| `systemd/` | `forge@.service` (one loop per project) and the GPU reaper timer |
+| `systemd/` | `forge@.service` (one loop per project), the GPU reaper timer, and a stall watchdog that restarts a loop whose log has not moved for 2 h |
 
 A project repo needs `gate.sh` (exit 0 = good), `tickets/`, `AGENTS.md`, `ROADMAP.md`, `PROGRESS.md`, `LEARNINGS.md`.
 
@@ -53,7 +53,7 @@ mkdir -p ~/.config/forge ~/.config/systemd/user
 cp ~/Dev/Crewship/forge/projects/reflex1.toml ~/.config/forge/
 cp ~/Dev/Crewship/forge/systemd/* ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now forge@reflex1.service forge-gpu-reap.timer
+systemctl --user enable --now forge@reflex1.service forge-gpu-reap.timer forge-watchdog@reflex1.timer
 ```
 
 Linger must be on (`loginctl enable-linger $USER`; Crewship's `enable_linger` does this) so the loop keeps running after you log out.
