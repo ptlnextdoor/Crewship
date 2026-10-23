@@ -68,4 +68,4 @@ python3 ~/Dev/Crewship/forge/gpu.py list
 
 Steer by committing to the project repo: add or edit a ticket, reorder by renaming, set `status: blocked` to skip one, or edit `ROADMAP.md`; the loop pulls `main` every cycle. Stop with `systemctl --user stop forge@reflex1`.
 
-`status` also prints merged/attempts per forge version (a short hash of `forge.py` plus `prompts/*.md`, stamped on every history entry); a prompt change that does not move that number on fresh tickets did not help.
+`status` also prints merged/attempts per forge version (a short hash of `forge.py` and the four role prompts, taken when each history entry is written); it is a tally over different tickets, not a controlled comparison.

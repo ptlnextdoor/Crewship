@@ -76,10 +76,6 @@ class Forge:
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
-        # Short hash of forge.py plus the prompts, stamped on every history entry: merge rate per version is
-        # the held-out number a prompt change has to move (arXiv 2610.30499, 2610.29121 both found dev-set
-        # gains overstate it). Computed once; a change lands when the loop restarts.
-        self.version = hashlib.sha256(b"".join(p.read_bytes() for p in [Path(__file__), *sorted(self.prompts.glob("*.md"))])).hexdigest()[:8]
         home = str(Path.home())
         url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=self.repo, capture_output=True, text=True).stdout.strip()
         m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
@@ -88,6 +84,13 @@ class Forge:
                     **{k: os.path.expanduser(str(v)) for k, v in c.get("env", {}).items()}}
         if lane > 1 and "CARGO_TARGET_DIR" in self.env:
             self.env["CARGO_TARGET_DIR"] += f"-lane{lane}"
+
+    @property
+    def version(self) -> str:
+        """Short hash of forge.py and the four role prompts as they are on disk now; prompt() re-reads the
+        prompts on every call and a prompt-only merge does not restart the lanes, so hash at stamp time."""
+        files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward"))]
+        return hashlib.sha256(b"".join(p.read_bytes() for p in files)).hexdigest()[:8]
 
     def prompt(self, name: str, **subs: str) -> str:
         text = (self.prompts / f"{name}.md").read_text()
