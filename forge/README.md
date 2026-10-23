@@ -14,7 +14,9 @@ flowchart LR
   G2 -->|fail| F[ticket: retry / blocked + evidence]
   G -->|pass| V[reviewer from the other vendor]
   G2 -->|pass| V
-  V -->|REJECT| F
+  V -->|REJECT| R2[one repair pass with the review] --> G3{gate.sh} -->|pass| V2[re-review] -->|REJECT| F
+  G3 -->|fail| F
+  V2 -->|APPROVE| L
   V -->|APPROVE| L[rebase, re-gate, merge, push]
   L --> S[every N cycles: steward updates PROGRESS.md]
 ```
@@ -29,6 +31,7 @@ Reliability rules, each mapped to a failure it prevents:
 | Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
 | Rebase and re-gate before merge | green branch, red main |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
+| One repair round per review rejection, then re-gate and re-review once | losing a whole session to a one-line reviewer finding, and the author/reviewer pair looping |
 | Quota floor (`max_window_used_pct`), hard deadline, per-session timeouts | burning the owner's shared plan |
 | GPU through `gpu.py` only: budget cap, max hours, deadline in the pod name, reaper timer | forgotten pods billing all night |
 
