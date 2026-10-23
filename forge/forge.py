@@ -265,7 +265,8 @@ class Forge:
         self.sh("git checkout -q main; git pull -q --rebase origin main; git worktree prune")
         for p in sorted(self.tickets.glob("[!.]*.md")) if self.tickets.exists() else []:
             if re.search(r"^status:\s*in_progress\s*$", p.read_text(errors="replace")[:600], re.M):
-                self.set_status(p, "retry", "interrupted (loop restarted mid-cycle); retrying")
+                self.set_status(p, "retry")
+                p.write_text(p.read_text() + f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n")
                 self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
                 self.log(f"recovered {p.stem} -> retry")
         for wt in (self.home / "wt").glob("*") if (self.home / "wt").exists() else []:
