@@ -2,6 +2,26 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #16 · 2026-10-23T22:33:15Z · MERGE WITH CHANGE · risk low · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #16 forge: run the project's autofix (cargo fmt --all) and commit it before the gate
+What it changes: adds `Forge.autofix(cwd)`, which runs the `autofix` config command (300 s timeout) in the worktree and commits its output as a separate `forge: autofix (...)` commit. `cycle()` calls it once, after the builder commit and before `pr_open`, the protected-path check and the first gate. Also sets `autofix = "cargo fmt --all"` in `projects/reflex1.toml`, adds a README safeguard row and two selftest checks.
+Findings:
+- ok forge/forge.py:434-439 Gate, reviewer and protected paths are not weakened. The autofix commit lands before `touched_protected` (436), so the protected check covers it. It is also inside `main...HEAD`, which is the diff the reviewer gets (452), and it is included in the PR push (435). reflex1 `gate.sh` still runs `cargo fmt --all -- --check` on the result. Throwaway smoke on a local clone of ~/Dev/reflex1 using the PR's forge.py: an unformatted fn was committed, then `autofix` ran. Result: one commit touching only `crates/reflex-core/src/lib.rs`, `cargo fmt --all -- --check` rc 0, `touched_protected` = [], clean tree.
+- ok forge/forge.py:278-281 No injection path. `fix` comes from owner config, not ticket text, and the commit message is `shlex.quote`d. A `.cargo/config.toml`, `rustfmt.toml` or `rust-toolchain.toml` in the worktree can steer `cargo fmt`, but `gate.sh` already runs cargo in the same worktree with the same env, so no new execution surface. Each lane works in its own worktree and `cargo fmt` does not use the shared target dir, so two lanes never write the same state.
+- info forge/forge.py:280 If autofix times out, `TimeoutExpired` escapes `cycle()`. The `finally` removes the worktree and branch, then `lane_loop`'s `except Exception` (614-616) calls `recover()`, which sets the ticket back to retry without charging an attempt. This runs before `pr_open`, so no PR or remote branch is left behind. The path matches the existing gate-timeout path and leaves nothing stuck `in_progress`.
+- medium forge/forge.py:444-448 The fix covers only the first gate. After a gate failure, the repair session's code is committed (445), pushed (446) and re-gated (448) with no autofix. reflex1 `gate.sh` runs `cargo fmt --all -- --check` first under `set -e`, so a repair that fixes a clippy or test failure but leaves unformatted code still fails `fail()`. That costs the attempt, which is the exact failure the README row (README.md:32) says is prevented. 0005's own record has `gate still failing after repair.` followed by rustfmt diffs (reflex1 tickets/0005, PR reflex1#2).
+- low forge/selftest.py:101-105 `f.autofix(repo) is None` is always true. The clean-status half passes only because the autofix at :101 also committed the test's uncommitted `tickets/0001-x.md` and `tickets/0002-y.md`. A probe run of the PR's selftest showed the autofix commit lists `fmt.txt`, `tickets/0001-x.md` and `tickets/0002-y.md`. This does not affect production: line 432 commits all builder work right before autofix, so `git add -A` there picks up only the fixer's output. The PR's selftest passes (all checks ok on a `git archive` of 73d54de1).
+- info forge/projects/reflex1.toml:6 Merging does not turn autofix on for the running loop. `forge@.service` reads `~/.config/forge/reflex1.toml`, a copy that matches the base template and has no `autofix` key (`diff` is empty). The key must be copied there by hand (README.md:55). This file is also under reviewctl's `PROTECTED` (`projects/`, reviewctl.py:36), so reviewctl leaves this PR open for the owner whatever the verdict.
+- info Docstring claims checked: of reflex1's tickets, only 0005 has a gate-failure record. The 0005 repair session log (`sessions/00006-builder.log`) ends in `usage_limit_reached`.
+- sibling #6 (forge.py, README.md) adds a gate after a review-repair round that also skips autofix. If both land, #6 should call `self.autofix(wt)` after its `forge: repair after review` commit. #6 is the side to change, not this PR.
+- sibling #8 (forge.py, README.md) edits the README row next to this one and the post-rebase gate. Neither PR's change contradicts or duplicates the other. #5 and #7 touch other parts of forge.py; #5's reviewer diff excludes only PROGRESS.md and LEARNINGS.md, so the autofix commit still reaches the reviewer.
+Change needed: in forge/forge.py `cycle()`, insert `self.autofix(wt)` on its own line, at the same indentation, directly after line 445 `self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)` and before the `git push` at 446. The repair's output is then formatted, pushed, checked by `touched_protected` (447) and gated (448).
+
+
 ## PR #15 · 2026-10-23T21:29:51Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
