@@ -483,11 +483,28 @@ class Forge:
             self.log(f"cycle {n}: MERGED {tid}")
         finally:
             self.sh(f"git worktree remove --force {wt}")
+            self.prune_target()
             self.sh(f"git branch -D {branch}")
             if not self.cfg.get("pull_requests", True):
                 self.sh(f"git push -q origin --delete {branch} 2>/dev/null || true")
             self.save()
             self.board("between cycles")
+
+    def prune_target(self) -> None:
+        """Drop the workspace's own artifacts from this lane's target dir once its worktree is gone. A fresh
+        worktree rebuilds them anyway (new file mtimes), and every ticket that changes the dependency graph
+        leaves them under new hashes: 94 GB of dead 300 MB test binaries across four lanes in 20 h. Artifacts
+        of crates.io dependencies keep their hashes and stay."""
+        tdir = self.env.get("CARGO_TARGET_DIR")
+        if not tdir:
+            return
+        meta = json.loads(self.sh("cargo metadata --format-version 1 --no-deps").stdout or '{"packages": []}')
+        pkgs = {p["name"].replace("-", "_") for p in meta["packages"]}
+        targets = {t["name"].replace("-", "_") for p in meta["packages"] for t in p["targets"]}
+        for f in [*Path(tdir).glob("*/deps/*"), *Path(tdir).glob("*/examples/*")]:
+            name = f.name.split(".")[0].rpartition("-")[0]  # libreflex_core-<hash>.rlib, http-<hash>, http-<hash>.d
+            if f.is_file() and (name in targets or name.removeprefix("lib") in pkgs):
+                f.unlink()
 
     def fail(self, ticket: Path, why: str) -> None:
         tid = ticket.stem
@@ -540,6 +557,7 @@ class Forge:
         for b in self.sh("git branch --list 'forge/*'").stdout.split():
             self.sh(f"git branch -D {b}")
         self.push()
+        self.prune_target()
 
     def run(self) -> None:
         """Supervisor: start one process per lane and keep them alive until the deadline.
