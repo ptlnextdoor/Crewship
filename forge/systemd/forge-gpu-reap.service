@@ -1,0 +1,6 @@
+[Unit]
+Description=Terminate forge RunPod pods past their deadline
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/Dev/Crewship/forge/gpu.py reap

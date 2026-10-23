@@ -1,0 +1,18 @@
+[Unit]
+Description=forge build loop for %i (Crewship forge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=/usr/bin/python3 %h/Dev/Crewship/forge/forge.py run --config %h/.config/forge/%i.toml
+Restart=on-failure
+RestartSec=60
+# The loop exits 0 at its deadline; do not restart then.
+RestartPreventExitStatus=0
+Environment=PYTHONUNBUFFERED=1
+Nice=5
+
+[Install]
+WantedBy=default.target

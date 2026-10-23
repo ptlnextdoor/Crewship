@@ -1,0 +1,51 @@
+# Project config for the forge loop (forge/README.md). Copy to ~/.config/forge/<name>.toml.
+name = "reflex1"
+repo = "~/Dev/reflex1"
+gate = "./gate.sh"
+min_queue = 3
+max_attempts = 3
+steward_every = 4
+protected_paths = ["gate.sh", "tickets/", ".forge/"]
+
+[limits]
+# Stop at this UTC time (12 h after launch). Final steward pass, then GPU reap.
+deadline = "2026-10-23T15:00:00Z"
+# Pause when any Claude/Codex usage window passes this percent, so the owner keeps headroom.
+max_window_used_pct = 80
+gate_timeout_min = 30
+
+[env]
+GPU_BUDGET_USD = "15"
+GPU_MAX_HOURS = "2"
+GPU_MIN_BALANCE = "3"
+CARGO_TARGET_DIR = "~/.cache/forge/reflex1-target"
+HF_HOME = "~/.cache/huggingface"
+
+# Routing (owner, 2026-10-23): Opus 5.5, Fable 5.1, GPT 6.1 Sol and GPT 6 Astra, high effort.
+# Builders alternate vendors by role; the reviewer is always from the other vendor.
+[roles.planner]
+model = "anthropic/claude-fable-5-1"
+thinking = "xhigh"
+timeout_min = 40
+
+[roles.builder]
+model = "openai-codex/gpt-6.1-sol"
+thinking = "high"
+timeout_min = 75
+
+[roles.builder_hard]
+model = "anthropic/claude-opus-5-5"
+thinking = "xhigh"
+timeout_min = 90
+
+[roles.reviewer]
+model = "anthropic/claude-opus-5-5"
+thinking = "high"
+
+[roles.reviewer_alt]
+model = "openai-codex/gpt-6-astra"
+thinking = "high"
+
+[roles.steward]
+model = "anthropic/claude-fable-5-1"
+thinking = "medium"
