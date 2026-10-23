@@ -2,6 +2,47 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #7 · 2026-10-23T17:20:21Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #7 forge: agents are told their session clock and to timeout long commands
+What it changes: `_agent_once` (forge/forge.py:176-181 at head 93b401ee) puts one "Session clock" paragraph in front of every session's prompt. That covers planner, builder, builder_hard, the gate-repair builder, the conflict-merge builder, reviewer/reviewer_alt and steward. The paragraph gives the kill limit in minutes, says to prefix long commands with `timeout`, says not to start watchers or servers in the foreground, and says "finish (commit, notes, verdict) before the limit". STEERING.md still comes first.
+Findings:
+- medium forge/forge.py:180 Every role is told to "finish (commit, notes, verdict)", and that moves work past forge's path checks.
+  - Reviewer: it runs in the builder's worktree (forge.py:441), and reviewer.md:1 says "Do not edit files". A commit it makes stays on HEAD through `rebase_onto_main`, the re-gate (450), the force-push and `pr_merge` (456). `touched_protected` last ran at 421/431, before the review, so that commit lands unreviewed and unchecked, even if it touches `gate.sh`.
+  - Reviewer notes left uncommitted also land. `git rebase` refuses to run on a dirty tree (reproduced: "cannot rebase: You have unstaged changes", rc=1). That sends the branch to the conflict builder, whose `git add -A && git commit` (336) commits the notes.
+  - Planner and steward work on main. The only path filter there is `git add -A <allowed paths>` (279, 497) plus `discard_strays` (501-506), and both only see uncommitted files (`git status --porcelain`). A commit the agent makes itself goes to main through `push()` with no gate.
+  - This already happens: the planner makes its own commits today. reflex1 9b64280 and 065080b have custom messages, while forge's own commit message at 279 is fixed. So far those commits stayed in allowed paths. This text tells every role to commit.
+- medium forge/forge.py:179 "Prefix any command that can run long with `timeout`" also covers `gpu.py run`, the longest command any role runs.
+  - Who calls it: builder.md:13 routes all GPU work through `gpu.py run`. Two open reflex1 tickets call it through tools/gpu_train_vit_s.sh: 0035 (0.33 h pod) and 0025 (`--hours 1.5`, inside builder_hard's 90-minute session).
+  - Why the cleanup is skipped: coreutils `timeout` sends SIGTERM, and gpu.py has no handler (the word `signal` does not appear in the file). Python's default SIGTERM exits without running `finally` (reproduced: `timeout 1 python3 -c 'try: time.sleep(5)\nfinally: print(...)'` gives rc 124 and prints nothing). So `finally: terminate(pod)` (gpu.py:153-154) never runs.
+  - Cost: the pod keeps billing until the 10-minute reap timer passes the deadline in its name (start + hours).
+  - Ledger: `reap` terminates pods taken from GET /pods, which carry no `_started`. `terminate()` then computes hrs=0 and records usd 0 (gpu.py:81-85). `spent()` undercounts, so GPU_BUDGET_USD stops working as a cap.
+- low forge/forge.py:178,180 The prompt promises that "this session and every process it started are killed", but forge does not do that.
+  - Process groups: on live lane 1, omp pid 1761604 (pgid=sid 1761604, from `start_new_session` at 195) has a child `bash ./gate.sh`, pid 1762253, with its own pgid=sid 1762253 and `cargo test` under it. `os.killpg(p.pid, …)` (200/203) signals only omp's group.
+  - Whether tool processes die depends on omp's own SIGTERM handling in the 5 s before SIGKILL. I did not verify this.
+  - Effect on agents: "never start a watcher or server in the foreground" then reads as "background ones are fine and get cleaned up". Nothing in `_agent_once` or `cycle`'s `finally` (471-476) kills leftover processes after a normal exit, so a backgrounded server outlives the session and its deleted worktree.
+- low forge/forge.py:178 The agent gets a duration but no start time. An `omp -p` session has no clock of its own, so it cannot check "finish before the limit". A start stamp from `now()` makes it checkable with `date -u`.
+- nit forge/forge.py:176 The comment quotes a statistic, "(7 of the first 63 reflex1 sessions did)", that is already stale: 8 of 71 session logs now begin "TIMEOUT after". It belongs in the commit message.
+- info Checked and found no problem:
+  - Order: STEERING > clock > role prompt holds. The prefix is rebuilt from the caller's `prompt` on every quota-fallback attempt, so it does not pile up. In a fake-Popen run of two calls, both prompts were identical and each had one "Session clock".
+  - Injection: none. `timeout_min` is an int from TOML or the literal 30, and the prompt goes in as an argv element with no shell.
+  - Reviewer approvals: a hurried verdict is still bound by reviewer.md:4 ("A criterion you did not run counts as FAIL").
+  - reviewctl's "gate fail": an artifact. The PR branch is based on 0b3155cc, which predates forge/selftest.py (7f38a32a). forge/ from origin/forge with this PR's forge.py passes selftest 22/22.
+  - Motivation: 8 of 71 reflex1 session logs begin "TIMEOUT after" (4 reviewer_alt at 1800 s, 3 builder at 4500 s, 1 builder_hard at 5400 s), and each one lost the attempt.
+Change needed (only for MERGE WITH CHANGE): Replace forge/forge.py:176-181 with:
+```python
+        # Sessions are killed at the limit: tell the agent its budget and how not to hang on one command.
+        prompt = (f"Session clock: started {now()}, killed after {timeout_min} minutes (check with `date -u`). "
+                  "Prefix any command that can run long with `timeout` (for example `timeout 900 cargo test --workspace`), "
+                  "except `gpu.py run` and scripts that call it: it enforces its own `--hours`, and a kill skips its pod cleanup. "
+                  "Stop every watcher or server you start before you finish, and finish before the limit.\n\n"
+                  f"{prompt}")
+```
+
+
 ## PR #8 · 2026-10-23T17:12:44Z · MERGE WITH CHANGE · risk low · gate pass · left open: MERGE WITH CHANGE risk=low
 
 Verdict: MERGE WITH CHANGE
