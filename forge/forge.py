@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -75,6 +76,10 @@ class Forge:
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
+        # Short hash of forge.py plus the prompts, stamped on every history entry: merge rate per version is
+        # the held-out number a prompt change has to move (arXiv 2610.30499, 2610.29121 both found dev-set
+        # gains overstate it). Computed once; a change lands when the loop restarts.
+        self.version = hashlib.sha256(b"".join(p.read_bytes() for p in [Path(__file__), *sorted(self.prompts.glob("*.md"))])).hexdigest()[:8]
         home = str(Path.home())
         url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=self.repo, capture_output=True, text=True).stdout.strip()
         m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
@@ -461,7 +466,7 @@ class Forge:
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
             self.push()
             self.state["merged"] += 1
-            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now()}])[-200:]
+            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now(), "version": self.version}])[-200:]
             self.log(f"cycle {n}: MERGED {tid}")
         finally:
             self.sh(f"git worktree remove --force {wt}")
@@ -483,7 +488,7 @@ class Forge:
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now()}])[-200:]
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now(), "version": self.version}])[-200:]
         self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {why.splitlines()[0][:200]}")
 
     def steward(self) -> None:
@@ -605,6 +610,12 @@ class Forge:
         print("open:", ", ".join(p.stem for p in self.open_tickets()) or "-")
         for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"])[-8:]:
             print(f"  {h['at']} {h['ticket']}: {h['result']}")
+        by_version: dict[str, list[int]] = {}
+        for h in (h for s in states for h in s.get("history", [])):
+            t = by_version.setdefault(h.get("version", "pre"), [0, 0])
+            t[0] += h["result"] == "merged"
+            t[1] += 1
+        print("merged/attempts per forge version (forge.py+prompts, now", self.version + "):", ", ".join(f"{v} {m}/{n}" for v, (m, n) in by_version.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
