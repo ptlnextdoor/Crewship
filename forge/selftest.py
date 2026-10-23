@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -85,6 +86,16 @@ with tempfile.TemporaryDirectory() as d:
     check("depends blocks an unfinished prerequisite", not f.ready(dep))
     f.set_status(t, "done")
     check("depends clears when the prerequisite is done", f.ready(dep))
+    # 4b. The PR title is model-written text; it must reach gh verbatim after the real shell, never run as shell.
+    t.write_text("status: open\n---\n# `tools/x.py`: $(echo pwned) and `agree`\n")
+    f.cfg["pull_requests"] = True
+    (Path(d) / "bin").mkdir()
+    (Path(d) / "bin/gh").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_ARGS"\necho http://pr\n')
+    (Path(d) / "bin/gh").chmod(0o755)
+    f.env.update(PATH=f"{d}/bin:{os.environ['PATH']}", GH_ARGS=f"{d}/gh-args")
+    f.pr_open(repo, "b", t, "builder")  # the git push to a missing origin fails harmlessly
+    words = Path(f"{d}/gh-args").read_text().splitlines()
+    check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
 
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
