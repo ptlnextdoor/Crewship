@@ -2,7 +2,9 @@
 name = "reflex1"
 repo = "~/Dev/reflex1"
 gate = "./gate.sh"
-min_queue = 3
+# Parallel builder lanes (owner 2026-10-23: use the Claude plan hard). Each lane: own clone, worktree, cargo target.
+lanes = 4
+min_queue = 6
 max_attempts = 3
 steward_every = 4
 protected_paths = ["gate.sh", "tickets/", ".forge/"]
@@ -30,11 +32,11 @@ timeout_min = 40
 fallback = ["openai-codex/gpt-6.1-sol"]
 
 [roles.builder]
-model = "openai-codex/gpt-6.1-sol"
+# Claude first (owner: "use claude"); Codex Plus 5h window is small and is the fallback.
+model = "anthropic/claude-opus-5-5"
 thinking = "high"
 timeout_min = 75
-# Codex 5-hour window runs out on Plus; Opus takes over until it resets.
-fallback = ["anthropic/claude-opus-5-5"]
+fallback = ["anthropic/claude-fable-5-1", "openai-codex/gpt-6.1-sol"]
 
 [roles.builder_hard]
 model = "anthropic/claude-opus-5-5"
@@ -43,6 +45,8 @@ timeout_min = 90
 fallback = ["openai-codex/gpt-6.1-sol"]
 
 [roles.reviewer]
+# Builders are Claude now, so cross-vendor review goes to Codex Astra when it has quota (reviewer_alt);
+# this role reviews Codex-built work.
 model = "anthropic/claude-opus-5-5"
 thinking = "high"
 fallback = ["anthropic/claude-fable-5-1"]

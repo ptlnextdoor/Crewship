@@ -2,11 +2,12 @@ You are the planner for {PROJECT}. The build loop is running unattended and the 
 
 Read first: `AGENTS.md`, `ROADMAP.md`, `PROGRESS.md`, `LEARNINGS.md`, every file in `tickets/` (done, blocked, and open), and `git log --oneline -30`. Run `{GATE}` to see the current state.
 
-Then write 3 to 5 new tickets as `tickets/NNNN-short-slug.md`, numbering after the highest existing number. Each ticket:
+Then write at least {MIN_TICKETS} new tickets as `tickets/NNNN-short-slug.md`, numbering after the highest existing number. {LANES} builder lanes run in parallel, each taking the lowest-numbered open ticket whose dependencies are done, so the queue must always hold at least {LANES} tickets that can start right now and do not touch the same files. Each ticket:
 
 ```
 status: open
 difficulty: normal | hard
+depends: NNNN, NNNN        (ticket numbers that must be done first; omit the line when none)
 ---
 # Title
 
@@ -25,6 +26,7 @@ What not to touch.
 
 Rules:
 - Each ticket fits one focused session (roughly under 400 changed lines). Split anything bigger.
+- Parallelism: tickets that can start now should own different crates or files (for example one in `reflex-serve`, one in `reflex-bench`, one in `tools/`, one in docs/tests), so lanes do not collide. Use `depends:` for real prerequisites instead of relying on order. Work ahead on later milestones (serve, vision preprocessing, training scripts, bench) whenever their inputs exist, rather than leaving lanes idle.
 - Order matters: the lowest-numbered open ticket runs first. Put prerequisites first.
 - A blocked ticket means the approach failed; read its forge notes and write a smaller or different ticket for the same goal rather than a copy.
 - Prefer tickets that move the roadmap's current milestone and leave a measurable result behind. Mark `difficulty: hard` for architecture, numerics, kernels, or anything a cheaper model already failed.

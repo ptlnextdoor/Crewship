@@ -46,14 +46,27 @@ def now() -> str:
 
 
 class Forge:
-    def __init__(self, cfg_path: Path):
+    def __init__(self, cfg_path: Path, lane: int = 1):
+        self.cfg_path = cfg_path
         self.cfg = tomllib.loads(cfg_path.read_text())
         c = self.cfg
-        self.repo = Path(c["repo"]).expanduser()
-        self.home = Path(c.get("state_dir", f"~/.local/state/forge/{c['name']}")).expanduser()
+        self.lane = lane
+        self.lanes = int(c.get("lanes", 1))
+        base_repo = Path(c["repo"]).expanduser()
+        self.base_home = Path(c.get("state_dir", f"~/.local/state/forge/{c['name']}")).expanduser()
+        # Lane 1 uses the configured checkout and state dir; lane k>1 gets its own clone and state,
+        # so lanes never share a working tree, a branch name, or a cargo target dir.
+        if lane == 1:
+            self.repo, self.home = base_repo, self.base_home
+        else:
+            self.repo = base_repo.with_name(f"{base_repo.name}-lane{lane}")
+            self.home = self.base_home / f"lane{lane}"
+            if not self.repo.exists():
+                origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=base_repo, capture_output=True, text=True).stdout.strip()
+                subprocess.run(["git", "clone", "-q", origin, str(self.repo)], check=True)
         self.home.mkdir(parents=True, exist_ok=True)
         self.state_file = self.home / "state.json"
-        self.log_file = self.home / "forge.log"
+        self.log_file = self.base_home / "forge.log"
         self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {
             "cycle": 0, "merged": 0, "failed": 0, "started": now(), "history": []}
         self.tickets = self.repo / c.get("tickets_dir", "tickets")
@@ -68,6 +81,8 @@ class Forge:
         self.gh_repo = c.get("github_repo") or (m.group(1) if m else "")
         self.env = {**os.environ, "PATH": f"{home}/.cargo/bin:{home}/.local/bin:{os.environ.get('PATH', '')}",
                     **{k: os.path.expanduser(str(v)) for k, v in c.get("env", {}).items()}}
+        if lane > 1 and "CARGO_TARGET_DIR" in self.env:
+            self.env["CARGO_TARGET_DIR"] += f"-lane{lane}"
 
     def prompt(self, name: str, **subs: str) -> str:
         text = (self.prompts / f"{name}.md").read_text()
@@ -77,22 +92,44 @@ class Forge:
 
     # ---------- plumbing ----------
     def log(self, msg: str) -> None:
-        line = f"{now()} {msg}"
+        line = f"{now()} [l{self.lane}] {msg}"
         print(line, flush=True)
         with self.log_file.open("a") as f:
             f.write(line + "\n")
 
+    def all_states(self) -> list[dict]:
+        out = [self.state if self.lane == 1 else json.loads((self.base_home / "state.json").read_text() or "{}")]
+        for f in sorted(self.base_home.glob("lane*/state.json")):
+            if f != self.state_file:
+                try:
+                    out.append(json.loads(f.read_text()))
+                except (OSError, ValueError):
+                    pass
+        if self.lane != 1:
+            out.append(self.state)
+        return out
+
     def board(self, doing: str) -> None:
-        """Pin what the loop is doing right now to a GitHub issue, so the repo shows live state."""
-        if not self.cfg.get("pull_requests", True):
+        """Pin what the loop is doing right now to a GitHub issue, so the repo shows live state. Lane 1 owns it."""
+        if not self.cfg.get("pull_requests", True) or self.lane != 1:
             return
         s = self.state
-        hist = "\n".join(f"| {h['at']} | {h['ticket']} | {h['result']} |" for h in reversed(s['history'][-15:]))
-        body = (f"**Now:** {doing}\n\nUpdated {now()} · cycle {s['cycle']} · merged {s['merged']} · failed {s['failed']} · "
+        states = self.all_states()
+        hist = sorted((h for st in states for h in st.get("history", [])), key=lambda h: h["at"])
+        hist = "\n".join(f"| {h['at']} | {h['ticket']} | {h['result']} |" for h in reversed(hist[-20:]))
+        lanes_now = []
+        for p in sorted(self.tickets.glob("[!.]*.md")):
+            m = re.search(r"^status:\s*in_progress\s+lane=(\d+)", p.read_text(errors="replace")[:600], re.M)
+            if m:
+                lanes_now.append(f"lane {m.group(1)}: `{p.stem}`")
+        merged = sum(st.get("merged", 0) for st in states)
+        failed = sum(st.get("failed", 0) for st in states)
+        body = (f"**Now:** {doing}\n\n**Lanes ({self.lanes}):** {' · '.join(lanes_now) or 'idle'}\n\n"
+                f"Updated {now()} · merged {merged} · failed {failed} · "
                 f"deadline {self.cfg.get('limits', {}).get('deadline', '-')}\n\n"
                 f"Open tickets: {', '.join(p.stem for p in self.open_tickets()) or '-'}\n\n"
                 f"| when (UTC) | ticket | result |\n|---|---|---|\n{hist}\n\n"
-                f"PRs: every attempt opens one (label `forge`). Progress notes: `PROGRESS.md`.")
+                f"PRs: every attempt opens one (label `forge`). Progress notes: `PROGRESS.md`, per-ticket notes in `notes/`.")
         if not s.get("board"):
             found = self.gh("issue list --state open --label forge --search 'forge: live status in:title' --json url --jq '.[0].url'")
             if found.startswith("http"):
@@ -195,7 +232,7 @@ class Forge:
 
     def set_status(self, ticket: Path, status: str, note: str = "") -> None:
         t = ticket.read_text()
-        t = re.sub(r"^status:\s*\S+\s*$", f"status: {status}", t, count=1, flags=re.M)
+        t = re.sub(r"^status:.*$", f"status: {status}", t, count=1, flags=re.M)
         if note:
             t += f"\n\n## forge {now()} ({status})\n{note.strip()}\n"
         ticket.write_text(t)
@@ -216,15 +253,66 @@ class Forge:
     def plan(self) -> None:
         self.log("queue low: planner turn")
         self.board("planner is writing the next tickets")
-        rc, out = self.agent("planner", self.prompt("planner"), self.repo)
+        rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes))), self.repo)
         self.sh("git add -A tickets PROGRESS.md ROADMAP.md 2>/dev/null; git commit -qm 'forge: planner refills the ticket queue' || true")
         self.discard_strays("planner")
         self.push()
 
     def push(self) -> None:
-        r = self.sh("git push -q origin main", timeout=120)
-        if r.returncode:
-            self.log(f"push failed: {r.stderr.strip()[:300]}")
+        """Push main; other lanes push too, so on rejection rebase onto origin and try again."""
+        for i in range(4):
+            r = self.sh("git push -q origin main", timeout=120)
+            if r.returncode == 0:
+                return
+            self.sync_main()
+            time.sleep(2 + 3 * i)
+        self.log(f"push failed after retries: {r.stderr.strip()[:300]}")
+
+    def sync_main(self) -> None:
+        self.sh("git checkout -q main; git fetch -q origin", timeout=120)
+        if self.sh("git rebase -q origin/main").returncode:
+            self.sh("git rebase --abort; git reset -q --hard origin/main")
+            self.log("sync: local main conflicted with origin; reset to origin/main")
+
+    def ready(self, t: Path) -> bool:
+        """A ticket can start when every ticket number in its `depends:` line is done."""
+        m = re.search(r"^depends:\s*(.*)$", t.read_text(errors="replace")[:600], re.M)
+        for num in re.findall(r"\d{4}", m.group(1) if m else ""):
+            dep = next(iter(self.tickets.glob(f"{num}-*.md")), None)
+            if dep and not re.search(r"^status:\s*done", dep.read_text(errors="replace")[:600], re.M):
+                return False
+        return True
+
+    def claim(self) -> Path | None:
+        """Take the first ready open ticket by pushing its status change; a rejected push means another lane won."""
+        for _ in range(6):
+            self.sync_main()
+            tickets = [t for t in self.open_tickets() if self.ready(t)]
+            if not tickets:
+                return None
+            t = tickets[0]
+            self.set_status(t, f"in_progress lane={self.lane}")
+            self.sh(f"git add {t} && git commit -qm 'forge: lane {self.lane} starts {t.stem}'")
+            if self.sh("git push -q origin main", timeout=120).returncode == 0:
+                return t
+            self.sh("git reset -q --hard origin/main")
+            time.sleep(3 + self.lane * 2)
+        return None
+
+    def rebase_onto_main(self, wt: Path, builder: str) -> bool:
+        """Bring the branch up to date with main. Conflicts (another lane landed nearby) go to the builder once."""
+        self.sh("git fetch -q origin", cwd=wt, timeout=120)
+        if self.sh("git rebase -q origin/main", cwd=wt).returncode == 0:
+            return True
+        self.sh("git rebase --abort", cwd=wt)
+        self.log("rebase conflicts with main; builder resolves via merge")
+        self.agent(builder, "Another lane landed changes on main that conflict with this branch. Run `git merge origin/main`, "
+                   "resolve every conflict keeping the intent of both sides, run the gate, and commit the merge. "
+                   "Do not edit gate.sh, tickets/ or .forge/.", wt, timeout_min=30)
+        if self.sh("git ls-files -u", cwd=wt).stdout.strip():
+            return False
+        self.sh("git add -A && git commit -qm 'forge: merge main' || true", cwd=wt)
+        return self.sh("git merge-base --is-ancestor origin/main HEAD", cwd=wt).returncode == 0
 
     # ---------- GitHub visibility: one PR per attempt ----------
     def gh(self, args: str, cwd: Path | None = None, body: str | None = None) -> str:
@@ -272,34 +360,30 @@ class Forge:
         """Squash-merge through GitHub so the history and the PR page show it. False = fall back to a local merge."""
         if not pr:
             return False
-        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --squash --delete-branch", timeout=180)
+        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch", timeout=180)
         if r.returncode:
             self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
             return False
-        self.sh("git checkout -q main && git pull -q --rebase origin main", timeout=120)
+        self.sync_main()
         return True
 
     def cycle(self) -> None:
         self.state["cycle"] += 1
         n = self.state["cycle"]
-        self.sh("git checkout -q main && git pull -q --rebase origin main", timeout=120)
-        if len(self.open_tickets()) < self.cfg.get("min_queue", 3):
+        self.sync_main()
+        if self.lane == 1 and len([t for t in self.open_tickets() if self.ready(t)]) < self.cfg.get("min_queue", 3):
             self.plan()
-        tickets = self.open_tickets()
-        if not tickets:
-            self.log("no open tickets after planning; sleeping")
-            time.sleep(600)
+        ticket = self.claim()
+        if not ticket:
+            self.log("no open ticket to claim; sleeping")
+            time.sleep(300 if self.lane == 1 else 120)
             return
-        ticket = tickets[0]
         tid = ticket.stem
         self.log(f"cycle {n}: {tid} (attempt {self.attempts(ticket) + 1})")
-        self.board(f"building `{tid}` (attempt {self.attempts(ticket) + 1})")
-        self.set_status(ticket, "in_progress")
-        self.sh(f"git add {ticket} && git commit -qm 'forge: start {tid}'")
-        self.push()
+        self.board(f"lane {self.lane} building `{tid}` (attempt {self.attempts(ticket) + 1})")
 
         wt = self.home / "wt" / f"{n:05d}-{tid}"
-        branch = f"forge/{n:05d}-{tid}"
+        branch = f"forge/l{self.lane}-{n:05d}-{tid}"
         self.sh(f"git worktree add -q -b {branch} {wt} main", check=True)
         self.pr = ""
         try:
@@ -338,21 +422,24 @@ class Forge:
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
-            # land: rebase on main, re-gate, then merge (through the PR when there is one)
-            self.sh("git fetch -q origin && git rebase -q origin/main", cwd=wt)
+            # land: bring up to date with main, re-gate, then merge (through the PR when there is one)
+            if not self.rebase_onto_main(wt, builder):
+                return self.fail(ticket, "could not bring the branch up to date with main (conflicts the builder could not resolve)")
             ok, gout = self.gate(wt)
             if not ok:
-                return self.fail(ticket, f"gate failed after rebase on main.\n{gout[-2000:]}")
+                return self.fail(ticket, f"gate failed after updating from main.\n{gout[-2000:]}")
             done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
             merged_via_pr = self.pr_merge(self.pr, branch)
             if not merged_via_pr:
-                self.sh("git checkout -q main && git pull -q --rebase origin main", timeout=120)
-                r = self.sh(f"git merge -q --ff-only {branch} || git merge -q --no-ff -m 'forge: land {tid}' {branch}")
+                self.sync_main()
+                r = self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}")
                 if r.returncode:
                     self.sh("git merge --abort")
                     return self.fail(ticket, f"merge conflict landing {branch}")
+                self.push()
+            self.sync_main()
             self.set_status(ticket, "done", done_note)
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
             self.push()
@@ -372,7 +459,7 @@ class Forge:
         self.pr_close(getattr(self, "pr", ""), why)
         if getattr(self, "pr", ""):
             why = f"PR: {self.pr}\n{why}"
-        self.sh("git checkout -q main")
+        self.sync_main()
         tries = self.attempts(ticket) + 1
         status = "blocked" if tries >= self.cfg.get("max_attempts", 3) else "retry"
         self.set_status(ticket, status, why[-4000:])
@@ -396,11 +483,19 @@ class Forge:
             self.log(f"{role} left edits outside its paths, discarding: {stray.splitlines()[:5]}")
             self.sh("git reset -q --hard HEAD && git clean -qfd")
 
-    def recover(self) -> None:
-        """After a crash or restart: tickets left in_progress go back to retry, stale worktrees go."""
-        self.sh("git checkout -q main; git pull -q --rebase origin main; git worktree prune")
+    def recover(self, all_lanes: bool = False) -> None:
+        """After a crash or restart: this lane's in_progress tickets go back to retry, stale worktrees go.
+        `all_lanes` (the supervisor at startup, when every lane is restarting) recovers every lane's tickets."""
+        self.sync_main()
+        self.sh("git worktree prune")
+        if all_lanes:
+            pat = r"^status:\s*in_progress(\s+lane=\d+)?\s*$"
+        elif self.lane == 1:
+            pat = r"^status:\s*in_progress(\s+lane=1)?\s*$"
+        else:
+            pat = rf"^status:\s*in_progress\s+lane={self.lane}\s*$"
         for p in sorted(self.tickets.glob("[!.]*.md")) if self.tickets.exists() else []:
-            if re.search(r"^status:\s*in_progress\s*$", p.read_text(errors="replace")[:600], re.M):
+            if re.search(pat, p.read_text(errors="replace")[:600], re.M):
                 self.set_status(p, "retry")
                 p.write_text(p.read_text() + f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n")
                 self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
@@ -412,7 +507,39 @@ class Forge:
         self.push()
 
     def run(self) -> None:
-        self.log(f"forge start: {self.cfg['name']} repo={self.repo}")
+        """Supervisor: start one process per lane and keep them alive until the deadline.
+        A lane exits 75 when forge.py changes on disk; it is restarted at once on the new code."""
+        self.log(f"forge supervisor: {self.cfg['name']} with {self.lanes} lane(s)")
+        self.recover(all_lanes=True)
+        procs: dict[int, subprocess.Popen] = {}
+
+        def start(k: int) -> None:
+            procs[k] = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "lane",
+                                         "--config", str(self.cfg_path), "--lane", str(k)])
+
+        for k in range(1, self.lanes + 1):
+            start(k)
+            time.sleep(15)
+        while procs:
+            time.sleep(20)
+            for k, p in list(procs.items()):
+                rc = p.poll()
+                if rc is None:
+                    continue
+                if rc == 0 and self.past_deadline():
+                    del procs[k]
+                    continue
+                self.log(f"lane {k} exited rc={rc}; restarting")
+                if rc != 75:
+                    time.sleep(30)
+                start(k)
+        gpu = Path(__file__).with_name("gpu.py")
+        if gpu.exists():
+            self.sh(f"python3 {gpu} reap --all")
+        self.log("all lanes finished at the deadline")
+
+    def lane_loop(self) -> None:
+        self.log(f"lane {self.lane} start: repo={self.repo}")
         self.recover()
         every = self.cfg.get("steward_every", 4)
         me = Path(__file__).resolve()
@@ -424,18 +551,16 @@ class Forge:
                 self.save()
                 sys.exit(75)
             if self.past_deadline():
-                self.log("deadline reached; final steward pass, then idle")
-                self.steward()
-                gpu = Path(__file__).with_name("gpu.py")
-                if gpu.exists():
-                    self.sh(f"python3 {gpu} reap --all")
+                self.log("deadline reached")
+                if self.lane == 1:
+                    self.steward()
                 return
             if not self.quota_ok():
                 time.sleep(900)
                 continue
             try:
                 self.cycle()
-                if self.state["cycle"] % every == 0:
+                if self.lane == 1 and self.state["cycle"] % every == 0:
                     self.steward()
             except QuotaExhausted as e:
                 self.log(f"quota: no model left for {e}; ticket back to the queue, sleeping 15 min")
@@ -448,22 +573,29 @@ class Forge:
             self.save()
 
     def status(self) -> None:
-        s = self.state
-        print(f"{self.cfg['name']}: cycle {s['cycle']} merged {s['merged']} failed {s['failed']} since {s['started']} (updated {s.get('updated')})")
+        states = self.all_states()
+        print(f"{self.cfg['name']}: {self.lanes} lane(s) · merged {sum(s.get('merged', 0) for s in states)} · failed {sum(s.get('failed', 0) for s in states)}")
+        busy = []
+        for p in sorted(self.tickets.glob("[!.]*.md")):
+            m = re.search(r"^status:\s*in_progress\s+lane=(\d+)", p.read_text(errors="replace")[:600], re.M)
+            if m:
+                busy.append(f"{p.stem} (lane {m.group(1)})")
+        print("building:", ", ".join(busy) or "-")
         print("open:", ", ".join(p.stem for p in self.open_tickets()) or "-")
-        for h in s["history"][-8:]:
+        for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"])[-8:]:
             print(f"  {h['at']} {h['ticket']}: {h['result']}")
         if self.log_file.exists():
-            print("".join(self.log_file.read_text().splitlines(True)[-6:]))
+            print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", choices=["run", "once", "status", "steward"])
+    ap.add_argument("cmd", choices=["run", "lane", "once", "status", "steward"])
     ap.add_argument("--config", required=True, type=Path)
+    ap.add_argument("--lane", type=int, default=1)
     a = ap.parse_args()
-    f = Forge(a.config.expanduser())
-    {"run": f.run, "once": f.cycle, "status": f.status, "steward": f.steward}[a.cmd]()
+    f = Forge(a.config.expanduser(), a.lane)
+    {"run": f.run, "lane": f.lane_loop, "once": f.cycle, "status": f.status, "steward": f.steward}[a.cmd]()
     if a.cmd == "once":
         f.save()
 
