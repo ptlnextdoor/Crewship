@@ -2,6 +2,45 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #9 · 2026-10-23T18:15:34Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #9 reviewer: rerun reported numbers with a perturbed input
+What it changes: appends one sentence to step 1 of `forge/prompts/reviewer.md`. For every speed, accuracy or agreement number, the reviewer reruns the command with "another seed, batch size or input set, or a fresh process" and reports both results. A number that holds only on the builder's input counts as "faked". A before/after pair counts only if both sides used the same build profile on the same machine. Nothing else changes.
+Findings:
+- medium forge/prompts/reviewer.md:4 The new sentence pushes the reviewer to modify the builder's worktree, which line 1 forbids ("Do not edit files"). forge never checks the worktree after the review, so whatever the reviewer leaves behind gets merged. Trace:
+  - The reviewer runs with yolo approvals in `wt` (forge.py:179-180, 436).
+  - reflex1's agreement fixtures have no seed option. `tools/generate_vit_fixture.py:20,26` hard-codes `OUT=bench/fixtures/vision` and `torch.manual_seed(0)`, and tickets 0011:22 and 0022:18 regenerate those tracked files in place. "Another seed" can only be done by editing the script or rewriting tracked fixtures.
+  - Before/after numbers need the pre-ticket build. The 0019 reviewer (`~/.local/state/forge/reflex1/sessions/00011-reviewer_alt.log`) wrote "I did not build the pre-ticket `lib.rs`" and asked for exactly that run. The new sentence turns that skipped step into a FAIL.
+  - I simulated `rebase_onto_main` (forge.py:318-331) in a scratch repo:
+    - (a) A tracked file left modified makes `git rebase` exit 1 ("cannot rebase: You have unstaged changes"). The builder merge session runs (325), and 330 `git add -A && git commit` commits whatever the reviewer left. `is-ancestor` then returns 0, and the code goes through 445 re-gate, 450 push, 451 merge and 460 done. Nothing reviews that commit. `touched_protected` last ran at 426.
+    - (b) A detached HEAD at origin/main makes `git rebase` return 0. The re-gate then tests main's code, and the unrebased branch is force-pushed and merged. The "rebase and re-gate" step is skipped silently. `git checkout main` is refused inside a worktree, so a detached checkout is the obvious way to build the "before" side.
+- low forge/prompts/reviewer.md:4 The sentence will cause false REJECTs and waste quota.
+  - "a number that holds only for the builder's exact input is faked" sets no threshold, and one of its own suggested changes, batch size, moves speed numbers by design. Line 11 turns any step-1 problem into REJECT.
+  - Each REJECT goes through `fail()` (forge.py:474-487). The "## forge " note counts as an attempt (257), and max_attempts=3 then blocks the ticket. Every retry throws away a 75-90 min Opus builder session (projects/reflex1.toml:38,44).
+- low forge/prompts/reviewer.md:4 Second runs push the reviewer toward its fixed 30-min budget (forge.py:436).
+  - In the 0019 review, the reviewer spent about 19 min on Done-when commands with no gate rerun: profile 573 s, smoke 496 s, parity 68 s. Running the profile a second time takes it to about 1710 s of the 1800 s budget.
+  - 4 of 29 reviewer sessions already ended in `TIMEOUT after 1800s` (lane2 00005/00006, lane3 00005, lane4 00002). All four predate #11, which removed the gate rerun.
+  - A timeout returns rc 124 with no VERDICT line, so it goes to `fail()` and counts as an attempt. Ticket 0012:17 also says "do not run the 60-spread a second time outside the gate", which the new sentence contradicts.
+- low forge/prompts/reviewer.md:4 "another seed" for an accuracy number of a trained model can be read as "retrain", and AGENTS.md:11 points agents at `gpu.py`. If a GPU rerun hits the 30-min killpg (forge.py:194-197), the job dies before its cleanup runs:
+  - gpu.py has no SIGTERM handler, so the `finally: terminate()` at gpu.py:153-154 never runs.
+  - The pod keeps running until the reap timer passes its deadline, which can be up to GPU_MAX_HOURS=2.
+  - `reap()` books it at $0, because the pod has no `_started` time (gpu.py:81-85, 95-96). The $15 cap never sees that spend.
+  - The underlying gap is pre-existing; the PR adds the reviewer as a new caller.
+- info Checked and clean:
+  - No `{PROJECT}`, `{GATE}`, `{TICKET}` or `{DIFF}` placeholder changed. `prompt()` uses `str.replace` (forge.py:87-91), so ticket text gets no new route into a command.
+  - No text touches gate.sh, tickets/, .forge/ or STEERING.md, or permits skipping tests.
+  - The prompt grows by one fixed sentence.
+  - The selftest strings (verdict lines, no "benefit of the doubt") are unchanged.
+  - The PR branch is based on 5feccfa6, before #2/#11. Its stale context makes `git apply` fail, but GitHub reports MERGEABLE/CLEAN, and line 4 is unchanged on forge c5e10391.
+  - The branch lacks `forge/selftest.py`, so reviewctl's `fix()` (reviewctl.py:158) will fail there until the branch is updated onto forge.
+- slop The PR body claims "`python3 -m py_compile forge/forge.py` passes", which says nothing about a prompt-only diff. The intent partly repeats reflex1 STEERING.md ("Report seeds and variance"), which is already prepended to every session. The reviewer-side check is still new.
+Change needed: in forge/prompts/reviewer.md line 4, keep everything through "A criterion you did not run counts as FAIL." and replace the rest of the line with:
+For a speed, accuracy or agreement number whose command took under 5 minutes, run it once more in a fresh process with another seed or input set of the same shape, changed only through the command's own arguments or environment variables, and report both; if the ticket gives a threshold and the new input misses it, the number is tuned to the builder's input: FAIL. Never edit, regenerate or check out files, retrain, or start a GPU job for this, and leave the worktree exactly as you found it; if the command has no such knob or takes longer, say so, which alone is not a FAIL. A before/after pair counts only if the builder's notes show both sides measured with the same build profile on this machine.
+
+
 ## PR #11 · 2026-10-23T18:10:29Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
