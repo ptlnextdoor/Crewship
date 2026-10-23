@@ -27,6 +27,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -359,14 +360,16 @@ class Forge:
             return ""
         self.sh(f"git push -q -u origin {branch}", cwd=wt, timeout=120)
         title = re.search(r"^# (.+)$", ticket.read_text(), re.M)
-        title = f"[{ticket.stem[:4]}] {title.group(1) if title else ticket.stem}"
+        # single-quoted: the heading is model-written text, and json.dumps left backticks live in the
+        # shell (ticket 0052's `tools/baselines.py` ran for 22 s and its output became the PR title)
+        title = shlex.quote(f"[{ticket.stem[:4]}] {title.group(1) if title else ticket.stem}")
         model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
         body = (f"Opened by forge (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
                 f"The gate result and the cross-vendor review are posted below as comments; forge squash-merges on approval.\n\n"
                 f"<details><summary>Ticket {ticket.relative_to(self.repo)}</summary>\n\n{ticket.read_text()}\n</details>")
-        url = self.gh(f"pr create --base main --head {branch} --title {json.dumps(title)} --label forge", cwd=wt, body=body)
+        url = self.gh(f"pr create --base main --head {branch} --title {title} --label forge", cwd=wt, body=body)
         if not url.startswith("http"):
-            url = self.gh(f"pr create --base main --head {branch} --title {json.dumps(title)}", cwd=wt, body=body)
+            url = self.gh(f"pr create --base main --head {branch} --title {title}", cwd=wt, body=body)
         if url.startswith("http"):
             self.log(f"PR {url}")
         return url if url.startswith("http") else ""
