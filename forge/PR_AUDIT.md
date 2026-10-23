@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #3 · 2026-10-23T19:13:15Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #3 forge builder: no sub-agents for code changes on a ticket
+What it changes: Adds one static bullet to `forge/prompts/builder.md` (head line 9): the builder works in one session and spawns no sub-agents to edit code or run the gate; a read-only repo-search sub-agent is allowed. No code changes. `builder_hard` gets the rule too, because forge.py:417-418 renders `prompt("builder", …)` for both roles.
+Findings:
+- medium forge/prompts/builder.md:9 The PR cannot land as it stands. `gh pr view` reports `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`, and `git merge-tree --write-tree origin/forge pr/3` gives `CONFLICT (content): Merge conflict in forge/prompts/builder.md`. Cause: the branch was cut from 60e185c2. #10 (62d9c33f) then put its "Before adding a function…" bullet in the same slot, origin/forge builder.md:9. The fix is a rebase that keeps both bullets.
+- ok forge/prompts/builder.md:9 Security, traced:
+  - The bullet is static text with no `{KEY}`, so Forge.prompt (forge.py:95-99) passes it through unchanged. No ticket text, shell, or f-string is involved.
+  - It names no protected path and does not loosen the test rules. "do not spawn sub-agents to … run the gate" binds sub-agents only. builder.md:5 and :15 still make the builder itself run `{GATE}`.
+  - Protection does not rely on the prompt. touched_protected (forge.py:273-275, called at :423 and :434) checks the final `main...HEAD` diff whichever agent wrote it, and the gate (:426, :435, :453) and reviewer (:444) paths are unchanged.
+  - forge.py, reviewer.md, gpu.py, claim/recover/discard_strays, timeouts and the process-group kill, and PR create/merge are all untouched. The prompt grows by a fixed 268 bytes per builder session (2406 to 2674 bytes when resolved), so nothing grows without bound.
+  - The rule tightens behaviour. Before it, sub-agents had no limit.
+- ok forge/prompts/builder.md:9 The rule addresses a real path in this deployment. Lanes run `~/.local/bin/omp`, which is omp 18.12.6. Its system prompt (src/prompts/system/system-prompt.md:98) says "User says `parallel` … MUST use task subagents", and :160 says "SHOULD fan substantial work to task". `~/.omp/agent/config.yml:11,76` enables `task` with `maxConcurrency: 128`. The bundled `task` agent uses `model: "@task"` (src/task/agents.ts:56), which resolves to `anthropic/claude-opus-5-5`. When the builder has fallen back to `openai-codex/gpt-6.1-sol` (reflex1.toml:39), forge picks the reviewer from `last_model`, the Codex model (forge.py:441-443). That makes the reviewer `anthropic/claude-opus-5-5`, the same model that wrote any code a sub-agent produced. It also spends Anthropic quota after forge has marked that vendor exhausted (forge.py:171-176). This rule reduces both risks. It is a prompt rule, not enforced; the protected-path check and gate above remain the hard guarantees.
+- info forge/forge.py:333-335,431 The rule reaches only the first builder session. The gate-repair pass (:431) and the conflict-resolution pass in rebase_onto_main (:333) use inline prompts without it. The PR claims nothing about them, so no change is required.
+- info composition: the rebased branch merges cleanly with open PR #1, the other builder.md change. `git merge-tree` exits 0 (different hunk, line 4). selftest.py passes all checks on the resolved tree, including check 6 "builder is told not to edit the gate".
+- nit forge/prompts/builder.md:9 `(arXiv 2610.10263)` is for human readers; the builder gets nothing from it. "Work in this one session" partly repeats line 1's "working alone". The paper exists (abstract checked: 2,124 matched runs, sub-agents on vs off). The pass-rate and token figures in the PR body are not in the abstract and I did not verify them. The PR body's "under 400 changed lines" is planner guidance, not something forge.py enforces. Neither point blocks the merge.
+Change needed (only for MERGE WITH CHANGE): Rebase `scout/2026-10-23-builder-no-subagents` onto `origin/forge` and force-push it. Resolve `forge/prompts/builder.md` by keeping #10's bullet at line 9 and putting this PR's bullet, unchanged, at line 10:
+```
+- Before adding a function, type, flag, or data path, search the repo (`rg`, `git log -S`) for one that already does it and extend that. If the ticket's feature already exists, write the file and symbol in `PROGRESS.md` and stop; a second code path for the same behaviour is not done.
+- Work in this one session; do not spawn sub-agents to edit code or run the gate. A ticket is one bounded change, and on bounded tasks sub-agents cut pass rates and overwrite each other's files (arXiv 2610.10263). A read-only sub-agent that searches the repo is fine.
+```
+The result must equal origin/forge's builder.md plus that one inserted line (`git diff --stat origin/forge` shows `1 insertion(+)`). I verified this: 2674 bytes, placeholders only `{PROJECT}` `{GATE}` `{TICKET_PATH}` `{TICKET}`, and `forge/selftest.py` passes.
+
+
 ## PR #5 · 2026-10-23T19:10:15Z · REJECT · risk low · gate fail · left open: gate failed
 
 Verdict: REJECT
