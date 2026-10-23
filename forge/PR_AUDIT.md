@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #11 · 2026-10-23T18:10:29Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #11 reviewer: count the gate forge just ran as PASS instead of rerunning it
+What it changes: One sentence in the intro of `forge/prompts/reviewer.md:1` (head 3cdf7338). "The gate already passed." becomes: forge ran `{GATE}` on this exact commit, do not run it again, and where the ticket lists `{GATE}` as a criterion write PASS (forge) and move on. No code, config, README or other prompt changes.
+Findings:
+- medium forge/prompts/reviewer.md:1 "where the ticket lists `{GATE}` as a criterion, write PASS (forge) and move on" lets the reviewer skip the other parts of a "Done when" line that also mentions the gate. The planner writes such lines. reflex1 ticket 0005 has "`./gate.sh` passes (... keep the smoke test under 5 minutes in debug: `time cargo test -p reflex-cpu smoke_matches_reference`)", and 0004 has "clippy clean; `./gate.sh` passes". Nothing in forge checks that 5-minute bound. gate.sh has no timing stage, the only limit is `gate_timeout_min` = 30 (forge.py:262), and forge never reads the gate's output beyond its return code (:263). The reviewer's step 1 (reviewer.md:4) is the only place a non-gate "Done when" condition gets checked, and "move on" tells it to drop that check. Today's queue is not affected: none of the 31 open/in_progress reflex1 tickets puts the gate under "Done when". So the risk is in future planner output and other projects. The reviewer also never receives the gate output (forge.py:436 passes only TICKET and DIFF), so once it stops rerunning the gate, any condition on what the gate printed can only be checked by running that command itself.
+- low PR body: two of its evidence claims are overstated. (1) "all 44 reflex1 tickets list `./gate.sh` under Done when": I extracted every `## Done when` section at reflex1 HEAD 9ed2101 and 13 of 44 do, all of them done or blocked. Planner commit 624980d (11:48Z) moved the gate into "Do" for the 31 queued tickets as "Last: `cargo fmt --all && ./gate.sh` green before the PR (forge runs it again; the reviewer does not)". (2) "4 of 28 reviews timed out" from this conflict: the four TIMEOUT logs exist, but the ticket text at claim time does not support that cause for all four. lane2/00006 reviewed 0026 attempt 2, claimed at ce84d84 (12:47:01Z). That ticket had no gate line in "Done when" and already said the reviewer does not run it, and the review still hit 1800s. The other three (0026@e784f49, 0015@3dca02d, 0012@b212a33) did list `./gate.sh passes`. The other cited outputs check out: sessions/00011-reviewer_alt.log:7 "`./gate.sh` — **FAIL (not run in full)**", and lane3/sessions/00007-reviewer_alt.log:21 "(forge reruns it)". So the change will barely move reflex1's current numbers. It is still worth one line, because it fixes a real contradiction (:1 "already passed" against :4 "not run counts as FAIL") at the generic layer, instead of relying on a convention that planner.md does not require.
+- low forge/forge.py:179-205 The rendered reviewer template grows by 236 bytes (2219 to 2455). The whole prompt goes to omp as one argv string. I confirmed on this box that a 131071-byte argument execs and a 131072-byte one raises E2BIG. I took a capped diff the size of reflex1 PR #28 (0031: 120016 bytes after `diff[:120000]`) plus the 869-byte STEERING wrapper. Under those inputs, the largest ticket that still fits drops from 7967 to 7731 bytes. 0011 is 7861 bytes today, inflated by attempt notes, so it falls exactly between the two. If that happens, `_agent_once` catches the OSError and returns rc 127 (:204-205), no VERDICT is found (:437), and fail() sends the ticket to retry. That is fail-closed but costs an attempt. The design is pre-existing; this PR's share is 236 bytes.
+- nit forge/prompts/reviewer.md:1 Slop: "(it is the slowest command in the ticket and your session is capped)" puts a reflex1-specific timing claim into a prompt that every project shares (forge.py:80 loads prompts beside forge.py). The instruction does not need a reason. The fix below drops it.
+- nit merge order: there is a textual conflict with open PR #5, which appends a sentence to the end of the same line 1. #9 edits only :4 and does not overlap. Whichever lands second must keep both edits to line 1.
+- info verified, nothing weakened beyond the item above:
+  - "This exact commit" is true. Normal path: commit at :411, then gate :418, then the reviewer at :436. Repair path: commit :424, gate :427, reviewer :436. No commit in between either way. I ran a fake-omp `cycle()` on the merged tree with a throwaway bare origin and `pull_requests=false`. The gate logged `HEAD=1383f7d… dirty=0`, the reviewer then saw the same HEAD, and the ticket landed `status: done` with the worktree removed.
+  - The gate is still enforced in code twice: before review (:418/:427) and after the rebase (:445, before merge). So dropping the reviewer's rerun removes only a repeated check.
+  - Protected paths: touched_protected (:415, :426, :429) is unchanged. The text grants no permission over `gate.sh`/`tickets/`/`.forge/`/`STEERING.md`, and the builder never sees reviewer.md.
+  - Injection: `{GATE}` comes from config and is substituted before TICKET/DIFF (:89), so ticket or diff text cannot inject it. The rendered prompt has no unfilled `{KEY}`.
+  - No change to claim/recover/discard_strays, lane state, timeouts, quota or GPU.
+  - The merge onto current `forge` is clean. The PR base c0f883b6 predates #2 and #4, so `merge-tree` resolves it. On the merged tree, `py_compile` and `python3 forge/selftest.py` pass all checks.
+Change needed (only for MERGE WITH CHANGE): in `forge/prompts/reviewer.md` line 1, replace
+`so do not run it again (it is the slowest command in the ticket and your session is capped); where the ticket lists `{GATE}` as a criterion, write PASS (forge) and move on.`
+with
+`so do not run it again; write PASS (forge) for the `{GATE}` criterion itself, and still run and check anything else on the same line (a timing, a printed number, another command).`
+(Checked: renders with no unfilled placeholder; +243 bytes over base, vs +236 for the PR as written.)
+
+
 ## PR #1 · 2026-10-23T17:54:46Z · MERGE WITH CHANGE · risk low · gate pass · left open: MERGE WITH CHANGE risk=low
 
 Verdict: MERGE WITH CHANGE
