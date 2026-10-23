@@ -96,6 +96,13 @@ with tempfile.TemporaryDirectory() as d:
     f.pr_open(repo, "b", t, "builder")  # the git push to a missing origin fails harmlessly
     words = Path(f"{d}/gh-args").read_text().splitlines()
     check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
+    # 4c. autofix runs the configured command in the worktree and commits its changes before the gate.
+    f.cfg["autofix"] = "printf 'fixed\\n' > fmt.txt"
+    f.autofix(repo)
+    check("autofix commits the fixer's changes", git("log -1 --format=%s", repo).strip() == "forge: autofix (printf 'fixed\\n' > fmt.txt)"
+          and git("show --stat --format= HEAD", repo).find("fmt.txt") >= 0)
+    f.cfg.pop("autofix")
+    check("autofix without config is a no-op", f.autofix(repo) is None and git("status --porcelain", repo) == "")
 
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()

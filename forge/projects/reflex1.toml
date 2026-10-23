@@ -2,6 +2,8 @@
 name = "reflex1"
 repo = "~/Dev/reflex1"
 gate = "./gate.sh"
+# Mechanical fixer run in the worktree after the builder and before the gate; its diff is a separate commit.
+autofix = "cargo fmt --all"
 # Parallel builder lanes (owner 2026-10-23: use the Claude plan hard). Each lane: own clone, worktree, cargo target.
 lanes = 4
 min_queue = 6
