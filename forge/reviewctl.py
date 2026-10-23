@@ -142,8 +142,7 @@ def fix(pr: dict, v: dict) -> tuple[bool, str]:
             "Make exactly the edit named under 'Change needed'. Nothing else: no refactors, no extra "
             f"improvements, no new files. Touch only these files: {files}. If the audit's change cannot be "
             "made within those files, change nothing and say why.\n\n"
-            "Then run `python3 forge/selftest.py` and make sure it still passes. Commit with a message that "
-            "says what the audit asked for and why. Do not push; the caller pushes.\n"
+            "Commit with a message that says what the audit asked for and why. Do not push; the caller pushes and runs the gate.\n"
         )
         p = sh(f"timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
                cwd=wt, timeout=1300)
@@ -155,9 +154,7 @@ def fix(pr: dict, v: dict) -> tuple[bool, str]:
         stray = [f for f in sh(f"git diff --name-only origin/{branch}..HEAD", cwd=wt).stdout.split() if f not in files]
         if stray:
             return False, f"the fixer touched files outside the PR: {stray}"
-        t = sh("python3 forge/selftest.py", cwd=wt, timeout=600)
-        if t.returncode:
-            return False, f"selftest failed after the fix:\n{(t.stdout + t.stderr)[-1200:]}"
+        # No selftest here: gate() runs base's selftest on the merged result right after this.
         u = sh(f"git push -q origin HEAD:{branch}", cwd=wt)
         if u.returncode:
             return False, f"could not push the fix: {u.stderr[-300:]}"
@@ -193,14 +190,18 @@ def run() -> None:
         bad = touches_protected(pr)
         ok, gout = gate(pr)
         v["gate"] = "pass" if ok else "fail"
+        files = [f["path"] for f in pr.get("files", [])]
+        prompt_only = files and all(f.startswith("forge/prompts/") for f in files)
+        # Prompt-only changes are a git revert away; code changes at medium risk wait for the owner.
+        landable = v["risk"] in ("none", "low") or (prompt_only and v["risk"] == "medium")
         if not ok:
             v["action"] = "left open: gate failed"
         elif bad:
             v["action"] = f"left open: touches {bad} (owner decides)"
-        elif v["verdict"] == "MERGE" and v["risk"] in ("none", "low"):
+        elif v["verdict"] == "MERGE" and landable:
             m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch")
             v["action"] = "merged" if m.returncode == 0 else f"merge failed: {m.stderr[-200:]}"
-        elif v["verdict"] == "MERGE WITH CHANGE" and v["risk"] in ("none", "low"):
+        elif v["verdict"] == "MERGE WITH CHANGE" and landable:
             # Apply the named edit, then merge: the next pass re-audits the pushed result.
             ok2, detail = fix(pr, v)
             if not ok2:
