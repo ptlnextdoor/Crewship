@@ -2,6 +2,10 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #6 · 2026-10-23T16:50:16Z · NONE · risk unknown · gate fail · left open: gate failed
+
+
+
 ## PR #7 · 2026-10-23T16:50:10Z · NONE · risk unknown · gate fail · left open: gate failed
 
 
