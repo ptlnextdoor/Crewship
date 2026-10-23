@@ -27,7 +27,7 @@ Reliability rules, each mapped to a failure it prevents:
 | One ticket per session, each with command-checkable "Done when" | half-built features, "looks done" |
 | The gate (`gate.sh`) is the oracle and protected: a diff touching `gate.sh`, `tickets/` or `.forge/` is rejected | passing by editing the tests |
 | Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
-| Rebase and re-gate before merge | green branch, red main |
+| Rebase, re-check protected paths and re-gate on the exact revision that merges; every gate and review comment on the PR names its commit | green branch, red main; approval recorded for a revision nobody checked |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
 | Quota floor (`max_window_used_pct`), hard deadline, per-session timeouts | burning the owner's shared plan |
 | GPU through `gpu.py` only: budget cap, max hours, deadline in the pod name, reaper timer | forgotten pods billing all night |
