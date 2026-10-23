@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #3 · 2026-10-23T17:44:38Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #3 forge builder: no sub-agents for code changes on a ticket
+What it changes: Adds one bullet of 267 bytes to `forge/prompts/builder.md` (head line 9): "do not spawn sub-agents to edit code or run the gate; a read-only sub-agent that searches the repo is fine." No code changes. `builder_hard` gets the rule too, because forge.py:406-409 renders `prompt("builder", …)` for both roles.
+Findings:
+- medium forge/prompts/builder.md:9 The PR cannot merge as it stands. GitHub reports `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`. `git merge-tree --write-tree origin/forge origin/scout/2026-10-23-builder-no-subagents` gives `CONFLICT (content): Merge conflict in forge/prompts/builder.md`. Cause: the branch was cut from 60e185c2. Later #10 (62d9c33f, 17:01:58Z) landed and put its "Before adding a function…" bullet in the same slot, right after line 8. `git diff` of PR head against origin/forge shows that slot is the only difference. Adding #10's line to the branch in a normal commit does not fix it: a three-way `git merge-file` against base 60e185c2 still conflicts on the new line. Only a rebase, or a merge of forge into the branch, resolves it. reviewctl cannot apply this edit itself. run() calls gate() first (reviewctl.py:194-197), and gate() stops at "does not merge into forge cleanly" (:104-106), so fix() is never reached. fix() also pushes without force (:161) and rejects files outside the PR's file list (:155).
+- info forge/reviewctl.py:100-108 The earlier "gate fail" comment (`selftest.py: No such file`, 16:50:31Z) came from reviewctl 7f38a32a (16:49:54Z). That version gated the PR head alone, and the PR head predates selftest.py. 0635172a (16:55Z) changed gate() to merge into base and restore base's selftest.py. That failure says nothing about this diff.
+- ok forge/prompts/builder.md:9 Security, traced:
+  - The line is static text with no `{KEY}` placeholder. The resolved file (forge's builder.md plus this line) goes through the same replace loop as Forge.prompt (forge.py:87-91) and leaves no unfilled `{…}`.
+  - No ticket text, shell or f-string is involved.
+  - It does not mention gate.sh, tickets/, .forge/ or STEERING.md, and it does not loosen the test rules. "do not … run the gate" applies to sub-agents only; line 15 still makes the builder run `{GATE}` before its last commit.
+  - Path protection does not rely on the prompt. touched_protected (forge.py:265-267, called at :415 and :426) checks the final diff no matter which agent made it.
+  - reviewer.md, forge.py (claim, recover, discard_strays, timeouts, process-group kill, PR create/merge) and gpu.py are untouched.
+  - The template grows from 2406 to 2674 bytes, a fixed amount once per builder session, far under the 131072-byte single-argv limit that `_agent_once` is subject to (forge.py:179-186).
+  - selftest check 6 (selftest.py:97-99: `"gate.sh" in b and "never" in b.lower()`) holds on the resolved file.
+- ok forge/prompts/builder.md:9 The rule has something real to override. `~/.local/bin/omp` (forge.py:36, :179) resolves to omp 18.12.6. When the task tool is enabled, its system prompt says "User says `parallel` or `parallelize` → MUST use task subagents" (src/prompts/system/system-prompt.md:98). Depending on delegationBias it also says "Map unknown code via task" or "SHOULD fan substantial work to task" (:160, :169). 3 of the 44 reflex1 tickets contain "parallel". The read-only allowance matches omp's read-only scout.
+  - The cited paper exists (arXiv 2610.10263, 2026-10-07). Its abstract describes 2,124 matched Codex, Claude Code and Kimi Code executions with sub-agents on vs off. The pass-rate and token numbers in the PR body are not in the abstract; I did not verify them.
+  - The 13 builder logs in ~/.local/state/forge/reflex1/sessions hold only each session's final message, so they cannot show whether builders spawn sub-agents today. The change rests on reading, not on a failure measured here.
+- info forge/forge.py:325-327,423 The rule reaches only the first builder session (:409). The repair pass (:423) and the conflict resolution in rebase_onto_main (:325-327) use inline prompts without it. The PR claims nothing about those passes; no change needed here.
+- nit forge/prompts/builder.md:9 The builder cannot use `(arXiv 2610.10263)`; it is there for human readers. The source is already in the PR body and in SCOUT.md:33. Dropping it is optional. Separately, the PR body says tickets are "bounded by construction (… under 400 changed lines)". That overstates it: the cap is planner guidance ("roughly", planner.md:28), and forge.py does not enforce it. This is PR-body text, not repo text.
+Change needed (only for MERGE WITH CHANGE): Rebase `scout/2026-10-23-builder-no-subagents` onto `origin/forge` and force-push it. In the `forge/prompts/builder.md` conflict keep both bullets, with #10's first. Lines 9-10 of the result:
+```
+- Before adding a function, type, flag, or data path, search the repo (`rg`, `git log -S`) for one that already does it and extend that. If the ticket's feature already exists, write the file and symbol in `PROGRESS.md` and stop; a second code path for the same behaviour is not done.
+- Work in this one session; do not spawn sub-agents to edit code or run the gate. A ticket is one bounded change, and on bounded tasks sub-agents cut pass rates and overwrite each other's files (arXiv 2610.10263). A read-only sub-agent that searches the repo is fine.
+```
+The rebased file must equal origin/forge's builder.md with this one line inserted after line 9 and nothing else changed. I built that file in memory: 2674 bytes, no unfilled placeholders, selftest check 6 passes.
+
+
 ## PR #4 · 2026-10-23T17:37:35Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
