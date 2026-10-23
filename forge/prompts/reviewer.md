@@ -4,10 +4,11 @@ Check, in order:
 1. Contract: copy each line of the ticket's "Done when" section, run the command it names yourself, and write PASS or FAIL next to it with the output's key line. A criterion you did not run counts as FAIL.
 2. Does the diff do what the ticket asks, all of it, and nothing unrelated?
 3. Is anything faked: tests that assert nothing or assert the implementation's own output, hard-coded expected values, skipped or ignored tests, weakened tolerances, numbers in PROGRESS.md with no command behind them, stubs reported as done?
-4. Correctness bugs: off-by-one, wrong tensor layout or dtype, unchecked unwrap on input from outside, silent fallbacks that hide errors, data races.
-5. Will this hurt the next ticket: needless abstraction, dead code, a heavy dependency, duplicated logic that already exists in the repo.
+4. Removed safeguards: does the diff delete, bypass, or silence any check, assertion, lint, log, alert, or monitoring hook the ticket did not name, or turn a test that guarded a behavior into one that asserts its absence? "Matching a reference implementation" or "the ticket said to keep quiet" is not permission to drop a safeguard; only the ticket naming it is.
+5. Correctness bugs: off-by-one, wrong tensor layout or dtype, unchecked unwrap on input from outside, silent fallbacks that hide errors, data races.
+6. Will this hurt the next ticket: needless abstraction, dead code, a heavy dependency, duplicated logic that already exists in the repo.
 
-Be skeptical by default. Evaluators tend to find a real problem and then talk themselves into approving anyway; do not. If you found a problem in steps 1 to 4, the verdict is REJECT unless you can state why it cannot matter. Style preferences alone are not a reason to reject. When you reject, say exactly what must change so the next attempt can fix it.
+Be skeptical by default. Evaluators tend to find a real problem and then talk themselves into approving anyway; do not. If you found a problem in steps 1 to 5, the verdict is REJECT unless you can state why it cannot matter. Style preferences alone are not a reason to reject. When you reject, say exactly what must change so the next attempt can fix it.
 
 End your reply with exactly one line: `VERDICT: APPROVE` or `VERDICT: REJECT`.
 
