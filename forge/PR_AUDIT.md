@@ -2,6 +2,44 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #9 · 2026-10-23T17:06:52Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #9 reviewer: rerun reported numbers with a perturbed input
+What it changes: one sentence added to step 1 of `forge/prompts/reviewer.md`. For any speed, accuracy or agreement number, the reviewer reruns it with another seed, batch size, input set or a fresh process and reports both runs. A number that holds only on the builder's input counts as faked, and a before/after pair counts only if both sides come from the same build profile on the same machine. No code changes.
+Findings:
+- medium forge/prompts/reviewer.md:4 In this repo, the new instruction usually cannot be carried out without changing the builder's worktree, and forge never checks that worktree after review.
+  - The reviewer runs inside the builder's worktree with yolo approvals (forge.py:179-180, 435).
+  - reflex1's agreement numbers are compared against committed fixtures. The 0004/0011 parity tests use them. 0011 writes its seed-0 ViT fixtures into `bench/fixtures/vision`, and 0022 regenerates them in place. So "another seed or input set" means rewriting tracked files.
+  - "Same build profile" means rebuilding the code from before the ticket. The 0019 review already asked for that ("against the pre-ticket lib.rs") and then skipped it. `git checkout main` fails inside a worktree (checked: "already used by worktree"). That leaves three options: restore files in place, check out a detached HEAD, or add a second worktree.
+  - The new sentence now conflicts with line 1, "Do not edit files".
+
+  I simulated `rebase_onto_main` in a scratch repo to see what happens on APPROVE when the reviewer leaves the worktree changed:
+  - (a) Changed tracked file: `git rebase` fails with "cannot rebase: You have unstaged changes" (forge.py:321). The builder's merge session runs (325), then line 330 `git add -A && git commit` commits what the reviewer left. `is-ancestor` returns 0 (331), the gate runs (444) and the branch merges (449-450). When the reviewer had restored the pre-ticket lib.rs, the branch's net diff against main was empty. The ticket is marked done (459) while the approved change has been reverted. After line 425, nothing reruns `touched_protected` or reviews that commit again.
+  - (b) Detached HEAD at origin/main: `git rebase` returns 0. The re-gate (444) tests main's code, not the branch, and the branch merges without being rebased. "Rebase and re-gate before merge" is skipped and nothing reports it.
+
+  forge.py has no clean-tree or HEAD==branch check between 435 and 442, so the prompt wording is the only guard. The added text must close the hole it opens.
+- low forge/prompts/reviewer.md:4 The new sentence will cause false REJECTs.
+  - "A number that holds only for the builder's exact input is faked" sets no threshold. One of its own examples, batch size, changes speed by design.
+  - "Report both" does not say what happens when the command has no seed or input option to vary.
+  - Step 1 already says "a criterion you did not run counts as FAIL", and line 10 turns any problem into REJECT. Together, legitimate work gets rejected.
+  - Every REJECT goes through `fail()` (forge.py:473-481). The "## forge " note counts as an attempt (257), and the ticket is blocked after max_attempts=3. Each rejection throws away a builder session (timeout_min 75-90 on Opus, projects/reflex1.toml).
+- low forge/forge.py:435 The reviewer still has a fixed 30 min, but the slowest Done-when commands now run twice.
+  - reflex1 tickets/0012:16 already records "the reviewer's 30-minute budget (PR #16 timed out there)".
+  - A timeout returns rc 124 with no VERDICT line, which goes to `fail()` and counts as an attempt.
+  - The cost has limits: killpg (194-197), GPU reruns capped by GPU_BUDGET_USD=15 (gpu.py:123-139) and reaped at the pod deadline.
+- info The "gate fail" in the reviewctl comment is caused by base drift, not by this diff. The PR's base 5feccfa6 predates 7f38a32a, which added `forge/selftest.py`. Applied to origin/forge 2bf28c13, the diff applies cleanly and `python3 forge/selftest.py` passes every check, including the verdict line and the no-leniency check. Also checked and clean:
+  - {PROJECT}, {TICKET} and {DIFF} are unchanged.
+  - No text touches gate.sh, tickets/, .forge/ or STEERING.md, or permits skipping tests.
+  - Ticket text gets no new route into a shell command.
+  - The prompt grows by one fixed sentence.
+- slop The PR body's "`python3 -m py_compile forge/forge.py` passes" does not apply to a prompt-only diff.
+Change needed: in forge/prompts/reviewer.md line 4, replace everything after "A criterion you did not run counts as FAIL." with:
+For a speed, accuracy or agreement number, run its command once more in a fresh process with another seed or input set of the same shape, changed only through the command's own arguments or environment variables, and report both; a number that falls well short of the ticket's threshold on the new input is tuned to the builder's input. Never edit, regenerate or check out files for this, and leave the worktree exactly as you found it; if the command has no such knob, say so, which alone is not a FAIL. A before/after pair counts only if the builder's notes show both sides measured with the same build profile on this machine.
+
+
 ## PR #10 · 2026-10-23T17:01:55Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
