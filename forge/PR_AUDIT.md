@@ -1,3 +1,28 @@
+# PR audits
+
+Written by reviewctl (forge/reviewctl.py). Newest first.
+
+## PR #10 · 2026-10-23T17:01:55Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #10 forge builder: reuse an existing implementation instead of adding a second code path
+What it changes: Adds one bullet at `forge/prompts/builder.md:9`. Before adding a function, type, flag or data path, the builder searches with `rg` / `git log -S` and extends what it finds. If the ticket's feature already exists, it writes the file and symbol in `PROGRESS.md` and stops. The PR changes only the prompt; forge.py and reviewer.md are untouched.
+Findings:
+- low forge/prompts/builder.md:9 The "already exists, stop" exit makes a no-op easier to take, and the reviewer is the only check on it. Path: the builder writes only PROGRESS.md, then forge.py:411 commits it. The diff is not empty (:412), so a PR opens (:414). PROGRESS.md is not protected (reflex1.toml:10; forge.py:415). The gate is green because no code changed (:418). The reviewer then runs "Done when" (:435, reviewer.md:4). On APPROVE, the ticket is set `done` (:459), which unblocks the tickets that `depends:` on it (ready() :293-300). Checked: in a scratch crate, `cargo test -q <name that matches nothing>` exits 0 and prints `0 passed; 1 filtered out`. So a criterion like "`cargo test -p X name` passes" is met on exit status alone. A false claim is caught only if the reviewer reads the `0 passed` line, which reviewer.md:4 makes it copy; reviewer.md:6 ("stubs reported as done") covers the same case. Before this PR, any stub diff already depended on that check; the PR makes the path more likely, not new. If the builder misreads a ticket that changes an existing feature (reflex1 0020/0027 rework existing ops), the reviewer REJECTs. The ticket then goes to `retry` and is `blocked` after max_attempts=3 (forge.py:480, reflex1.toml:8). A builder that stops without writing PROGRESS.md fails at forge.py:413 "no diff" and takes the same path. The quota waste is limited to 3 attempts. No change required.
+- nit forge/prompts/builder.md:9 If the existing implementation lives in a protected path, "extend that" could point the builder at `gate.sh` or `.forge/`. The absolute "Never edit" rule comes right after it (:10), and forge enforces it in code (forge.py:415-417, and :425/:428 after repair). On the merged tree, selftest's "protected paths catch a gate edit" passes. At worst this costs one failed attempt.
+- nit forge/prompts/builder.md:9 Textual conflict with open PR #3: both insert a bullet after builder.md:8. `git merge-tree origin/forge pr/10` merges cleanly today. Whichever PR lands second must keep both bullets.
+- info The reviewctl gate failure (`can't open file .../wt-10/forge/selftest.py`) is an artifact. The PR head (merge-base 587af1ca) is older than `forge/selftest.py`. I merged `pr/10` into origin/forge in a scratch worktree, and `python3 forge/selftest.py` passed all 22 checks.
+- none Not affected, each checked:
+  - Injection: the line is static and has no `{...}` placeholder for `prompt()` (forge.py:87-91).
+  - State: it touches no lane, claim, recover() or discard_strays() state.
+  - Spend: it touches no GPU or quota path.
+  - Prompt size: the builder prompt grows by one fixed line and carries no diff, so it stays far below the argv limit.
+  - `rg` exists at /usr/bin/rg.
+  - `git log -S` runs inside the builder session, so its 75/90-minute timeout bounds it.
+- none Slop: one sentence, not repeated elsewhere in builder.md. reviewer.md:8 step 5 checks the same thing after the build, so the two rules complement each other rather than duplicate. The PR body's claims (a PROGRESS.md diff still opens a PR, the reviewer's "Done when" run decides, blocked after max_attempts) match forge.py:411-440 and :480. README is unchanged, and nothing in it contradicts the PR.
+
 # Forge PR audit, 2026-10-23
 
 Scope: the open PRs against `forge` on ptlnextdoor/Crewship. The request said 7 PRs, but 10 are open: #8–#10 were opened between 14:05 and 16:04 UTC. I audited all 10 because #8 and #10 conflict textually with earlier PRs. Base: `forge` @ d2b2b8ea. In each `file:line`, added lines are numbered as in the PR head and existing code as in base `forge`.
