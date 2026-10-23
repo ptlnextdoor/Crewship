@@ -96,6 +96,19 @@ with tempfile.TemporaryDirectory() as d:
     f.pr_open(repo, "b", t, "builder")  # the git push to a missing origin fails harmlessly
     words = Path(f"{d}/gh-args").read_text().splitlines()
     check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
+    # 4c. prune_target drops the workspace's artifacts (lib, test binary, dep-info) and keeps crates.io ones,
+    # including a crates.io crate that shares its name with a workspace test target (`http`).
+    (repo / "crates/rc/src").mkdir(parents=True); (repo / "crates/rc/tests").mkdir()
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/*"]\nresolver = "2"\n')
+    (repo / "crates/rc/Cargo.toml").write_text('[package]\nname = "reflex-core"\nversion = "0.1.0"\nedition = "2021"\n')
+    (repo / "crates/rc/src/lib.rs").write_text(""); (repo / "crates/rc/tests/http.rs").write_text("")
+    tdir = Path(d) / "target/debug/deps"
+    tdir.mkdir(parents=True)
+    for n in ("libreflex_core-a1.rlib", "reflex_core-a1.d", "http-b2", "http-b2.d", "libhttp-c3.rlib", "libtokio-d4.rmeta"):
+        (tdir / n).write_text("x")
+    f.env["CARGO_TARGET_DIR"] = str(Path(d) / "target")
+    f.prune_target()
+    check("prune_target drops workspace artifacts, keeps crates.io", sorted(p.name for p in tdir.iterdir()) == ["libhttp-c3.rlib", "libtokio-d4.rmeta"])
 
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
