@@ -2,6 +2,28 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #13 · 2026-10-23T19:23:55Z · MERGE WITH CHANGE · risk medium · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #13 pr_audit: judge the PR composed with sibling PRs touching the same files
+What it changes: adds one Pass 1 bullet to `forge/prompts/pr_audit.md` (line 14). The auditor lists the other open PRs, reads the diff of each one on the same base that touches the same files, and must give REJECT, or MERGE WITH CHANGE "with the edit that makes them agree", whenever a sibling contradicts this PR.
+Findings:
+- medium forge/prompts/pr_audit.md:14 The consequence clause puts the whole contradiction on the PR under audit, whichever side is wrong. Today's open siblings include #5, which reviewctl REJECTed (low risk) and which stays open only because its gate failed; it touches reviewer.md and forge.py. #6, #7 and #9 are also open, rated MERGE WITH CHANGE at medium risk, and their diffs still lack the edits their own audits required (`~/.local/state/forge/review/pr{5,6,7,9}.*.json`). So a later reviewer.md PR that contradicts #5 must come out REJECT or "agree with #5":
+  - REJECT at none/low risk auto-closes the good PR and deletes its branch (reviewctl.py:216-220).
+  - MERGE WITH CHANGE at low risk, or at medium risk since this is prompt-only (reviewctl.py:196), runs fix(). fix() may edit the shared file, because it is in the PR's own `files` (reviewctl.py:129, :154). The gate passes, since py_compile and selftest never read prompts, and the PR merges in the same pass (reviewctl.py:204-215). It is then closed, so open_prs() never re-audits what the fixer wrote.
+  - Net: text from an unlanded, possibly rejected sibling written by the same unattended scout can reach `forge` without ever being audited as its own diff.
+- medium forge/prompts/pr_audit.md:14 "read both diffs as they would land together" invites the auditor to compose the branches in its working tree. That tree is the live checkout: audit() runs omp at yolo with cwd=REPO (reviewctl.py:81). Afterwards run() does `git checkout -q forge && git pull -q --rebase` (:228) and record() commits and runs `git push -q origin HEAD:forge` (:177). A local `git merge` of a sibling on `forge` would be rebased and pushed straight to the base, with no gate and no audit. The only defence is the existing "Only write {OUT}" / "do not push" line, and only if the agent counts a local merge as a write.
+- low forge/prompts/pr_audit.md:14 The step adds little for landing decisions. Composition with PRs that have already landed is covered now: run() pulls base before every audit (:182, :228); the auditor reads `forge/prompts/*.md` from that checkout (pr_audit.md:3); reviewctl merges only in the same pass as the audit (:201-215); and gate() re-merges onto the current `origin/forge`. Its real coverage is unlanded siblings. That information is useful to the owner, who decides every left-open PR, but it should not decide the verdict.
+- low forge/prompts/pr_audit.md:14 vs :10 "Judge the composition, not only this diff" directly contradicts the bullet four lines above, "Only judge what the diff ADDS or MODIFIES".
+- low (slop) forge/prompts/pr_audit.md:14 The arXiv citation is real: 2609.33123, whose abstract gives 43 pairwise and 18 irreducible 3-way failures. But it is rationale, it is already in SCOUT.md:152 and the PR body, and it does not belong in an operational prompt. "add up to more rules than one agent will follow in full" sets no threshold, so it cannot be applied.
+- ok Cost: one `gh pr list` plus one `gh pr diff` per overlapping open PR (7 others today), inside the existing `timeout 2400` per audit (reviewctl.py:81). Quota grows with the open-PR backlog but stays capped per audit.
+- ok Blast radius is limited to reviewctl. forge.py never reads pr_audit.md: prompt() is called only with role names, and `version` hashes only planner/builder/reviewer/steward (forge.py:92). README makes no claim about it. `{GH_REPO}` is substituted (reviewctl.py:77) and `<n>` is left literal. No other open PR touches pr_audit.md, so #13 has no composition conflict of its own. The PR is MERGEABLE, and the pr_audit.md blob (e893f07a) is identical on the PR base and the current `origin/forge`.
+Change needed (only for MERGE WITH CHANGE): in forge/prompts/pr_audit.md replace line 14 (the bullet starting "- Judge the composition, not only this diff") with exactly this one line:
+- Sibling PRs: run `gh pr list -R {GH_REPO} --state open --json number,title,baseRefName,files`. For every other open PR on the same base that touches a file this one touches, read its diff with `gh pr diff <n> -R {GH_REPO}` (read only: do not check out, merge or commit anything) and name the pair in Findings if they contradict or duplicate each other, saying which side should change. A contradiction lowers this PR's verdict only when this PR's own text is the side that should change; never copy a sibling's text into Change needed.
+
+
 ## PR #1 · 2026-10-23T19:17:21Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (selftest failed after the fix:
 python3: can't open file '/home/ubuntu/.local/state/forge/review/fix-1/forge/selftest.py': [Errno 2] No such file or directory
 )
