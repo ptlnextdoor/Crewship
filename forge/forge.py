@@ -164,6 +164,55 @@ class Forge:
         if r.returncode:
             self.log(f"push failed: {r.stderr.strip()[:300]}")
 
+    # ---------- GitHub visibility: one PR per attempt ----------
+    def gh(self, args: str, cwd: Path | None = None, body: str | None = None) -> str:
+        """Run gh; long bodies go through a file. Never raises: PR plumbing must not stop the loop."""
+        if body is not None:
+            f = self.home / "gh-body.md"
+            f.write_text(body[:60000])
+            args += f" --body-file {f}"
+        r = self.sh(f"gh {args}", cwd=cwd, timeout=120)
+        if r.returncode:
+            self.log(f"gh {args.split()[0:2]} failed: {r.stderr.strip()[:200]}")
+        return r.stdout.strip()
+
+    def pr_open(self, wt: Path, branch: str, ticket: Path, builder: str) -> str:
+        if not self.cfg.get("pull_requests", True):
+            return ""
+        self.sh(f"git push -q -u origin {branch}", cwd=wt, timeout=120)
+        title = re.search(r"^# (.+)$", ticket.read_text(), re.M)
+        title = f"[{ticket.stem[:4]}] {title.group(1) if title else ticket.stem}"
+        model = self.cfg["roles"][builder]["model"]
+        body = (f"Opened by forge (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
+                f"The gate result and the cross-vendor review are posted below as comments; forge squash-merges on approval.\n\n"
+                f"<details><summary>Ticket {ticket.relative_to(self.repo)}</summary>\n\n{ticket.read_text()}\n</details>")
+        url = self.gh(f"pr create --base main --head {branch} --title {json.dumps(title)} --label forge", cwd=wt, body=body)
+        if not url.startswith("http"):
+            url = self.gh(f"pr create --base main --head {branch} --title {json.dumps(title)}", cwd=wt, body=body)
+        if url.startswith("http"):
+            self.log(f"PR {url}")
+        return url if url.startswith("http") else ""
+
+    def pr_comment(self, pr: str, text: str) -> None:
+        if pr:
+            self.gh(f"pr comment {pr}", body=text)
+
+    def pr_close(self, pr: str, why: str) -> None:
+        if pr:
+            self.pr_comment(pr, f"**forge: not merged.**\n\n```\n{why[-6000:]}\n```\nThe ticket goes back to the queue with this evidence; the next attempt opens a new PR.")
+            self.gh(f"pr close {pr}")
+
+    def pr_merge(self, pr: str, branch: str) -> bool:
+        """Squash-merge through GitHub so the history and the PR page show it. False = fall back to a local merge."""
+        if not pr:
+            return False
+        r = self.sh(f"gh pr merge {pr} --squash --delete-branch", timeout=180)
+        if r.returncode:
+            self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
+            return False
+        self.sh("git checkout -q main && git pull -q --rebase origin main", timeout=120)
+        return True
+
     def cycle(self) -> None:
         self.state["cycle"] += 1
         n = self.state["cycle"]
@@ -180,10 +229,12 @@ class Forge:
         self.log(f"cycle {n}: {tid} (attempt {self.attempts(ticket) + 1})")
         self.set_status(ticket, "in_progress")
         self.sh(f"git add {ticket} && git commit -qm 'forge: start {tid}'")
+        self.push()
 
         wt = self.home / "wt" / f"{n:05d}-{tid}"
         branch = f"forge/{n:05d}-{tid}"
         self.sh(f"git worktree add -q -b {branch} {wt} main", check=True)
+        self.pr = ""
         try:
             builder = "builder_hard" if re.search(r"^difficulty:\s*hard", ticket.read_text(), re.M) else "builder"
             if self.attempts(ticket) >= 2:
@@ -193,16 +244,20 @@ class Forge:
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
+            self.pr = self.pr_open(wt, branch, ticket, builder)
             bad = self.touched_protected(wt)
             if bad:
                 return self.fail(ticket, f"diff edits protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
             ok, gout = self.gate(wt)
+            self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
             if not ok:
                 # one in-session repair pass with the gate output before giving up
                 rc, out = self.agent(builder, f"The gate failed. Fix the code (never the gate or tests' expectations unless the ticket says so) until `{self.cfg.get('gate', './gate.sh')}` passes, then commit.\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
+                self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 bad = self.touched_protected(wt)
                 ok, gout = self.gate(wt)
+                self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if bad or not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
             diff = self.sh("git diff main...HEAD", cwd=wt).stdout
@@ -211,19 +266,26 @@ class Forge:
             reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
             rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000]), wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+            review = rout.split("[stderr]")[0].strip()
+            self.pr_comment(self.pr, f"**review by `{self.cfg['roles'][reviewer]['model']}`**\n\n{review[-12000:]}")
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
-            # land: rebase on main, re-gate, fast-forward
+            # land: rebase on main, re-gate, then merge (through the PR when there is one)
             self.sh("git fetch -q origin && git rebase -q origin/main", cwd=wt)
             ok, gout = self.gate(wt)
             if not ok:
                 return self.fail(ticket, f"gate failed after rebase on main.\n{gout[-2000:]}")
-            self.sh("git checkout -q main && git pull -q --rebase origin main", timeout=120)
-            r = self.sh(f"git merge -q --ff-only {branch} || git merge -q --no-ff -m 'forge: land {tid}' {branch}")
-            if r.returncode:
-                self.sh("git merge --abort")
-                return self.fail(ticket, f"merge conflict landing {branch}")
-            self.set_status(ticket, "done", f"Landed by {self.cfg['roles'][builder]['model']}, approved by {self.cfg['roles'][reviewer]['model']}.")
+            done_note = f"Landed by {self.cfg['roles'][builder]['model']}, approved by {self.cfg['roles'][reviewer]['model']}." + (f" PR: {self.pr}" if self.pr else "")
+            if self.pr:
+                self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
+            merged_via_pr = self.pr_merge(self.pr, branch)
+            if not merged_via_pr:
+                self.sh("git checkout -q main && git pull -q --rebase origin main", timeout=120)
+                r = self.sh(f"git merge -q --ff-only {branch} || git merge -q --no-ff -m 'forge: land {tid}' {branch}")
+                if r.returncode:
+                    self.sh("git merge --abort")
+                    return self.fail(ticket, f"merge conflict landing {branch}")
+            self.set_status(ticket, "done", done_note)
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
             self.push()
             self.state["merged"] += 1
@@ -232,10 +294,15 @@ class Forge:
         finally:
             self.sh(f"git worktree remove --force {wt}")
             self.sh(f"git branch -D {branch}")
+            if not self.cfg.get("pull_requests", True):
+                self.sh(f"git push -q origin --delete {branch} 2>/dev/null || true")
             self.save()
 
     def fail(self, ticket: Path, why: str) -> None:
         tid = ticket.stem
+        self.pr_close(getattr(self, "pr", ""), why)
+        if getattr(self, "pr", ""):
+            why = f"PR: {self.pr}\n{why}"
         self.sh("git checkout -q main")
         tries = self.attempts(ticket) + 1
         status = "blocked" if tries >= self.cfg.get("max_attempts", 3) else "retry"
