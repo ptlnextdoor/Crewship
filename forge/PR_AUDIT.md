@@ -2,6 +2,23 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #4 · 2026-10-23T17:37:35Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #4 forge: gate-repair pass sees the ticket, not only the gate output
+What it changes: In `cycle()`, the prompt for the single repair pass after a gate failure now includes `Ticket (<path>):` and the ticket text, placed before the gate output. It also replaces the wrong comment "one in-session repair pass" with a correct one. One f-string, `forge/forge.py` only. Line numbers below are from the PR head.
+Findings:
+- low forge/forge.py:423 The ticket block now contains earlier attempts' `## forge` notes. Those notes carry builder-controlled gate stdout and reviewer text, and they now sit inside the block that the existing "unless the ticket says so" clause treats as authority. This is not a new exposure. The main builder prompt (L409, prompts/builder.md:18-20) already passes the same file with the same authority ("unless the ticket names the new one", builder.md:11), and a repair agent that read `tickets/` in its worktree would have seen it before this change. Test files are not protected paths before or after the change. The reviewer still looks for weakened tests and tolerances (reviewer.md:6) and reruns every "Done when" command itself (reviewer.md:4). No gate, protected-path, or reviewer check gets weaker.
+- info forge/forge.py:423 The text comes from a trusted source. `ticket` is `self.repo/tickets/<tid>.md` in the lane's own main checkout, where claim() wrote it (L310). It is not the worktree copy. A builder edit to `wt/tickets/` cannot reach this prompt, and `touched_protected` still catches such an edit after the repair (L426 → fail at L429). This is the same read that L409 (builder) and L436 (reviewer) already do. Nothing is written, so two lanes cannot collide on it.
+- info forge/forge.py:423 No injection path. The prompt goes to Popen as one argv element with no shell (L180, L189), and it never passes through `self.prompt()`'s `{KEY}` replacement. Smoke test with a fake `omp` on base+patch: a ticket containing `$(touch …)`, backticks, `{GATE}`, `{TICKET}` and mixed quotes reached the repair session verbatim as a single argument (argc 7). Nothing ran and nothing was substituted.
+- info forge/forge.py:423 The change adds no new exception or cleanup path. `ticket.relative_to(self.repo)` and `ticket.read_text()` repeat calls that L409 already makes earlier in the same `try`. If either raises, `finally` still removes the worktree and branch (L467-468) and lane_loop → recover() resets `in_progress`. In the smoke cycle the worktree and the `forge/*` branch were gone afterwards and origin showed `status: retry`.
+- info forge/forge.py:423 Prompt size stays bounded and no new spending is added. The repair prompt grows by the ticket: the original text plus at most max_attempts-1 notes, each capped at 4000 chars by fail() (L482). The gate output was already in the prompt and is capped at 5000 chars (L263). The builder prompt (2.4 KB template plus the same ticket) already carries this text. There is no new session, timeout, quota or GPU path.
+- info forge/forge.py:421-422 The new comment is correct and the old one was wrong: `_agent_once` runs `omp -p --no-session` (L179), so the repair pass never had the builder's context. arXiv 2610.28834 exists (2026-10-20). Its abstract says task-relevant specifications consistently improve repair while public-test feedback gives small gains. Citing a source in a comment matches the existing style (L14-15, L184-185, L588). README L13 ("one repair pass") is still accurate. No slop found.
+- info gate The earlier reviewctl failure ("selftest.py: No such file") happened because the PR branch was cut from 0b0220e6, before 7f38a32a added `forge/selftest.py`. It is not a defect in this PR. The base blob of `forge/forge.py` (4ee81ee3) equals the PR's pre-image, so the patch applies cleanly. On base+patch, `py_compile` and `python3 forge/selftest.py` pass (all 22 checks). In the end-to-end smoke test the builder ran, the gate failed, the repair prompt contained `Ticket (tickets/0001-x.md):` + text before `Gate output:`, the repair made the gate pass, and the reviewer was reached.
+
+
 ## PR #5 · 2026-10-23T17:33:00Z · MERGE WITH CHANGE · risk low · gate pass · left open: MERGE WITH CHANGE risk=low
 
 Verdict: MERGE WITH CHANGE
