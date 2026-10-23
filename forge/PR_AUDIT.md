@@ -2,6 +2,50 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #7 · 2026-10-23T18:55:06Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #7 forge: tell every agent session its wall-clock limit and how not to hang on one command
+What it changes: `_agent_once` (forge/forge.py:176-181 at head 93b401ee; 184-189 after merging onto current forge 7ffdd817) puts one "Session clock" paragraph in front of every session prompt: planner, builder, builder_hard, the gate-repair builder, the conflict-merge builder, reviewer/reviewer_alt and steward. The paragraph gives the kill limit in minutes, says to prefix long commands with `timeout`, says not to run watchers or servers in the foreground, and says "finish (commit, notes, verdict) before the limit". STEERING.md still comes first. Except for the diff, all forge.py line numbers below are from current origin/forge 7ffdd817.
+Findings:
+- medium forge/forge.py:180 "finish (commit, notes, verdict)" tells every role to commit, and some commits get past forge's path checks.
+  - Reviewer: it runs in the builder's worktree (444), and reviewer.md:1 says "Do not edit files". The last `touched_protected` runs before the review (423/434). After the review come `rebase_onto_main` (451, which keeps commits), the re-gate (453), the force-push (458) and `pr_merge` (459). So a reviewer commit, including one to `gate.sh`, lands with no protected-path check.
+  - Reviewer edits it leaves uncommitted also land. With unstaged tracked changes, `git rebase` refuses (reproduced: "cannot rebase: You have unstaged changes", rc=1). That starts a 30-minute conflict-builder session, and its `git add -A && git commit` (338) commits the edits.
+  - Planner and steward run on main. Their path filters are `git add -A <allowed paths>` (281, 500) and `discard_strays` (504-509), and both read only `git status --porcelain`, so a commit the agent makes itself is invisible to them. `push()` then sends it to origin/main with no gate.
+  - Agents already do this. reflex1 main has planner commits 9b64280 and 065080b and steward commits 077a0df and 2a452f9 with custom messages, while forge's own messages are fixed strings. All four stayed inside allowed paths. This text tells every role to commit.
+- medium forge/forge.py:179 "Prefix any command that can run long with `timeout`" also covers `gpu.py run`, which builder.md:13 makes the path for all GPU work (`--hours <=2`).
+  - Why the pod survives: coreutils `timeout` sends SIGTERM, and gpu.py installs no signal handler (no `signal` in the file). Python's default SIGTERM exits without running `finally` (reproduced: `timeout 1 python3 -c 'try: sleep(5) finally: print'` gives rc 124 and prints nothing). So `finally: terminate(pod)` (gpu.py:153-154) is skipped.
+  - Cost: the pod bills until forge-gpu-reap.timer (every 10 min) passes the deadline in its name, which is start + hours, capped at 3 h.
+  - Ledger: reaped pods come from GET /pods without `_started`, so `terminate()` records hrs≈0 and usd 0 (gpu.py:81-85). `spent()` then undercounts and GPU_BUDGET_USD leaks.
+  - Exposure today: reflex1 GPU tickets 0025, 0028 and 0035 are `cancelled`, but planner.md allows new GPU tickets.
+- low forge/forge.py:178,180 "this session and every process it started are killed" is not something forge does.
+  - Live check: omp pid 1869336 (pgid 1869336) has a child `bash ./gate.sh`, pid 1885861, in its own pgid/sid 1885861 with `cargo test` under it. `os.killpg(p.pid, …)` (208/211) signals only omp's group.
+  - After a normal exit, nothing kills leftover processes.
+  - "never start a watcher or server in the foreground" implies background ones are fine and get cleaned up, which contradicts builder.md:13 "Never leave anything running".
+- low forge/forge.py:178 The agent gets a duration but no start time. An `omp -p --no-session` run has no clock, so "before the limit" cannot be checked.
+- low forge/forge.py:179 The example `timeout 900 cargo test --workspace` is gate.sh:14's test step word for word.
+  - The paragraph also goes to the reviewer, which reviewer.md:1 tells not to rerun the gate.
+  - Reviewer sessions are 30 minutes, and 4 of the 8 recorded session timeouts are reviewer_alt at 1800 s. With no VERDICT line, those went to `fail()` (448-449).
+- nit forge/forge.py:176 The comment's statistic, "7 of the first 63", is already stale: 8 of 75 session logs now begin "TIMEOUT after" (4 reviewer_alt at 1800 s, 3 builder at 4500 s, 1 builder_hard at 5400 s). It belongs in the commit message, not the code.
+- info Checked and found no problem:
+  - Order: STEERING > clock > role prompt holds. The STEERING wrap at 194 runs after the clock assignment.
+  - Quota fallback: `agent()` gives every `_agent_once` call the caller's unmodified prompt. In a fake-Popen run where the first model was quota-exhausted, both calls had exactly one "Session clock" in the right order. The prefix is a constant ~300 chars and does not grow.
+  - Injection: none. `timeout_min` is an int (from TOML or the literal 30), and the prompt is an argv element with no shell.
+  - Merge: the PR merges cleanly onto origin/forge 7ffdd817 (+6 lines), and forge/selftest.py passes all checks. reviewctl's earlier "gate fail" came from the PR's old base, which has no selftest.py.
+  - Reviewer approvals: time pressure pushes toward REJECT, because reviewer.md:1 counts any criterion it did not run as FAIL.
+Change needed (only for MERGE WITH CHANGE): Replace forge/forge.py:176-181 (PR head) with the block below. I checked it in a scratch copy: the selftest passes, and the fake-Popen order and fallback check passes.
+```python
+        # Sessions are killed at the limit; give the agent its start time and budget so it can pace itself.
+        prompt = (f"Session clock: started {now()}, killed after {timeout_min} minutes (check with `date -u`). "
+                  "Prefix any command that can run long with `timeout` (for example `timeout 600 cargo test -p <crate> <test>`), "
+                  "except `gpu.py run` and scripts that call it: it enforces its own `--hours`, and killing it skips the pod cleanup. "
+                  "Stop every background process you start, and give your final answer before the limit.\n\n"
+                  f"{prompt}")
+```
+
+
 ## PR #8 · 2026-10-23T18:49:33Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (selftest failed after the fix:
 python3: can't open file '/home/ubuntu/.local/state/forge/review/fix-8/forge/selftest.py': [Errno 2] No such file or directory
 )
