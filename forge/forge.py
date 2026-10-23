@@ -70,7 +70,7 @@ class Forge:
         self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {
             "cycle": 0, "merged": 0, "failed": 0, "started": now(), "history": []}
         self.tickets = self.repo / c.get("tickets_dir", "tickets")
-        self.protected = c.get("protected_paths", ["gate.sh", "tickets/", ".forge/"])
+        self.protected = c.get("protected_paths", ["gate.sh", "tickets/", ".forge/", "STEERING.md"])
         self.exhausted: dict[str, float] = {}  # vendor -> when its quota ran out (cleared after an hour)
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
@@ -179,14 +179,30 @@ class Forge:
         cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
                "--approval-mode=yolo", prompt]
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
+        steer = self.repo / "STEERING.md"
+        if steer.exists() and steer.read_text().strip():
+            # The owner's standing instructions come first in every session (borrowed from
+            # Autonomous-Company's Human Overrides). Agents may not edit this file.
+            cmd[-1] = f"Owner's standing instructions (STEERING.md), these override anything below:\n\n{steer.read_text()}\n\n---\n\n{prompt}"
         try:
-            p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
-                               env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
-            text = (p.stdout or "") + ("\n[stderr]\n" + p.stderr if p.stderr else "")
-            rc = p.returncode
-        except subprocess.TimeoutExpired as e:
-            text = f"TIMEOUT after {timeout}s\n{(e.stdout or b'')[-4000:]!r}"
-            rc = 124
+            # New session so a timeout kills the whole tree (cargo, rustc, test binaries), not just omp.
+            p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
+                                 env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
+            try:
+                so, se = p.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                os.killpg(p.pid, 15)
+                time.sleep(5)
+                try:
+                    os.killpg(p.pid, 9)
+                except ProcessLookupError:
+                    pass
+                so, se = p.communicate()
+                so = f"TIMEOUT after {timeout}s (process group killed)\n{(so or '')[-4000:]}"
+            text = (so or "") + ("\n[stderr]\n" + se if se else "")
+            rc = 124 if so.startswith("TIMEOUT") else p.returncode
+        except OSError as e:
+            text, rc = f"failed to start agent: {e}", 127
         out.write_text(text)
         return rc, text[-6000:]
 
@@ -569,7 +585,11 @@ class Forge:
             except Exception as e:  # keep the loop alive; record and move on
                 self.log(f"cycle error: {type(e).__name__}: {str(e)[:500]}")
                 self.recover()
-                time.sleep(120)
+                # Circuit breaker (from Autonomous-Company): consecutive errors back off exponentially.
+                self.errors = getattr(self, "errors", 0) + 1
+                time.sleep(min(1800, 120 * 2 ** (self.errors - 1)))
+            else:
+                self.errors = 0
             self.save()
 
     def status(self) -> None:
