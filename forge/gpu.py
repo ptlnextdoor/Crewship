@@ -27,6 +27,8 @@ import urllib.request
 from pathlib import Path
 
 API = "https://rest.runpod.io/v1"
+# RunPod's edge rejects Python's default urllib User-Agent with 403; send our own.
+HEADERS = {"Content-Type": "application/json", "User-Agent": "crewship-forge/1.0"}
 LEDGER = Path.home() / ".local/state/forge/gpu-ledger.jsonl"
 IMAGE = os.environ.get("GPU_IMAGE", "runpod/pytorch:2.4.0-py3.11-cuda12.4.1-devel-ubuntu22.04")
 
@@ -45,7 +47,7 @@ def key() -> str:
 
 def call(method: str, path: str, body: dict | None = None):
     req = urllib.request.Request(API + path, method=method, data=json.dumps(body).encode() if body else None,
-                                 headers={"Authorization": f"Bearer {key()}", "Content-Type": "application/json"})
+                                 headers={"Authorization": f"Bearer {key()}", **HEADERS})
     with urllib.request.urlopen(req, timeout=60) as r:
         t = r.read()
         return json.loads(t) if t else None
@@ -54,7 +56,7 @@ def call(method: str, path: str, body: dict | None = None):
 def balance() -> float:
     q = {"query": "{ myself { clientBalance currentSpendPerHr } }"}
     req = urllib.request.Request("https://api.runpod.io/graphql", data=json.dumps(q).encode(),
-                                 headers={"Authorization": f"Bearer {key()}", "Content-Type": "application/json"})
+                                 headers={"Authorization": f"Bearer {key()}", **HEADERS})
     with urllib.request.urlopen(req, timeout=60) as r:
         return float(json.loads(r.read())["data"]["myself"]["clientBalance"])
 
@@ -155,7 +157,7 @@ def run(a) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub = ap.add_subparsers(dest="action", required=True)
     r = sub.add_parser("run")
     r.add_argument("--name", required=True)
     r.add_argument("--gpu", action="append", default=None, help="RunPod gpuTypeId, repeatable in priority order")
@@ -170,16 +172,16 @@ def main() -> None:
     rp.add_argument("--all", action="store_true")
     sub.add_parser("balance")
     a = ap.parse_args()
-    if a.cmd == "run":
+    if a.action == "run":
         a.gpu = a.gpu or ["NVIDIA GeForce RTX 4090", "NVIDIA RTX A5000", "NVIDIA GeForce RTX 3090"]
         sys.exit(run(a))
-    if a.cmd == "list":
+    if a.action == "list":
         for p in forge_pods():
             print(p["id"], p["name"], p.get("desiredStatus"), p.get("costPerHr"))
         print(f"forge spend so far: ${spent():.2f}")
-    elif a.cmd == "reap":
+    elif a.action == "reap":
         reap(a.all)
-    elif a.cmd == "balance":
+    elif a.action == "balance":
         print(f"${balance():.2f}, forge spend so far ${spent():.2f}")
 
 
