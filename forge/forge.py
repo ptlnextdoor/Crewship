@@ -418,8 +418,9 @@ class Forge:
             ok, gout = self.gate(wt)
             self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
             if not ok:
-                # one in-session repair pass with the gate output before giving up
-                rc, out = self.agent(builder, f"The gate failed. Fix the code (never the gate or tests' expectations unless the ticket says so) until `{self.cfg.get('gate', './gate.sh')}` passes, then commit.\n\nGate output:\n{gout}", wt)
+                # one repair pass before giving up. It is a fresh omp session (--no-session), so it gets the
+                # ticket as well as the gate output: spec beats test feedback for repair (arXiv 2610.28834).
+                rc, out = self.agent(builder, f"The gate failed. Fix the code (never the gate or tests' expectations unless the ticket says so) until `{self.cfg.get('gate', './gate.sh')}` passes, then commit.\n\nTicket ({ticket.relative_to(self.repo)}):\n{ticket.read_text()}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 bad = self.touched_protected(wt)
