@@ -441,8 +441,15 @@ class Forge:
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
             reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
-            rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000]), wt, timeout_min=30)
+            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000])
+            rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+            if rc == 124 and not verdict:
+                # a review that stalls to its timeout without a verdict is a harness failure, not a finding:
+                # 4 of the first 22 reflex1 reviews did, and each cost the ticket a whole attempt. One rerun.
+                self.log(f"review of {tid} timed out with no verdict; rerunning once")
+                rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
+                verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
             if not verdict or verdict[-1] != "APPROVE":
