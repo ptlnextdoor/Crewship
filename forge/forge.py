@@ -57,6 +57,9 @@ class Forge:
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
         home = str(Path.home())
+        url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=self.repo, capture_output=True, text=True).stdout.strip()
+        m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
+        self.gh_repo = c.get("github_repo") or (m.group(1) if m else "")
         self.env = {**os.environ, "PATH": f"{home}/.cargo/bin:{home}/.local/bin:{os.environ.get('PATH', '')}",
                     **{k: os.path.expanduser(str(v)) for k, v in c.get("env", {}).items()}}
 
@@ -72,6 +75,29 @@ class Forge:
         print(line, flush=True)
         with self.log_file.open("a") as f:
             f.write(line + "\n")
+
+    def board(self, doing: str) -> None:
+        """Pin what the loop is doing right now to a GitHub issue, so the repo shows live state."""
+        if not self.cfg.get("pull_requests", True):
+            return
+        s = self.state
+        hist = "\n".join(f"| {h['at']} | {h['ticket']} | {h['result']} |" for h in reversed(s['history'][-15:]))
+        body = (f"**Now:** {doing}\n\nUpdated {now()} · cycle {s['cycle']} · merged {s['merged']} · failed {s['failed']} · "
+                f"deadline {self.cfg.get('limits', {}).get('deadline', '-')}\n\n"
+                f"Open tickets: {', '.join(p.stem for p in self.open_tickets()) or '-'}\n\n"
+                f"| when (UTC) | ticket | result |\n|---|---|---|\n{hist}\n\n"
+                f"PRs: every attempt opens one (label `forge`). Progress notes: `PROGRESS.md`.")
+        if not s.get("board"):
+            found = self.gh("issue list --state open --label forge --search 'forge: live status in:title' --json url --jq '.[0].url'")
+            if found.startswith("http"):
+                s["board"] = found
+        if not s.get("board"):
+            url = self.gh("issue create --title 'forge: live status' --label forge", body=body)
+            if url.startswith("http"):
+                s["board"] = url
+                self.gh(f"issue pin {url}")
+        else:
+            self.gh(f"issue edit {s['board']}", body=body)
 
     def save(self) -> None:
         self.state["updated"] = now()
@@ -154,6 +180,7 @@ class Forge:
 
     def plan(self) -> None:
         self.log("queue low: planner turn")
+        self.board("planner is writing the next tickets")
         rc, out = self.agent("planner", self.prompt("planner"), self.repo)
         self.sh("git add -A tickets PROGRESS.md ROADMAP.md 2>/dev/null; git commit -qm 'forge: planner refills the ticket queue' || true")
         self.discard_strays("planner")
@@ -171,6 +198,10 @@ class Forge:
             f = self.home / "gh-body.md"
             f.write_text(body[:60000])
             args += f" --body-file {f}"
+        # Crewship's gh guard requires an explicit repository target on every write.
+        sub = args.split()[:2]
+        if sub[0] in ("pr", "issue") and "-R " not in args and not (len(args.split()) > 2 and args.split()[2].startswith("http")):
+            args = f"{args} -R {self.gh_repo}"
         r = self.sh(f"gh {args}", cwd=cwd, timeout=120)
         if r.returncode:
             self.log(f"gh {args.split()[0:2]} failed: {r.stderr.strip()[:200]}")
@@ -206,7 +237,7 @@ class Forge:
         """Squash-merge through GitHub so the history and the PR page show it. False = fall back to a local merge."""
         if not pr:
             return False
-        r = self.sh(f"gh pr merge {pr} --squash --delete-branch", timeout=180)
+        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --squash --delete-branch", timeout=180)
         if r.returncode:
             self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
             return False
@@ -227,6 +258,7 @@ class Forge:
         ticket = tickets[0]
         tid = ticket.stem
         self.log(f"cycle {n}: {tid} (attempt {self.attempts(ticket) + 1})")
+        self.board(f"building `{tid}` (attempt {self.attempts(ticket) + 1})")
         self.set_status(ticket, "in_progress")
         self.sh(f"git add {ticket} && git commit -qm 'forge: start {tid}'")
         self.push()
@@ -297,6 +329,7 @@ class Forge:
             if not self.cfg.get("pull_requests", True):
                 self.sh(f"git push -q origin --delete {branch} 2>/dev/null || true")
             self.save()
+            self.board("between cycles")
 
     def fail(self, ticket: Path, why: str) -> None:
         tid = ticket.stem
@@ -346,7 +379,14 @@ class Forge:
         self.log(f"forge start: {self.cfg['name']} repo={self.repo}")
         self.recover()
         every = self.cfg.get("steward_every", 4)
+        me = Path(__file__).resolve()
+        born = me.stat().st_mtime
         while True:
+            if me.stat().st_mtime != born:
+                # forge.py was updated: exit between cycles; systemd restarts us on the new code.
+                self.log("forge.py changed on disk; restarting between cycles to load it")
+                self.save()
+                sys.exit(75)
             if self.past_deadline():
                 self.log("deadline reached; final steward pass, then idle")
                 self.steward()
