@@ -260,8 +260,23 @@ class Forge:
             self.log(f"{role} left edits outside its paths, discarding: {stray.splitlines()[:5]}")
             self.sh("git reset -q --hard HEAD && git clean -qfd")
 
+    def recover(self) -> None:
+        """After a crash or restart: tickets left in_progress go back to retry, stale worktrees go."""
+        self.sh("git checkout -q main; git pull -q --rebase origin main; git worktree prune")
+        for p in sorted(self.tickets.glob("[!.]*.md")) if self.tickets.exists() else []:
+            if re.search(r"^status:\s*in_progress\s*$", p.read_text(errors="replace")[:600], re.M):
+                self.set_status(p, "retry", "interrupted (loop restarted mid-cycle); retrying")
+                self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
+                self.log(f"recovered {p.stem} -> retry")
+        for wt in (self.home / "wt").glob("*") if (self.home / "wt").exists() else []:
+            self.sh(f"git worktree remove --force {wt}; rm -rf {wt}")
+        for b in self.sh("git branch --list 'forge/*'").stdout.split():
+            self.sh(f"git branch -D {b}")
+        self.push()
+
     def run(self) -> None:
         self.log(f"forge start: {self.cfg['name']} repo={self.repo}")
+        self.recover()
         every = self.cfg.get("steward_every", 4)
         while True:
             if self.past_deadline():
@@ -280,7 +295,7 @@ class Forge:
                     self.steward()
             except Exception as e:  # keep the loop alive; record and move on
                 self.log(f"cycle error: {type(e).__name__}: {str(e)[:500]}")
-                self.sh("git checkout -q main; git worktree prune")
+                self.recover()
                 time.sleep(120)
             self.save()
 
