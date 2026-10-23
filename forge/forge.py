@@ -126,8 +126,8 @@ class Forge:
         if not self.tickets.exists():
             return []
         out = []
-        for p in sorted(self.tickets.glob("*.md")):
-            head = p.read_text()[:600]
+        for p in sorted(self.tickets.glob("[!.]*.md")):
+            head = p.read_text(errors="replace")[:600]
             if re.search(r"^status:\s*(open|retry)\s*$", head, re.M):
                 out.append(p)
         return out
