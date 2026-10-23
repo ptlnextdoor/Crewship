@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import re
@@ -83,6 +84,13 @@ class Forge:
                     **{k: os.path.expanduser(str(v)) for k, v in c.get("env", {}).items()}}
         if lane > 1 and "CARGO_TARGET_DIR" in self.env:
             self.env["CARGO_TARGET_DIR"] += f"-lane{lane}"
+
+    @property
+    def version(self) -> str:
+        """Short hash of forge.py and the four role prompts as they are on disk now; prompt() re-reads the
+        prompts on every call and a prompt-only merge does not restart the lanes, so hash at stamp time."""
+        files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward"))]
+        return hashlib.sha256(b"".join(p.read_bytes() for p in files)).hexdigest()[:8]
 
     def prompt(self, name: str, **subs: str) -> str:
         text = (self.prompts / f"{name}.md").read_text()
@@ -461,7 +469,7 @@ class Forge:
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
             self.push()
             self.state["merged"] += 1
-            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now()}])[-200:]
+            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now(), "version": self.version}])[-200:]
             self.log(f"cycle {n}: MERGED {tid}")
         finally:
             self.sh(f"git worktree remove --force {wt}")
@@ -483,7 +491,7 @@ class Forge:
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now()}])[-200:]
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now(), "version": self.version}])[-200:]
         self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {why.splitlines()[0][:200]}")
 
     def steward(self) -> None:
@@ -605,6 +613,12 @@ class Forge:
         print("open:", ", ".join(p.stem for p in self.open_tickets()) or "-")
         for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"])[-8:]:
             print(f"  {h['at']} {h['ticket']}: {h['result']}")
+        by_version: dict[str, list[int]] = {}
+        for h in (h for s in states for h in s.get("history", [])):
+            t = by_version.setdefault(h.get("version", "pre"), [0, 0])
+            t[0] += h["result"] == "merged"
+            t[1] += 1
+        print("merged/attempts per forge version (forge.py+prompts, now", self.version + "):", ", ".join(f"{v} {m}/{n}" for v, (m, n) in by_version.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
