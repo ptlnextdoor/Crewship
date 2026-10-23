@@ -156,6 +156,7 @@ class Forge:
         self.log("queue low: planner turn")
         rc, out = self.agent("planner", self.prompt("planner"), self.repo)
         self.sh("git add -A tickets PROGRESS.md ROADMAP.md 2>/dev/null; git commit -qm 'forge: planner refills the ticket queue' || true")
+        self.discard_strays("planner")
         self.push()
 
     def push(self) -> None:
@@ -249,7 +250,15 @@ class Forge:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
         self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
         self.sh("git add -A PROGRESS.md ROADMAP.md LEARNINGS.md tickets 2>/dev/null; git commit -qm 'forge: steward update' || true")
+        self.discard_strays("steward")
         self.push()
+
+    def discard_strays(self, role: str) -> None:
+        """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""
+        stray = self.sh("git status --porcelain").stdout.strip()
+        if stray:
+            self.log(f"{role} left edits outside its paths, discarding: {stray.splitlines()[:5]}")
+            self.sh("git reset -q --hard HEAD && git clean -qfd")
 
     def run(self) -> None:
         self.log(f"forge start: {self.cfg['name']} repo={self.repo}")
