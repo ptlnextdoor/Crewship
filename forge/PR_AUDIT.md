@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #14 · 2026-10-23T20:27:28Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #14 forge: rerun a review once when it times out with no VERDICT
+What it changes: in `cycle()`, when the reviewer session returns rc 124 (session timeout) and its output has no `VERDICT:` line, forge logs that and runs the same reviewer role once more with the same prompt before the approve/fail check. It also adds one README reliability row.
+Findings:
+- low forge/forge.py:450 The rerun copies the whole `self.prompt("reviewer", TICKET=..., DIFF=...)` expression from :444 instead of reusing it. Combined with open PR #5 this breaks silently. I ran `git merge-tree pr14 pr5` in a throwaway clone: forge.py auto-merges with no conflict (the only conflict is in reviewer.md, from #5's stale base). In the merged file, #5's `NOTES=notes[:8000]` reaches the first call (line 447) but not the rerun (line 453). #5 also removes PROGRESS.md and LEARNINGS.md from DIFF, so a rerun reviewer would get a literal `{NOTES}` placeholder and no builder notes at all. Reviewer check 3 ("numbers in the builder's notes with no command behind them") then cannot be done on a rerun. #14 created the second call site, so #14 is the side that should change (see Change needed).
+- low forge/forge.py:446-451 The rerun uses the same model, the same prompt and the same worktree. Session logs show 4 timeouts: lane2/sessions/00005 and 00006, lane3/sessions/00005 and lane4/sessions/00002, all `-reviewer_alt.log`, each starting `TIMEOUT after 1800s` with no stdout and no verdict. That backs the comment's "4". forge.log shows all 4 were `anthropic/claude-fable-5-1` running as the fallback after `openai-codex/gpt-6-astra` hit quota. Within a cycle, `self.exhausted` keeps openai-codex until the next `quota_ok()`, so the rerun goes to Fable again. Ticket 0026 timed out on 2 attempts in a row (12:16:44→12:46:55, 13:43:11→14:13:24). Its "Done when" starts two servers and polls up to 5 min, which suggests the stall is tied to the ticket. In that case the rerun costs another 30 min of lane time and one more session of quota, and the attempt still fails. That cost is capped at one rerun per attempt. Of the 3 tickets that stalled, 2 (0015, 0012) got a complete review on the next try, so the rerun is worth that cost.
+- info forge/forge.py:446 Gate, reviewer and protected paths are not weakened. The rerun happens only when `rc == 124`, and only `_agent_once`'s timeout branch sets that (:209-211). It also requires an empty verdict list, so a REJECT is never rerun. :454 still requires a final `VERDICT: APPROVE`. The reviewer choice is the same `reviewer` variable, so the cross-vendor rule still holds. Neither `touched_protected` nor the gate calls are touched. No ticket text reaches a shell. Only lane-local state changes.
+- info forge/forge.py:450 Failure paths still clean up. If the rerun raises `QuotaExhausted`, the `finally` at :474 removes the worktree and branch, then `lane_loop` calls `recover()`, which sets the lane's `in_progress` ticket back to `retry`. That is the same path as the existing call at :444. The first session's process group is killed and reaped (`p.communicate()`) before the rerun starts. The log line at :449 plus `agent()`'s own log line keeps the 2 h stall watchdog from tripping. The longest cycle grows by at most 30 min, a fixed amount.
+- low forge/forge.py:446 New path: before this PR, a timed-out review always ended in `fail()`, which deletes the worktree. Now the killed session's leftover files stay in the worktree into the merge path. If that later hits the rebase-conflict branch, `rebase_onto_main`'s `git add -A && git commit` (:338) commits them, and protected paths are not checked again after the rebase. A reviewer that finishes normally already has this exposure, so the added risk is small. The real fix is open PR #8's protected-path re-check after rebase, not this PR.
+- info sibling #6 (forge.py, README.md): `git merge-tree pr14 pr6` conflicts in both files, so it cannot merge silently. The two PRs also contradict each other. #6 treats a no-verdict timeout as a REJECT and gives the builder a repair round with `Review: TIMEOUT after 1800s ...`. #14 treats that case as a harness failure. #6 should change when it rebases: keep #14's rerun and skip the repair round when there is no verdict.
+- info sibling #7 (forge.py): merges cleanly. It complements this PR: #7 tries to prevent stalls, #14 recovers from one. #7's session-clock prefix is added in `_agent_once`, so the rerun gets it too.
+- info sibling #8 (forge.py, README.md): merges cleanly. Its `review of <rev>` comment wraps whichever review ran last, which is the rerun's.
+- nit forge/README.md:32 "a 75-minute builder attempt" uses reflex1's `builder.timeout_min = 75`. forge's default is 60 (forge.py:173) and this README describes forge in general, so "a whole builder attempt" would be accurate.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, build the reviewer prompt once and pass it to both calls. Replace line 444
+`            rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000]), wt, timeout_min=30)`
+with
+`            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000])`
+`            rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)`
+and replace line 450 with
+`                rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)`
+After this, any future change to the reviewer prompt's inputs (such as #5's `NOTES`) either applies to both runs or causes a merge conflict, instead of silently leaving one run behind.
+
+
 ## PR #13 · 2026-10-23T19:23:55Z · MERGE WITH CHANGE · risk medium · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
