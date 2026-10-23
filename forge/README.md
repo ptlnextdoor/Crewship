@@ -29,6 +29,7 @@ Reliability rules, each mapped to a failure it prevents:
 | Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
 | Rebase and re-gate before merge | green branch, red main |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
+| `autofix` (e.g. `cargo fmt --all`) runs and commits before the gate | a formatting diff costing a 75-minute model repair session |
 | A review that hits its timeout with no `VERDICT` is rerun once before the attempt fails | losing a 75-minute builder attempt to a stalled 30-minute review |
 | Model-written text (the ticket heading that becomes the PR title) is shell-quoted; bodies go through files | a backtick or `$(...)` in a ticket running as the owner's user |
 | Quota floor (`max_window_used_pct`), hard deadline, per-session timeouts | burning the owner's shared plan |

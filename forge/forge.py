@@ -271,6 +271,15 @@ class Forge:
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
+    def autofix(self, cwd: Path) -> None:
+        """Run the project's mechanical fixer (`autofix`, e.g. `cargo fmt --all`) and commit what it changed,
+        so a formatting diff never costs a model repair session (reflex1 0005: the only gate failure of the
+        first 44 tickets was a `cargo fmt --check` diff, and its repair session died on quota)."""
+        fix = self.cfg.get("autofix")
+        if fix:
+            self.sh(fix, cwd=cwd, timeout=300)
+            self.sh(f"git add -A && git commit -qm {shlex.quote(f'forge: autofix ({fix})')} || true", cwd=cwd)
+
     def touched_protected(self, cwd: Path) -> list[str]:
         files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
@@ -422,6 +431,7 @@ class Forge:
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
+            self.autofix(wt)
             self.pr = self.pr_open(wt, branch, ticket, builder)
             bad = self.touched_protected(wt)
             if bad:
