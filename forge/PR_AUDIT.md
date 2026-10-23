@@ -2,6 +2,49 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #9 · 2026-10-23T18:43:54Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #9 reviewer: rerun reported numbers with a perturbed input
+What it changes: adds one sentence to step 1 of `forge/prompts/reviewer.md` (line 4). For every speed, accuracy or agreement number, the reviewer reruns it "with something the command does not fix (another seed, batch size or input set, or a fresh process)" and reports both runs. A number that holds only on the builder's exact input counts as "faked". A before/after pair counts only if both sides used the same build profile on the same machine. No code changes. The branch is based on 5feccfa6, which predates #11 and #12, but `git merge-tree origin/forge pr/9` is clean (tree 277f0e03, only line 4 differs) and `python3 forge/selftest.py` passes on that tree.
+Findings:
+- medium forge/prompts/reviewer.md:4 The new sentence pushes the reviewer to change the builder's worktree, which line 1 forbids ("Do not edit files"). After the review, forge never checks that worktree, so whatever the reviewer leaves behind can merge without review.
+  - The reviewer runs with yolo approvals inside `wt` (forge.py:188, 444).
+  - In reflex1, agreement numbers have no seed or input option. `tools/generate_vit_fixture.py:20,26` hard-codes `OUT=bench/fixtures/vision` and `torch.manual_seed(0)`. "Another seed" therefore means editing the script and overwriting tracked fixtures.
+  - A "before" number needs the pre-ticket build. The 0019 reviewer already planned that run "against the pre-ticket `lib.rs`" (sessions/00011-reviewer_alt.log:29) and skipped it. Doing it means editing the file in place or switching to a detached checkout, because `git checkout main` is refused inside the worktree.
+  - I simulated `rebase_onto_main` (forge.py:326-339) in a scratch repo:
+    - (a) If a tracked file is left modified, `git rebase` exits 1 with "cannot rebase: You have unstaged changes", even when main has not moved. Forge then:
+      - starts a builder "conflict" session for up to 30 min of quota (333-335),
+      - commits the reviewer's leftovers through `git add -A && git commit -qm 'forge: merge main'` (338; observed in the scratch repo: the fixture edit landed in that commit),
+      - gets 0 from `is-ancestor` (339), re-gates (453), pushes and merges (458-459), and marks the ticket done (468).
+      `touched_protected` last ran at 423/434, and no reviewer sees that commit.
+    - (b) If HEAD is left detached at origin/main, `git rebase` returns 0. The re-gate at 453 then tests main's code, not the branch (`merge-base --is-ancestor origin/main br` = 1), and the unrebased branch is pushed and merged through the PR.
+  - The missing clean-tree / HEAD==branch check after the review is pre-existing. This PR is what makes the reviewer likely to hit it, and the prompt wording is the only guard.
+- low forge/prompts/reviewer.md:4 The sentence will produce false REJECTs that waste attempts.
+  - "Holds only for the builder's exact input" sets no threshold, and one of its own examples, batch size, changes speed by design.
+  - Line 11 makes any problem in steps 1-5 a REJECT. A REJECT goes to `fail()` (449, 482-495), and the "## forge " note counts as an attempt (264-265).
+  - From attempt 2 the ticket escalates to builder_hard (415-416; xhigh, 90 min per reflex1.toml). It is blocked at max_attempts=3 (489).
+- low forge/prompts/reviewer.md:4 The second run partly undoes the time #11 saved within the fixed 30-min reviewer budget (forge.py:444).
+  - 4 of the 29 reviewer logs on disk end in `TIMEOUT after 1800s`: lane2 00005/00006, lane3 00005, lane4 00002. All are from 11:06-14:13Z, before #11 (18:10Z) stopped the gate rerun.
+  - The gate prints an agreement number from an ~8 min 60-request spread (reflex1 gate.sh:9,32). Line 1 still tells the reviewer to "run and check ... a printed number" on the gate line, so the new sentence invites rerunning that spread with another input set.
+  - A timeout returns rc 124 with no VERDICT line, which goes to `fail()` and counts as an attempt. The cost is bounded by killpg (202-208).
+- low forge/prompts/reviewer.md:4 For a trained model's accuracy, "another seed" can be read as "retrain". reflex1 AGENTS.md:11 points agents at `gpu.py`, and the reviewer env carries GPU_*.
+  - If the 30-min killpg sends SIGTERM to `gpu.py run`, it dies without running `finally: terminate()` (gpu.py:153-154), because it has no signal handler.
+  - `reap()` then books the pod at $0: a pod from `GET /pods` has no `_started` (gpu.py:81-85, 96). The GPU_BUDGET_USD cap (128) never sees that spend.
+  - The gap is pre-existing; the PR adds the reviewer as a likely caller.
+- info Checked and clean:
+  - The sentence has no `{...}` tokens, and `prompt()` substitutes with `str.replace` (forge.py:95-99), so ticket text gets no new route into a command.
+  - Nothing mentions gate.sh, tickets/, .forge/ or STEERING.md, or permits skipping tests or leniency.
+  - The verdict-line and no-"benefit of the doubt" selftest checks still pass.
+  - The prompt grows by one fixed sentence.
+  - No state is shared between lanes, and no new exception or worktree path is added.
+- slop The PR body's "`python3 -m py_compile forge/forge.py` passes" says nothing about a prompt-only diff. "something the command does not fix" is vague wording for "an argument the command takes".
+Change needed: in forge/prompts/reviewer.md line 4, keep everything through "A criterion you did not run counts as FAIL." and replace the rest of the line with:
+For a speed, accuracy or agreement number that the gate did not print and whose command took under 5 minutes, run it once more in a fresh process with another seed or input set of the same shape, changed only through the command's own arguments or environment variables, and report both; if the ticket gives a threshold and the second run misses it, the number is tuned to the builder's input: FAIL. Never edit, regenerate, restore or check out files, retrain, or start a GPU job for this, and leave the worktree and HEAD exactly as you found them; if the command has no such knob or takes longer, say so, which alone is not a FAIL. A before/after pair counts only if the builder's notes show both sides measured with the same build profile on this machine.
+
+
 ## PR #12 · 2026-10-23T18:38:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
