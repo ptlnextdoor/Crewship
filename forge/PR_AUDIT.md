@@ -2,6 +2,95 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #6 · 2026-10-23T19:03:17Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #6 forge: one repair round after a reviewer REJECT before giving up the attempt
+What it changes: `cycle()` puts the review in a two-round loop (forge.py:435-453 at head 1fdc9571). If round 1 does not approve, one builder session gets the ticket and the review. Forge then commits, pushes, re-gates, checks protected paths and runs a second review. A second non-approval fails the attempt. The README diagram and the reliability table describe the new flow.
+Findings:
+- high forge/forge.py:435-442 A REJECT is no longer final for an unchanged diff, which makes approval more likely.
+  - The round-2 reviewer gets the same `self.prompt("reviewer", TICKET, DIFF)` as round 1. It is a fresh `omp -p --no-session` run (forge.py:187), so it never sees round 1's findings.
+  - Nothing checks whether the repair changed anything. The repair's rc is ignored. If the builder times out, edits nothing, or disagrees with the review, the identical diff gets a second, independent review.
+  - Reproduced with the PR merged onto origin/forge, a throwaway bare origin and `pull_requests=false`. `_agent_once` was stubbed: the builder writes foo.txt, the reviewer answers REJECT, the repair does nothing, then the reviewer answers APPROVE. Calls were `builder:opus, reviewer_alt:astra, builder:opus, reviewer_alt:astra`. The round-2 DIFF equals the rejected DIFF (True), the round-2 prompt holds none of the round-1 findings, and the ticket ends `status: done` with merged=1.
+  - A cosmetic repair, such as a PROGRESS.md note arguing with the finding, gets the same blind second review.
+- medium forge/forge.py:438-446 A missing verdict counts as a rejection and starts a builder session with nothing to fix.
+  - `if round_:` only exits in round 2. A reviewer that timed out or printed no VERDICT line therefore triggers a full builder session (timeout_min 75 for builder, 90 for builder_hard, reflex1.toml).
+  - The prompt tells the builder "The reviewer rejected the change". The "review" it gets is `TIMEOUT after 1800s (process group killed)` (forge.py:209) or an empty string when stdout was empty.
+  - Before this PR, a missing verdict failed the attempt.
+  - Frequency, from 29 reflex1 reviewer session logs in ~/.local/state/forge/reflex1: 19 APPROVE, 4 REJECT, 4 TIMEOUT, and 2 that end in a Codex `usage_limit_reached` error with no verdict. This path would fire more often than the real-REJECT path it was built for.
+  - Reproduced: reviewer TIMEOUT, then a no-op repair, then APPROVE ends in a merge.
+- low forge/forge.py:431-434 The reviewer is picked once, before the loop. The repair can run on a fallback vendor and still get the original reviewer, which breaks the README rule that builder and reviewer come from different vendors.
+  - Builder fallback is `["anthropic/claude-fable-5-1", "openai-codex/gpt-6.1-sol"]`. If Anthropic runs out during the repair, sol (OpenAI) writes the fix and reviewer_alt=gpt-6-astra (OpenAI) reviews it.
+  - `done_note` (460) still says "Landed by anthropic/claude-opus-5-5".
+  - Reproduced: calls were `builder:opus(quota), builder:sol, reviewer_alt:astra`, then merged.
+- low forge/forge.py:449-452 A protected-path edit made by the repair is caught, but the ticket note gives the wrong cause.
+  - The gate runs first, on the builder's modified gate.sh. Then `touched_protected(wt) or not ok` fails the ticket with "gate failing after review repair." and a PASS gate tail.
+  - The note goes into the ticket and so into the next attempt's builder prompt, hiding the real cause.
+  - The first build path checks protected paths before the gate, with its own message (423-425).
+  - Reproduced: a repair that edits gate.sh ends `status: retry` with "gate failing after review repair."
+  - Not a bypass.
+- nit forge/forge.py:444-445 The comment says "in-session repair round", but the repair is a fresh `--no-session` run. #4 already fixed the same wording for the gate repair on origin/forge.
+  - "(review must converge; round cap, not open loop)" restates `range(2)`.
+- nit forge/forge.py:178 The round-2 review overwrites the round-1 review log. Both use `sessions/{cycle}-{reviewer}.log`, written with `write_text`.
+  - With `pull_requests=false`, the round-1 findings exist nowhere else. The fail note carries only round 2's `rout`.
+- info Checked and found no problem:
+  - Gate and protected paths: the repair commits with `git add -A`, and `touched_protected` (main...HEAD) runs before anything lands. The repair prompt reuses the existing gate-repair wording, "never the gate or tests' expectations unless the ticket says so". It does not name `tickets/` or `.forge/`, but the deterministic check covers them.
+  - Injection: ticket and review text go in as one argv element, with no shell. They are not passed through `prompt()`, so no placeholder substitution happens. `branch` and the commit message are the same as before.
+  - Bounds:
+    - `rout` is at most 6000 chars (`_agent_once`, forge.py:215). The DIFF is capped at 120000.
+    - Each attempt adds at most one builder session and one reviewer session. Attempts are capped by max_attempts=3.
+  - Exceptions: a QuotaExhausted from the repair or the re-review leaves through `finally`, which removes the worktree and the branch. lane_loop's `recover()` then sets the ticket back to retry. An open PR left behind on that path is pre-existing.
+  - Concurrency: every new write is per lane (wt, branch, self.home/gh-body.md).
+  - Merge: `git merge-file` merges this PR cleanly onto origin/forge 0a04314f, and `python3 forge/selftest.py` prints "all checks passed". reviewctl's earlier "gate fail" came from the PR base bd5b793d, which has no selftest.py.
+  - Worth it: in reflex1, tickets 0011 and 0019 each lost a full attempt to "reviewer did not approve" and landed on the next attempt.
+  - Conflicts: PR #5 and PR #8 rewrite the same review block, so whichever lands second needs a rebase. If #5 lands first, both reviewer calls in this loop must pass `NOTES`, and both diffs must use #5's pathspec.
+Change needed (only for MERGE WITH CHANGE): In forge/forge.py, replace the block from the "# Reviewer comes from the other vendor" comment through the last `diff = self.sh("git diff main...HEAD", cwd=wt).stdout` inside the loop. That is 431-453 at head 1fdc9571, or 440-462 after merging onto origin/forge. The replacement:
+```python
+            for round_ in range(2):
+                # Reviewer comes from the other vendor than the model that actually built it (cross-family review);
+                # picked each round because the repair may have run on a fallback model.
+                built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
+                same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
+                reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
+                rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000])
+                if round_:
+                    rprompt += f"\n\nAn earlier review rejected this branch with the findings below, and the builder made one repair. Any finding the diff does not fix is a REJECT.\n\n{review[-12000:]}"
+                rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
+                verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+                review = rout.split("[stderr]")[0].strip()
+                self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
+                if verdict and verdict[-1] == "APPROVE":
+                    break
+                if round_ or not verdict:  # only an explicit REJECT gets a repair
+                    return self.fail(ticket, f"reviewer did not approve{' after one repair round' if round_ else ''}.\n{rout[-3000:]}")
+                # one repair pass with the review: most rejections name a small fix, and a retry redoes the whole session
+                self.agent(builder, f"The reviewer rejected the change. Fix every instance of each problem the review names (never the gate or tests' expectations unless the ticket says so), run `{self.cfg.get('gate', './gate.sh')}`, then commit.\n\nTicket:\n{ticket.read_text()}\n\nReview:\n{review[-12000:]}", wt)
+                self.sh("git add -A && git commit -qm 'forge: repair after review' || true", cwd=wt)
+                new = self.sh("git diff main...HEAD", cwd=wt).stdout
+                if new == diff:
+                    return self.fail(ticket, f"reviewer did not approve and the repair changed nothing.\n{rout[-3000:]}")
+                diff = new
+                self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
+                bad = self.touched_protected(wt)
+                if bad:
+                    return self.fail(ticket, f"review repair edits protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
+                ok, gout = self.gate(wt)
+                self.pr_comment(self.pr, f"**gate after review repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
+                if not ok:
+                    return self.fail(ticket, f"gate failing after review repair.\n{gout[-2500:]}")
+```
+Verified on a throwaway copy (PR merged onto origin/forge, plus this block) with the same stub harness:
+- No-op repair: ends `retry`, "the repair changed nothing", without a second review.
+- Reviewer TIMEOUT: ends `retry`, "reviewer did not approve.", with no builder session.
+- Repair on sol: round 2 goes to the anthropic `reviewer`. With Anthropic out, that raises QuotaExhausted, and lane_loop's recover sends the ticket back to retry.
+- gate.sh edit: ends `retry` with the protected-path message.
+- Real fix then APPROVE: merges, and the round-2 prompt carries the round-1 findings.
+- REJECT, fix, REJECT: ends `retry`, "after one repair round".
+- `py_compile` and `forge/selftest.py` pass.
+
+
 ## PR #7 · 2026-10-23T18:55:06Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
