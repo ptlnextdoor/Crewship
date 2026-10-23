@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #15 · 2026-10-23T21:29:51Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #15 forge: shell-quote the PR title so ticket headings cannot run as commands
+What it changes: `pr_open` now builds `--title` with `shlex.quote(...)`. Before, it used `json.dumps(...)`, whose double quotes leave backticks and `$(...)` live under `sh(shell=True)` (forge.py:365, 370, 372). The PR also adds selftest 4b, which runs `pr_open` through the real shell against a fake `gh` and checks that the title arrives verbatim, plus one README safeguard row.
+Findings:
+- info forge/forge.py:365-372 The bug is real and this fixes it.
+  - ptlnextdoor/reflex1 PR #40 has the stdout of `tools/baselines.py`, a five-row lap table, as its title. The heading of ticket 0052 is `` # `tools/baselines.py`: constant-throttle baseline ... ``.
+  - Before the fix, `gh()` (forge.py:352) ran a script the builder wrote, as the owner's user, in the worktree. It ran outside the agent session's `start_new_session`/killpg control. The only bound was `subprocess.run(timeout=120)`, which kills `sh` and not its children.
+  - With the PR, the title comes from `ticket.read_text()` in the lane's main checkout and not from the builder's worktree. `re.search(r"^# (.+)$")` keeps it to one line, and `"[NNNN] "` comes first, so it can never parse as a flag.
+  - I probed the PR's forge.py in a /tmp copy against a fake gh. A single quote, backticks, `$HOME`, `\n` and `; rm ...` all reached gh literally. Non-ASCII now survives too: with json.dumps, `café` arrived as `caf\u00e9`.
+  - Both `pr create` calls are quoted, the primary one and the no-label fallback. There are no other `json.dumps`-into-shell sites (only :156 state and :506 prompt, neither is shell).
+- info forge/selftest.py:89-98 This is a real regression test.
+  - Run on the PR's tree, `python3 forge/selftest.py` says "all checks passed".
+  - With base forge.py and the new selftest it prints `FAIL PR title reaches gh literally`.
+  - It makes no network calls. f.env PATH is replaced with the temp `bin/` dir, so the real gh is not reachable. The temp repo has no `origin`, so `git push` fails. `state_dir` and `gh-body.md` live in the tempdir.
+  - `f.cfg["pull_requests"]=True` comes after the last use of `f`.
+  - If gh is never invoked, `words.index`/`read_text` raise. That fails the selftest closed, which is acceptable.
+- info protected paths, gate and reviewer: no change. The PR does not touch claim, `recover()`, `discard_strays()`, `touched_protected`, `gate()`, the reviewer prompt or verdict parsing, quota fallback, timeouts, merge, or gpu.py. The new state is per lane (`self.home/gh-body.md`, as before).
+- info forge/forge.py:349-351 (pre-existing, unchanged) A title containing `-R ` still suppresses the `-R {gh_repo}` append. My probe showed the same result before and after this PR. Not caused by this diff.
+- nit forge/forge.py:363-364 The comment tells the incident story; that belongs in the PR body. Its "ran for 22 s" is unverified. The forge.log has no session-end timestamp to measure it from. "22.090 s" also appears in the leaked title as a lap-time cell, which may be where the number came from. A one-line why would do. Not blocking.
+- nit forge/README.md:33 The failure column says the row prevents "a backtick or `$(...)` in a ticket running as the owner's user". Ticket *filenames*, which the planner also writes, are still interpolated unquoted into shell (forge.py:319, 410-411, 476, 482-485, 498, 533). The planner prompt pins them to `NNNN-short-slug.md` (planner.md:7) and the row's parenthetical limits the claim to the heading, so this is accurate in practice. Not blocking.
+- info siblings on base `forge`:
+  - #5, #6, #7 and #8 touch forge.py, and #6 and #8 touch README.md. Their forge.py hunks are in `_agent_once`, `touched_protected` and the review/land block of `cycle()`. None touches `pr_open`, `gh()` or the imports.
+  - #6 and #8 edit other rows of the same README table.
+  - No contradiction or duplication with #15. At most a textual rebase in the table.
+Change needed (only for MERGE WITH CHANGE): none
+
+
 ## PR #14 · 2026-10-23T20:27:28Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
