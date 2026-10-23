@@ -11,7 +11,7 @@ protected_paths = ["gate.sh", "tickets/", ".forge/"]
 
 [limits]
 # Stop at this UTC time (12 h after launch). Final steward pass, then GPU reap.
-deadline = "2026-10-23T15:00:00Z"
+deadline = "2026-10-24T16:00:00Z"
 # Pause when any Claude/Codex usage window passes this percent, so the owner keeps headroom.
 max_window_used_pct = 80
 gate_timeout_min = 30
