@@ -427,12 +427,15 @@ class Forge:
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if bad or not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
-            diff = self.sh("git diff main...HEAD", cwd=wt).stdout
+            # The builder's PROGRESS.md/LEARNINGS.md hunks are its own claims; they go to the reviewer separately and
+            # last, so the diff is judged before the self-report (arXiv 2610.29609: judges shown the agent's claim miss more misreports).
+            diff = self.sh("git diff main...HEAD -- . ':(exclude)PROGRESS.md' ':(exclude)LEARNINGS.md'", cwd=wt).stdout
+            notes = self.sh("git diff main...HEAD -- PROGRESS.md LEARNINGS.md", cwd=wt).stdout
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
             reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
-            rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000]), wt, timeout_min=30)
+            rc, rout = self.agent(reviewer, self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000], NOTES=notes[:8000] or "(none)"), wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
