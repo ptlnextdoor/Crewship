@@ -117,6 +117,55 @@ def gate(pr: dict) -> tuple[bool, str]:
         sh(f"git worktree remove --force {wt}; git branch -D pr-{n} 2>/dev/null")
 
 
+def fix(pr: dict, v: dict) -> tuple[bool, str]:
+    """Apply the one edit the audit named, on the PR's own branch, then push it.
+
+    Only for MERGE WITH CHANGE: the audit already said a single concrete edit makes this
+    landable. The fixer may touch only the files the PR already touches, so it cannot grow
+    into a second, unreviewed change. The result is re-gated and re-audited next pass.
+    """
+    n = pr["number"]
+    branch = pr["headRefName"]
+    files = [f["path"] for f in pr.get("files", [])]
+    wt = STATE / f"fix-{n}"
+    sh(f"git worktree remove --force {wt} 2>/dev/null; rm -rf {wt}")
+    r = sh(f"git fetch -q origin {branch} -f && git worktree add -q -B fixbr-{n} {wt} origin/{branch}")
+    if r.returncode:
+        return False, f"could not check out {branch}: {r.stderr[-300:]}"
+    try:
+        pf = STATE / f"pr{n}.fix.md"
+        pf.write_text(
+            f"You are applying one agreed edit to pull request #{n} of {GH_REPO}, in the current directory "
+            f"(a worktree of its branch `{branch}`).\n\n"
+            f"An audit approved this PR on the condition of a single change. Here is the audit:\n\n"
+            f"{v['audit']}\n\n"
+            "Make exactly the edit named under 'Change needed'. Nothing else: no refactors, no extra "
+            f"improvements, no new files. Touch only these files: {files}. If the audit's change cannot be "
+            "made within those files, change nothing and say why.\n\n"
+            "Then run `python3 forge/selftest.py` and make sure it still passes. Commit with a message that "
+            "says what the audit asked for and why. Do not push; the caller pushes.\n"
+        )
+        p = sh(f"timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
+               cwd=wt, timeout=1300)
+        (STATE / f"pr{n}.fix.log").write_text(f"exit={p.returncode}\n{p.stdout}\n{p.stderr}")
+        if sh("git status --porcelain", cwd=wt).stdout.strip():
+            sh("git add -A && git -c user.email=f@f -c user.name=reviewctl commit -qm 'reviewctl: apply the change the audit required'", cwd=wt)
+        if not sh(f"git log --oneline origin/{branch}..HEAD", cwd=wt).stdout.strip():
+            return False, "the fixer changed nothing"
+        stray = [f for f in sh(f"git diff --name-only origin/{branch}..HEAD", cwd=wt).stdout.split() if f not in files]
+        if stray:
+            return False, f"the fixer touched files outside the PR: {stray}"
+        t = sh("python3 forge/selftest.py", cwd=wt, timeout=600)
+        if t.returncode:
+            return False, f"selftest failed after the fix:\n{(t.stdout + t.stderr)[-1200:]}"
+        u = sh(f"git push -q origin HEAD:{branch}", cwd=wt)
+        if u.returncode:
+            return False, f"could not push the fix: {u.stderr[-300:]}"
+        return True, sh(f"git log --oneline origin/{branch}..HEAD", cwd=wt).stdout.strip() or "pushed"
+    finally:
+        sh(f"git worktree remove --force {wt}; git branch -D fixbr-{n} 2>/dev/null")
+
+
 def touches_protected(pr: dict) -> list[str]:
     return [f["path"] for f in pr.get("files", []) if any(p in f["path"] for p in PROTECTED)]
 
@@ -151,8 +200,25 @@ def run() -> None:
         elif v["verdict"] == "MERGE" and v["risk"] in ("none", "low"):
             m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch")
             v["action"] = "merged" if m.returncode == 0 else f"merge failed: {m.stderr[-200:]}"
+        elif v["verdict"] == "MERGE WITH CHANGE" and v["risk"] in ("none", "low"):
+            # Apply the named edit, then merge: the next pass re-audits the pushed result.
+            ok2, detail = fix(pr, v)
+            if not ok2:
+                v["action"] = f"left open: fixer could not apply the change ({detail})"
+            else:
+                ok3, gout = gate(pr)
+                if not ok3:
+                    v["action"] = f"left open: gate failed after the fix ({gout[-200:]})"
+                else:
+                    m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch")
+                    v["action"] = f"fixed and merged ({detail})" if m.returncode == 0 else f"fixed, merge failed: {m.stderr[-200:]}"
+        elif v["verdict"] == "REJECT" and v["risk"] in ("none", "low"):
+            cf = STATE / f"pr{n}.close.md"
+            cf.write_text(f"Closed by reviewctl: the audit rejected this change.\n\n{v['audit'][-6000:]}")
+            c = sh(f"gh pr close {n} -R {GH_REPO} --delete-branch --comment \"$(cat {cf})\"")
+            v["action"] = "closed: rejected" if c.returncode == 0 else f"close failed: {c.stderr[-200:]}"
         else:
-            v["action"] = f"left open: {v['verdict']} risk={v['risk']}"
+            v["action"] = f"left open: {v['verdict']} risk={v['risk']} needs the owner"
         body = f"**reviewctl** ({MODEL}:{THINKING}) · verdict {v['verdict']} · risk {v['risk']} · gate {v['gate']} · {v['action']}\n\n<details><summary>audit</summary>\n\n{v['audit'][-8000:]}\n</details>\n\n```\n{gout[-1500:]}\n```"
         bf = STATE / f"pr{n}.comment.md"
         bf.write_text(body)
