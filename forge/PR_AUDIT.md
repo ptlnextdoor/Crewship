@@ -2,6 +2,25 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #18 · 2026-10-24T00:38:32Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #18 forge: retry landing when main moves during the post-rebase gate
+What it changes: moves the landing block of `cycle()` (rebase_onto_main → gate → force-with-lease push → pr_merge → local `--no-ff` merge fallback) into `Forge.land()` unchanged, wrapped in `for _ in range(3)`. A local-merge conflict now aborts, logs and goes round again (re-rebase, re-gate) instead of failing the attempt. Adds README row and selftest 4d.
+Findings:
+- low forge/forge.py:402-404 Each retry goes back into `rebase_onto_main`. Plain `git rebase` drops the builder's earlier merge commit and replays the same conflicting PROGRESS/LEARNINGS hunks, so a retry nearly always starts another 30-min yolo builder conflict-resolution session (forge.py:334-336). That session's output is gated (`gate()` runs the worktree's own `./gate.sh`), but `touched_protected()` never checks it and the reviewer never sees it. The gap already existed for one session per landing; this PR allows up to 3. It is the same kind of exposure as before: the old path turned a moved main into a fresh attempt, and that attempt's landing also ended in an unchecked resolution. Not counted against the verdict; sibling #8 closes the gap (below).
+- info sibling #8 (forge: protected-path check and gate evidence on the exact revision that merges) edits the exact inline lines this PR moves into `land()`: it adds `touched_protected(wt, "origin/main")` and a gate PR comment between `rebase_onto_main` and `gate`. The two will conflict as text but do not contradict each other. #8 should change: when it rebases, its check goes inside `land()`'s loop right after `rebase_onto_main`, so it covers every retry's builder resolution and not only the first. Placing it before the `land()` call would miss them. #8's diff is already against an older base (index 4ee81ee3).
+- info sibling #6 (review repair round) has the `# land:` comment and the `rebase_onto_main` lines in its hunk context. #18 deletes those lines, so #6 needs a rebase. No conflict in behaviour. #16 (autofix) adds a README row next to this one and a selftest block; only the order differs. #5 and #7 do not touch any changed lines.
+- info forge/forge.py:397-418, 483 Traced end to end. The error strings are byte-identical to the old inline code. `done_note` moved below `land()` but uses `built_by`/`reviewer`, which are computed earlier, so its value is unchanged. Every iteration runs rebase → gate → merge in that order, so nothing merges without a passing gate on the rebased revision. The loop is capped at 3. `git merge --abort` puts the lane's main checkout back before the next pass. Gate `TimeoutExpired` and `QuotaExhausted` from the builder propagate exactly as before: `cycle()`'s finally removes the worktree and branch, and `lane_loop` → `recover()` puts an `in_progress` ticket back to `retry`. No new shell interpolation: `tid`/`branch` come from the ticket filename and cycle number, as before.
+- info cost: the worst case per landing is 3 × (30-min builder + 30-min gate; reflex1 `gate_timeout_min=30`), against 1× before. The extra spend happens only on a landing conflict, which used to cost a whole new attempt (60–75-min builder + 30-min review + landing). No GPU path is touched. The lane logs when each agent starts and on each retry, so the shared forge.log stays inside the 2-h watchdog window (systemd watchdog `age -gt 7200`).
+- info the problem is real: in ~/.local/state/forge/reflex1/forge.log for 2026-10-23 22:03–23:19, five approved, gate-green attempts failed with `gh pr merge failed: Pull Request has merge conflicts` followed by `merge conflict landing` (0047 twice → BLOCKED, 0058, 0062 twice). reflex1 ticket 0077 exists only to rescue 0047's branch. The docstring says "four in two hours", which undercounts; harmless.
+- low forge/selftest.py:113-138 Ran it on the PR tree: everything passes. Changing `range(3)` to `range(1)` makes the new check fail, so the test catches a lost retry. A mutation that skips `gate()` on retries still passes. The re-gate on every pass that the README row promises is not pinned. Optional hardening: count gate calls in the stub and check `len(calls) == 2`.
+- nit forge/forge.py:417 "main moved during the gate; landing … again" is also logged after the third failure, when no retry follows. It also assumes the cause, though any `pr_merge` failure plus a local conflict reaches it. Cosmetic.
+- slop pass: the extraction is the smallest change that makes the loop testable. The docstring's incident note follows the file's style (`prune_target`). No defensive try/except added. The README row ("re-syncs with main and re-gates, up to three times") matches the code: up to three sync+gate+merge passes.
+
+
 ## PR #17 · 2026-10-23T23:38:23Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
