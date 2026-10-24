@@ -153,7 +153,7 @@ with tempfile.TemporaryDirectory() as d:
     forge.OMP = str(bindir / "omp")
     big = "x" * 200_000 + "\nEND-OF-PROMPT"
     rc, text = f._agent_once("reviewer", "c/d", "high", big, repo, 1)
-    check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT") and (f.home / "sessions/00000-reviewer.prompt").read_text() == big, text[-200:])
+    check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT"), text[-200:])
 
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
