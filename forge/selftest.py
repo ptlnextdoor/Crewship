@@ -171,6 +171,15 @@ with tempfile.TemporaryDirectory() as d:
     f.steward()
     check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
 
+    # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
+    (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")
+    git("add -A", repo); git("commit -qm z", repo); git("push -q origin main", repo)
+    f.pr, f.pr_close = "https://example.invalid/pull/1", lambda pr, why: None
+    f.fail(t, "diff edits protected gate/ticket paths ['tickets/0002-y.md']; not allowed.")
+    logged = f.log_file.read_text().splitlines()[-1]
+    check("fail() logs the cause when there is a PR", "RETRY 0009-z: diff edits protected" in logged and "https://" not in logged, logged)
+    check("ticket note still carries the PR url", "PR: https://example.invalid/pull/1\ndiff edits" in git("show origin/main:tickets/0009-z.md", repo))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
