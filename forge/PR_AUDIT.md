@@ -2,6 +2,52 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #34 · 2026-10-24T17:21:20Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #34 forge: LEARNINGS.md entries carry a ticket id and file; steward deletes entries the code has outgrown
+What it changes: This PR changes prompts only, 3 lines. builder.md:17 tells builders to start each `LEARNINGS.md` entry with its ticket id and the file or symbol it is about. steward.md:10 defines a wrong entry as one whose named code no longer exists or no longer behaves as described (checked with `rg` and `git log -S`), and says to delete it. An entry with no ticket id and no file or symbol gets one from `git log -S`, or is deleted. README.md:44 adds a safeguard row.
+Findings:
+- medium forge/prompts/steward.md:10 The clause "else delete it" deletes true entries that simply have no provenance, and nothing reviews the deletion.
+  - How it lands: the steward commits `LEARNINGS.md` straight to main with no gate and no reviewer (forge.py:559-562; `discard_strays` only resets paths outside the add list).
+  - Scope on reflex1 origin/main (66151a4): 125 entries; 95 carry a ticket id somewhere, 0 start with one, 30 carry none.
+  - I ran `git log -S` on all 30. For 12 of them, the commit that introduced the entry has no ticket id in its subject: the owner's `8257ddd Bootstrap Reflex-1`, the `feat(core)` ports for 0001–0004, and `2a452f9 forge: steward update`.
+  - Example: the first entry, "Dev box is Linux x86_64, 8 vCPU, no GPU. sys1rust's MLX/Metal code does not build here.", has no ticket id and no file or symbol. It came from the owner's bootstrap commit, which predates any ticket, so no id can be given and the new rule says delete it. It is still true: `nproc` gives 8, `uname -m` gives x86_64, and `nvidia-smi` is absent.
+  - "Cannot be checked" is wrong for facts like this one, and deleting a fact that has no source does not make it false.
+  - The rest of the PR is sound. The builder prefix and the "the code it names is gone, so delete it" rule are what the PR's own rationale supports. Neither the README citation nor arXiv 2610.30698 supports deleting entries that have no source.
+- low forge/README.md:44 The row says the steward "deletes an entry … that cannot be checked". It must change together with the fix above. Like row 43, it describes a prompt rule that no code enforces; that matches the table's existing style.
+- low forge/prompts/steward.md:10 [INFERENCE] The "code it names no longer exists (`rg`)" check could wrongly delete entries that name code outside the repo.
+  - Example: entry 0057 warns that `~/code/reflex/learn/track.mjs` overwrites the owner's tracked `learn/track.json`. That path does not appear in reflex1's tree (git ls-tree + text scan), but the file exists on disk.
+  - The same applies to forge's own `usage_limit_reached` (entry 21).
+  - A steward that only runs `rg` in the repo could judge these gone. Not observed: no steward turn has run with this prompt (the PR body says so). No change required; the fix below keeps the provenance-free cases.
+- low forge/forge.py:559 Step 4 now does per-entry checks inside the steward's fixed 30-minute timeout.
+  - Measured: 6 steward turns in forge.log took 4.7–16.6 minutes. `git log -S` on reflex1 took 0.1–1.1 s per entry (30 lookups).
+  - On a timeout, `_agent_once` kills the process group (forge.py:207-217). `steward()` ignores the return code and commits whatever edits exist, so step 5 ("Needs the owner") would be skipped for that turn.
+  - The cost is bounded by the timeout and by `steward_every=4`, and adds no GPU spend. No change.
+- ok gate / reviewer / protected paths: untouched.
+  - No change to forge.py, reviewer.md, `touched_protected`, `protected_paths`, the steward's `git add` list or `discard_strays`.
+  - The new text contains no `{`, so `prompt()` placeholder substitution (forge.py:96-100) is unaffected.
+  - Nothing in the text grants permission to edit `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, or to skip tests.
+  - Ticket text is not interpolated into any command. No state is shared across lanes: only lane 1 runs `steward()` (forge.py:642, 650).
+- ok forge/README.md:44 The citation is accurate.
+  - reflex1 `LEARNINGS.md` is 129 lines, with 0 `YYYY-MM-DD` dates and 3 commit hashes (55cf4c4, f53779f5, 5cb9ce7).
+  - The arXiv 2610.30698 abstract reports a 40.54-point clean-vs-corrupted drop in LongMemEval binary correctness.
+- info sibling #23 edits the same line, builder.md:17. The two will textually conflict, but they do not contradict each other: #23 says notes describe code and never instruct; #34 adds the id/file prefix. Whichever lands second keeps both sentences. No change to #34.
+- info sibling #1 (builder.md:4 sub-bullet: record doc/code mismatches in `LEARNINGS.md`) complements #34: #1 flags stale entries and #34 prunes them. No overlapping lines.
+- info sibling #19 (`union_merge` on `LEARNINGS.md`) silently undoes a steward deletion when a lane appended right next to the deleted entry.
+  - Reproduced in a scratch repo. Base `A,B`; main deletes `B`; the lane branch appends `C` after `B`; with `merge=union` the rebase succeeds and gives `A,B,C`. Without union, the same case is a conflict.
+  - Neither side should change. The steward deletes `B` again on its next turn.
+- info README siblings #6, #8, #16, #19, #20, #25, #28, #31 insert rows mid-table, not after row 43, where #34 appends. No conflict.
+- nit forge/prompts/builder.md:17 The example path `crates/reflex-policy/src/conv.rs` does not exist in reflex1. "An entry nobody can date" says "date" where the rule is a ticket id. Not blocking.
+Change needed (only for MERGE WITH CHANGE): In forge/prompts/steward.md:10, replace
+`An entry with no ticket id and no file or symbol cannot be checked: give it one from `git log -S` if that takes under a minute, else delete it.`
+with
+`An entry with no ticket id and no file or symbol: give it one from `git log -S` if that takes under a minute, else leave it as it is; a missing source is not a reason to delete.`
+and in the same commit, in forge/README.md:44, replace `the steward deletes an entry whose code has moved on or that cannot be checked` with `the steward deletes an entry whose code has moved on`.
+
+
 ## PR #33 · 2026-10-24T16:15:01Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
