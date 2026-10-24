@@ -2,6 +2,22 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #30 · 2026-10-24T13:35:47Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #30 forge: log the failure cause, not the PR url, on RETRY/BLOCKED
+What it changes: `Forge.fail()` takes the log summary (`why.splitlines()[0][:200]`) before `why` gets its `PR: <url>` prefix, so the forge.log RETRY/BLOCKED line shows the cause and not the PR url. Adds selftest 4i, which covers both the log line and the ticket note.
+Findings:
+- info forge/forge.py:543,555 Only the `self.log` line changes. The ticket note (`set_status(..., why[-4000:])`, which still has the `PR:` prefix), the `pr_close` comment (raw `why`), `state["history"]` and the push are untouched. The log line is still capped at 200 chars, and its first line is always forge's own fixed text. The one model-controlled part is `{bad}`, a repr'd list of filenames, so it cannot add a newline. Nothing here touches the gate, the reviewer, protected paths, claim/recover, quota or GPU.
+- info forge/forge.py:543 Ordering: `head` is now computed before `pr_close`/`set_status`. An empty `why` would raise IndexError before the ticket is re-statused. Before this PR that only failed at the last line, after the push. It cannot happen today. All 5 callers pass a non-empty literal prefix (lines 469, 473, 486, 504). At 507, `land()` returns either "" or a non-empty string and the caller guards it with `if why:`. The new `self.fail` calls in sibling PRs #6 and #8 are also non-empty literals. If it ever did happen, `lane_loop`'s `except Exception` calls `recover()`, which sends the ticket back to retry (not charged an attempt), and `cycle()`'s `finally` removes the worktree. The only thing left behind would be an open PR. No change needed.
+- info forge/selftest.py:174-181 I ran the selftest from the PR head in a throwaway temp dir: all checks pass. I also ran the PR's selftest against base `forge.py`: 4i fails with `cycle 0: RETRY 0009-z: PR: https://example.invalid/pull/1`, so it is a real regression test. It reuses `f` from 4d–4h (with `sync_main` stubbed in 4f) and stubs `pr_close` on the instance. It is the last use of `f` in that block.
+- info forge/selftest.py:174 I checked the claim in the comment against `~/.local/state/forge/reflex1/forge.log`: 36 RETRY/BLOCKED lines, 33 of them `...: PR: https...`.
+- info siblings: PRs #28, #25, #20, #19, #16, #8, #7, #6 and #5 touch forge.py or selftest.py. None edits the body of `fail()` or the log line. Their selftest insertions (#28 at §2, #19 4e, #16 4c, #25 after 4g) do not overlap 4i. No contradiction and no duplicate. (#25 reuses the label "4h", which base already has. That is #25's problem, not this PR's.)
+- slop: none. One comment explains a non-obvious why. No README claim is needed, since README does not describe the fail log line.
+
+
 ## PR #29 · 2026-10-24T12:35:02Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
