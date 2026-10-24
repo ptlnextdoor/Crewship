@@ -193,6 +193,17 @@ with tempfile.TemporaryDirectory() as d:
     f.steward()
     check("steward turn survives a project missing one of its staged paths", "steward was here" in git("show origin/main:PROGRESS.md", repo))
 
+    # 4k. Two sessions of the same role in one cycle (gate repair, the builder resolving a merge, a rerun
+    # review, the steward at the deadline) each keep their log and prompt; the second overwrote the first.
+    f.state["cycle"] = 7
+    f._agent_once("builder", "c/d", "high", "first session", repo, 1)
+    f._agent_once("builder", "c/d", "high", "second session", repo, 1)
+    kept = sorted(p.name for p in (f.home / "sessions").glob("00007-builder*"))
+    check("a second session of a role keeps the first session's log",
+          kept == ["00007-builder-2.log", "00007-builder-2.prompt", "00007-builder.log", "00007-builder.prompt"]
+          and "first session" in (f.home / "sessions/00007-builder.log").read_text()
+          and "second session" in (f.home / "sessions/00007-builder-2.log").read_text(), str(kept))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
