@@ -110,6 +110,33 @@ with tempfile.TemporaryDirectory() as d:
     f.prune_target()
     check("prune_target drops workspace artifacts, keeps crates.io", sorted(p.name for p in tdir.iterdir()) == ["libhttp-c3.rlib", "libtokio-d4.rmeta"])
 
+# 4d. Landing survives main moving while the post-rebase gate runs: the first gate call pushes a conflicting
+# commit to origin/main (another lane); land() must re-sync, let the builder resolve, and merge, not lose the attempt.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
+    (repo / "tickets").mkdir(); (repo / "PROGRESS.md").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg); f.pr = ""
+    wt = Path(d) / "wt"
+    git(f"worktree add -q -b land {wt} main", repo)
+    (wt / "PROGRESS.md").write_text("branch\n"); git("add -A", wt); git("commit -qm branch", wt)
+    moved: list[int] = []
+    def gate(cwd):
+        if not moved:  # another lane lands on main while this gate runs
+            moved.append(1); git("pull -q origin main", other); (other / "PROGRESS.md").write_text("main\n")
+            git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
+        return True, ""
+    def agent(role, prompt, cwd, timeout_min=0):  # the builder's conflict resolution
+        git("merge origin/main", cwd); (cwd / "PROGRESS.md").write_text("both\n"); git("add -A", cwd); git("commit -qm merge", cwd)
+        return 0, ""
+    f.gate, f.agent = gate, agent
+    why = f.land(wt, "land", "0001-x", "builder")
+    check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)

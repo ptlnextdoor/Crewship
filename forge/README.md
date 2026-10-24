@@ -30,6 +30,7 @@ Reliability rules, each mapped to a failure it prevents:
 | Rebase and re-gate before merge | green branch, red main |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
 | A review that hits its timeout with no `VERDICT` is rerun once before the attempt fails | losing a 75-minute builder attempt to a stalled 30-minute review |
+| A merge conflict at landing re-syncs with main and re-gates, up to three times | losing an approved, gate-green attempt because another lane landed during the 8–25 min post-rebase gate |
 | Model-written text (the ticket heading that becomes the PR title) is shell-quoted; bodies go through files | a backtick or `$(...)` in a ticket running as the owner's user |
 | After each ticket the lane's `CARGO_TARGET_DIR` loses the workspace's own artifacts (crates.io ones stay) | one more copy of every test binary per dependency change until the disk is full |
 | Quota floor (`max_window_used_pct`), hard deadline, per-session timeouts | burning the owner's shared plan |
