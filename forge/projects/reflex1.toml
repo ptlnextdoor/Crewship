@@ -8,6 +8,9 @@ min_queue = 6
 max_attempts = 3
 steward_every = 4
 protected_paths = ["gate.sh", "tickets/", ".forge/"]
+# Result and data files the reviewer sees only as `--stat` lines (PR #76: 166 KB of one-line JSON around 152 code lines).
+# `bench/results/*.md` tables stay visible; the JSON beside them does not.
+review_exclude = ["*.json", "*.pt", "runs/", "bench/models/"]
 
 [limits]
 # Stop at this UTC time (12 h after launch). Final steward pass, then GPU reap.

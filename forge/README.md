@@ -34,6 +34,7 @@ Reliability rules, each mapped to a failure it prevents:
 | A merge conflict at landing re-syncs with main and re-gates, up to three times | losing an approved, gate-green attempt because another lane landed during the 8–25 min post-rebase gate |
 | Model-written text (the ticket heading that becomes the PR title) is shell-quoted; bodies go through files | a backtick or `$(...)` in a ticket running as the owner's user |
 | Every session prompt goes to omp through a file (`sessions/<cycle>-<role>.prompt`), never as an argument | a review of a large diff failing to start (Linux caps one argument at 128 KiB) and the attempt being charged to the ticket |
+| The reviewer's diff carries `--stat` for every file and no hunks for the project's `review_exclude` paths (result JSON, model files) | a 120 KB review prompt that is mostly one-line result files, where the code hunks get the least attention |
 | After each ticket the lane's `CARGO_TARGET_DIR` loses the workspace's own artifacts (crates.io ones stay) | one more copy of every test binary per dependency change until the disk is full |
 | Quota floor (`max_window_used_pct`), hard deadline, per-session timeouts | burning the owner's shared plan |
 | GPU through `gpu.py` only: budget cap, max hours, deadline in the pod name, reaper timer | forgotten pods billing all night |

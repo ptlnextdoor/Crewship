@@ -155,6 +155,18 @@ with tempfile.TemporaryDirectory() as d:
     rc, text = f._agent_once("reviewer", "c/d", "high", big, repo, 1)
     check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT"), text[-200:])
 
+    # 4h. The reviewer's diff names every changed file but carries no hunks for review_exclude paths.
+    wt2 = Path(d) / "wt2"
+    git(f"worktree add -q -b rd {wt2} main", repo)
+    (wt2 / "bench" / "results").mkdir(parents=True)
+    (wt2 / "bench" / "results" / "s1.json").write_text('{"secret-result": ' + "9" * 5000 + "}\n")
+    (wt2 / "src.rs").write_text("fn code_line() {}\n")
+    git("add -A", wt2); git("commit -qm data", wt2)
+    f.cfg["review_exclude"] = ["*.json"]
+    rd = f.review_diff(wt2)
+    check("review diff keeps code hunks and only the stat line of excluded files",
+          "bench/results/s1.json" in rd and "+fn code_line" in rd and "secret-result" not in rd, rd[:300])
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
