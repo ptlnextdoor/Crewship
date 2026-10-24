@@ -540,6 +540,7 @@ class Forge:
 
     def fail(self, ticket: Path, why: str) -> None:
         tid = ticket.stem
+        head = why.splitlines()[0][:200]  # the PR line prefixed below is for the ticket note; the log wants the cause
         self.pr_close(getattr(self, "pr", ""), why)
         if getattr(self, "pr", ""):
             why = f"PR: {self.pr}\n{why}"
@@ -551,7 +552,7 @@ class Forge:
         self.push()
         self.state["failed"] += 1
         self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now(), "version": self.version}])[-200:]
-        self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {why.splitlines()[0][:200]}")
+        self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {head}")
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
