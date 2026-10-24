@@ -16,5 +16,5 @@ End your reply with exactly one line: `VERDICT: APPROVE` or `VERDICT: REJECT`.
 Ticket:
 {TICKET}
 
-Diff:
+Diff (`--stat` for every file first; hunks of result and data files are left out, run `git diff main...HEAD -- <path>` yourself if a stat line needs reading):
 {DIFF}

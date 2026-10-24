@@ -280,6 +280,15 @@ class Forge:
         files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
+    def review_diff(self, cwd: Path) -> str:
+        """The diff the reviewer reads: `--stat` for every file, then hunks without the project's
+        `review_exclude` pathspecs (result and data files: reflex1 PR #76 was 166 KB of one-line JSON
+        around 152 code lines, and review quality falls with diff length). The reviewer re-runs the
+        ticket's commands rather than reading result files, and can `git diff` an excluded path itself."""
+        skip = " ".join(shlex.quote(f":(exclude){p}") for p in self.cfg.get("review_exclude", []))
+        stat = self.sh("git diff --stat main...HEAD", cwd=cwd).stdout
+        return stat + "\n" + self.sh(f"git diff main...HEAD -- . {skip}", cwd=cwd).stdout
+
     def plan(self) -> None:
         self.log("queue low: planner turn")
         self.board("planner is writing the next tickets")
@@ -474,7 +483,7 @@ class Forge:
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if bad or not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
-            diff = self.sh("git diff main...HEAD", cwd=wt).stdout
+            diff = self.review_diff(wt)
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
