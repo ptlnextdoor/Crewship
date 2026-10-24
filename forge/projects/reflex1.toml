@@ -54,8 +54,9 @@ fallback = ["anthropic/claude-fable-5-1"]
 [roles.reviewer_alt]
 model = "openai-codex/gpt-6-astra"
 thinking = "high"
-# Same-vendor review is the compromise when Codex is out; Fable is a different model than the Opus builder.
-fallback = ["anthropic/claude-fable-5-1"]
+# Codex Plus's 5h window holds 1 to 3 Astra reviews, so the fallback runs most reviews: Grok Build
+# (xAI weekly credits) keeps the review cross-vendor; Fable is the same-vendor last resort.
+fallback = ["xai-oauth/grok-build", "anthropic/claude-fable-5-1"]
 
 [roles.steward]
 model = "anthropic/claude-fable-5-1"

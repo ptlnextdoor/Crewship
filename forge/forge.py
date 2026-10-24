@@ -225,7 +225,7 @@ class Forge:
         over = {}
         for block in re.split(r"\n(?=\S)", r.stdout):
             name = block.split("\n", 1)[0].lower()
-            vendor = "anthropic" if "anthropic" in name else "openai-codex" if "codex" in name else None
+            vendor = "anthropic" if "anthropic" in name else "openai-codex" if "codex" in name else "xai-oauth" if "xai" in name else None
             used = [float(x) for x in re.findall(r"([\d.]+)% used", block)]
             if vendor and used:
                 over[vendor] = max(used) >= floor

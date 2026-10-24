@@ -26,7 +26,7 @@ Reliability rules, each mapped to a failure it prevents:
 | State lives in files (`tickets/`, `PROGRESS.md`, `LEARNINGS.md`, git), never in a model's context | each session starting with amnesia |
 | One ticket per session, each with command-checkable "Done when" | half-built features, "looks done" |
 | The gate (`gate.sh`) is the oracle and protected: a diff touching `gate.sh`, `tickets/` or `.forge/` is rejected | passing by editing the tests |
-| Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
+| Builder and reviewer come from different vendors (`reviewer_alt` when they would match; its fallback chain tries a third vendor before a same-vendor model) | one model approving its own blind spots, or a sibling model approving the family's |
 | Rebase and re-gate before merge | green branch, red main |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
 | A review that hits its timeout with no `VERDICT` is rerun once before the attempt fails | losing a 75-minute builder attempt to a stalled 30-minute review |
