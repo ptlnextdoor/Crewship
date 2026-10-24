@@ -384,9 +384,15 @@ class Forge:
             self.gh(f"pr close {pr}")
 
     def pr_merge(self, pr: str, branch: str) -> bool:
-        """Squash-merge through GitHub so the history and the PR page show it. False = fall back to a local merge."""
+        """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge."""
         if not pr:
             return False
+        # GitHub recomputes mergeability after the push that precedes this call; until it has, the merge fails on
+        # the stale state (34 of reflex1's first 37 merges fell to the local path that way, leaving 58 remote branches).
+        for _ in range(10):
+            if self.gh(f"pr view {pr} --json mergeable --jq .mergeable") == "MERGEABLE":
+                break
+            time.sleep(3)
         r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch", timeout=180)
         if r.returncode:
             self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
