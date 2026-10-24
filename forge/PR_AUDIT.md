@@ -2,6 +2,36 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #26 · 2026-10-24T09:31:38Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #26 forge: planner is told how many tickets can start now and must add startable ones
+What it changes: adds `Forge.startable()` (the same `open_tickets()` + `ready()` filter `cycle()` already used). `plan()` now passes `READY` (startable count) and `NEED` (`max(lanes, min_queue - ready)`) to `prompts/planner.md` and logs the startable count before and after the turn. The planner prompt now says at least {NEED} new tickets must be startable now. README changes the flow node to "startable tickets" and adds one rule row.
+Findings:
+- low forge/prompts/planner.md:7 The new text sets a hard number ("At least {NEED} ... must be startable now") on the `depends:` line, which is the only field `ready()` (forge.py:317-324 in the PR) reads to keep a lane off a ticket whose prerequisite is not done. The easiest way for the planner to hit the number is to leave a real prerequisite out of `depends:`. `claim()` (forge.py:330) would then give that ticket to a lane while its prerequisite is still open or in_progress. The builder session (Opus, 75 min) then either fails or rebuilds the prerequisite in files another lane is editing. The gate and reviewer still guard main, and `max_attempts=3` bounds the retries, so the cost is wasted quota and lane collisions, not a gate bypass. On base, the only guard against this is the Parallelism rule at planner.md:31 ("Use `depends:` for real prerequisites"), and it does not mention the new count. Fixed by the sentence in Change needed.
+- none forge/forge.py:283-298,446 Security trace is clean:
+  - `READY`/`NEED` are ints from `len()` and config. They go through `prompt()`'s `str.replace` (forge.py:96-100). No ticket text reaches a shell or an f-string command.
+  - `plan()` still runs only on lane 1 (forge.py:446, unchanged trigger) in lane 1's own checkout, so no two lanes write the same state.
+  - The pre-turn `startable()` is the same read `cycle()` did a moment earlier, so it adds no failure mode. The post-turn call runs before `push()`. If it raised, `lane_loop` → `recover()` → `sync_main()` would keep the local planner commit, and `recover()`'s `push()` would send it. `claim()` reads the same files right after anyway.
+  - No protected path, gate, reviewer, quota, timeout or GPU code is touched.
+  - Growth is bounded: the prompt grows by a fixed ~600 chars, and the log by 2 lines per planner turn.
+  - Checked: applied the diff to a /tmp copy. `py_compile` and `forge/selftest.py` pass. Stub `plan()` on a temp repo (lanes=4, min_queue=6, one startable ticket): the prompt reads "Right now 1 open tickets can start. At least 5 ...", no `{...}` placeholders are left unfilled, the planner commit pushed, the stray file was discarded, and the log read "planner: 2 tickets can start now (was 1)".
+- low forge/README.md:33, forge/forge.py:295 The README says the rule prevents "a planner turn every lane-1 cycle", but the code does not guarantee that. With reflex1's lanes=4 and min_queue=6, a planner that meets NEED exactly leaves `max(ready+4, 6)` startable tickets. forge.log shows a median of about 6 claims (2 to 9) between consecutive planner turns. So the next lane-1 check would see about `max(ready, 2)` plus newly unblocked tickets, which is below 6 again. [INFERENCE: arithmetic from the log, not observed under the new prompt.] Only overshoot by the planner avoids the next turn. The new after-turn log line will measure this, so it does not block the merge.
+- low forge/forge.py:291 Slop: the local variable `need` holds `min_queue`, but the prompt's `NEED` is `max(lanes, min_queue - ready)`. The log says "(1 of 6 tickets can start now)" while the planner is told 5, so there are two different "need" numbers under one name.
+- low forge/forge.py:330 Slop: `startable()` was added, but `claim()` still has its own copy of the identical list comprehension. One of the two copies is left behind.
+- low forge/forge.py:288-290 Comment accuracy:
+  - Verified: "10 turns in 13 h" (forge.log has 10 `queue low: planner turn` lines from 2026-10-23T19:43 to 2026-10-24T08:42).
+  - Verified: "median of 2 startable" (`git log` of reflex1's 16 planner-refill commits, startable checked at each commit with forge's `ready()` rule).
+  - Not accurate: "wrote 8 to 9 tickets each". Those commits added 5, 5, 10 and 14 tickets in four of the 16 turns.
+- none siblings No other open PR on `forge` touches `prompts/planner.md`, `plan()`, the planner trigger, `min_queue` or `lanes`. Overlaps are textual only, with no contradiction or duplicate:
+  - #25 adds `review_diff()` at the same spot (between `touched_protected` and `plan`).
+  - #6, #8, #16, #19, #20, #23 and #25 add rows to the same README rule table.
+Change needed: in forge/prompts/planner.md line 7, insert this directly after "costs a lane 25 minutes for one cycle of work.":
+` Never leave a real prerequisite out of `depends:` to reach this number: a ticket claimed before its prerequisite lands wastes a builder session and collides with the lane building that prerequisite.`
+
+
 ## PR #25 · 2026-10-24T08:28:08Z · MERGE WITH CHANGE · risk medium · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
 
 Verdict: MERGE WITH CHANGE
