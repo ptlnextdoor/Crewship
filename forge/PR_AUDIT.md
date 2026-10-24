@@ -2,6 +2,27 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #36 · 2026-10-24T20:28:36Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #36 forge: agent sessions and shell commands get stdin from /dev/null
+What it changes: `Forge.sh()` (forge.py:161) and the omp `Popen` in `_agent_once()` (forge.py:206) now pass `stdin=subprocess.DEVNULL` instead of inheriting the loop's stdin. It also adds a two-line why-comment and one README reliability row (README.md:46). No prompt, gate, reviewer, protected-path or merge logic changes.
+Findings:
+- info forge/forge.py:206 The hang is real, and the fix works. I tested both versions in /tmp copies (base 4b3a843d, and base plus this diff) with a pipe on stdin (`sleep 100 | python3 smoke.py`), calling `_agent_once` against the real omp 18.12.6 with a nonexistent model (`anthropic/none`), so no quota was spent. Base: rc=124 after 65 s (the 1-min timeout), and the log shows `phase: readPipedInput`. PR: rc=1 after 4.2 s, when the model lookup fails. The cause is in omp's source: `readPipedInput()` (src/main.ts:289-310) runs `Bun.stdin.text()` whenever stdin is not a TTY. The PR leaves `start_new_session`, `communicate(timeout)`, the killpg 15/9 path and `except OSError` unchanged, and `communicate()` with a DEVNULL stdin sends nothing.
+- info forge/forge.py:161 `sh()` is fixed the same way. `sh("cat")` on a piped stdin: base raised `TimeoutExpired` after 15.1 s; the PR returned rc=0 in 0.0 s. No `sh()` caller relies on stdin: there is no `input=` anywhere in forge/, and `gh()` passes bodies with `--body-file` (forge.py:358-363). Production behaviour is unchanged. `forge@.service` sets no `StandardInput=`, so under systemd stdin was already /dev/null (systemd's default) for the gate (forge.py:276 goes through `sh()`), git, gh and omp. Only `ssh host forge.py run`, `nohup` from a piped script, or `once` from a terminal behave differently. The gate script, protected paths and reviewer input are not touched, so a builder gains no new way to weaken them.
+- info forge/forge.py:206 Side effect the PR does not claim: it also closes a prompt-injection route. omp prepends piped stdin text to the initial message (`stdinContent` at src/main.ts:2459, then `${stdinContent}\n${body}` at src/cli/initial-message.ts:44-46). That puts it ahead of STEERING.md and the forge prompt, in a yolo session. Before this PR, any bytes on the loop's stdin pipe went into the first agent session a lane started.
+- info forge/forge.py:227,603,67-68,81 Some spawns still inherit stdin: `omp usage` in `quota_ok()`, the supervisor's lane `Popen`, and the `git remote`/`git clone` calls in `__init__`. None of them hang. I ran `omp usage` under `sleep 40 |` and it returned in 2 s; lanes never read stdin; those git subcommands do not read it. So the PR covers the scenario it names. quota_ok sits outside lane_loop's try (forge.py:644), and a hang there would have crash-looped the lane, but it does not hang.
+- nit forge/README.md:46 "with an empty log" is inaccurate. In the base smoke run, the session log held `TIMEOUT after 60s (process group killed)` plus omp's stderr (`Reading prompt from piped stdin (waiting for EOF…)`, `Still starting after 10s — phase: readPipedInput`). What actually goes quiet is forge.log after the `agent … model=` line, until the timeout. It is wording only and does not change behaviour, so it is not worth a fix round.
+- nit forge/forge.py:204-205 The comment repeats the README row, but it is a one-time why-comment for a non-obvious kwarg. Acceptable.
+- info checks: `python3 -m py_compile forge/forge.py` and `python3 forge/selftest.py` pass on base plus the diff ("all checks passed"). The diff applies cleanly to base 4b3a843d. origin/forge (c935fca1) differs from base only in SCOUT.md.
+- info siblings: these open PRs on `forge` touch forge/forge.py or forge/README.md: #31, #28, #25, #20, #19, #16, #8, #7, #6, #5 and #23. I grepped all 11 diffs for `stdin|DEVNULL|def sh\(|subprocess\.(run|Popen)\(|readPipedInput|/dev/null` and found no hits. None of them touches `sh()`, the `_agent_once` Popen or stdin.
+  - #7 prepends a session-clock paragraph to `prompt` at the top of `_agent_once`. That is a separate hunk about 30 lines above this one. It neither contradicts nor duplicates this PR, and the two apply independently.
+  - The siblings' README rows go in at lines 25-37, and this one appends at 46. No overlap.
+Change needed: none
+
+
 ## PR #35 · 2026-10-24T18:21:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
