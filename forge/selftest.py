@@ -147,6 +147,14 @@ with tempfile.TemporaryDirectory() as d:
     calls = (bindir / "gh.log").read_text().splitlines()
     check("pr_merge polls mergeability, then merges once", merged and calls.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable") == 3 and calls[-1].startswith("pr merge https://github.com/x/y/pull/1"), "\n".join(calls))
 
+    # 4g. A prompt longer than Linux's 128 KiB per-argument cap still starts the agent (it goes through a file).
+    (bindir / "omp").write_text('#!/bin/sh\nfor a; do case "$a" in @*) cat "${a#@}";; esac; done\n')
+    (bindir / "omp").chmod(0o755)
+    forge.OMP = str(bindir / "omp")
+    big = "x" * 200_000 + "\nEND-OF-PROMPT"
+    rc, text = f._agent_once("reviewer", "c/d", "high", big, repo, 1)
+    check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT") and (f.home / "sessions/00000-reviewer.prompt").read_text() == big, text[-200:])
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
