@@ -394,6 +394,29 @@ class Forge:
         self.sync_main()
         return True
 
+    def land(self, wt: Path, branch: str, tid: str, builder: str) -> str:
+        """Bring the branch up to date with main, re-gate, merge (through the PR when there is one). Returns "" or
+        why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
+        in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
+        the merge re-syncs and re-gates instead of costing the attempt."""
+        for _ in range(3):
+            if not self.rebase_onto_main(wt, builder):
+                return "could not bring the branch up to date with main (conflicts the builder could not resolve)"
+            ok, gout = self.gate(wt)
+            if not ok:
+                return f"gate failed after updating from main.\n{gout[-2000:]}"
+            if self.pr:
+                self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
+            if self.pr_merge(self.pr, branch):
+                return ""
+            self.sync_main()
+            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}").returncode == 0:
+                self.push()
+                return ""
+            self.sh("git merge --abort")
+            self.log(f"main moved during the gate; landing {tid} again")
+        return f"merge conflict landing {branch}"
+
     def cycle(self) -> None:
         self.state["cycle"] += 1
         n = self.state["cycle"]
@@ -457,23 +480,10 @@ class Forge:
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
-            # land: bring up to date with main, re-gate, then merge (through the PR when there is one)
-            if not self.rebase_onto_main(wt, builder):
-                return self.fail(ticket, "could not bring the branch up to date with main (conflicts the builder could not resolve)")
-            ok, gout = self.gate(wt)
-            if not ok:
-                return self.fail(ticket, f"gate failed after updating from main.\n{gout[-2000:]}")
+            why = self.land(wt, branch, tid, builder)
+            if why:
+                return self.fail(ticket, why)
             done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
-            if self.pr:
-                self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
-            merged_via_pr = self.pr_merge(self.pr, branch)
-            if not merged_via_pr:
-                self.sync_main()
-                r = self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}")
-                if r.returncode:
-                    self.sh("git merge --abort")
-                    return self.fail(ticket, f"merge conflict landing {branch}")
-                self.push()
             self.sync_main()
             self.set_status(ticket, "done", done_note)
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
