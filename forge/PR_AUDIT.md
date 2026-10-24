@@ -2,6 +2,22 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #37 · 2026-10-24T22:28:26Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #37 forge: planner and steward stage only the doc paths the project has
+What it changes: adds `Forge.commit_docs(paths, msg)` (forge.py:567), which runs `git add -A` on only those hard-coded doc paths that exist in lane 1's checkout and then commits. `plan()` (forge.py:299) and `steward()` (forge.py:563) now call it in place of one `git add -A a b c 2>/dev/null; git commit`. It also adds README row 47 and selftest 4j.
+Findings:
+- info forge.py:567-573 The bug is real and the fix works. In a scratch repo, `git add -A A.md MISSING.md` printed `fatal: pathspec 'MISSING.md' did not match any files`, exited 128 and staged nothing. A throwaway script drove the real `plan()` and `steward()` with stub agents on a bare origin. On base `origin/forge`, a project without ROADMAP.md lost the planner's new ticket (`discard_strays` hard-reset it). Lane 1 re-runs `plan()` whenever `startable() < min_queue` (forge.py:449), so that project would have paid for a discarded planner session every cycle. With the PR the ticket reached origin/main. The steward behaved the same way: its PROGRESS.md edit was lost on base and landed with the PR. Selftest 4j fails on base forge.py and passes on the PR. The full `selftest.py` run on the PR tree gave 31 ok and exit 0.
+- info forge.py:571 No injection or new write surface. `here` is built only from hard-coded path literals filtered by `Path.exists()`, and `msg` is a literal at both call sites. Both path lists are the same as before. `gate.sh`, `.forge/` and `STEERING.md` are still never staged, so `discard_strays` still reverts them: in selftest 4h, the steward's edit to `main.rs` is still discarded. When every path exists, the shell command is the same as before. The dropped `2>/dev/null` changes nothing because `sh()` captures stderr. Only lane 1 calls `plan()` and `steward()` (forge.py:449, 652, 645), so no new concurrency. Nothing raises, so no new path can leave a ticket `in_progress`. No quota or GPU use is added. The fix removes a quota leak (the repeated discarded planner session above).
+- low forge.py:571 Behavior change in the safe direction: a listed path the role deletes outright is no longer committed. Before, `git add -A L.md` staged the deletion of a tracked file. Now `.exists()` is False, so the path is skipped and `discard_strays` restores it. The smoke run confirmed this (LEARNINGS.md still on origin, log shows `discarding: ['D LEARNINGS.md']`). Neither the planner nor the steward prompt asks for deleting a whole file, and the docstring says so. The only cost is a misleading "outside its paths" log line.
+- nit selftest.py:159 This PR makes the pre-existing 4h comment false: "Every path in the steward's `git add` must exist: a missing pathspec makes git add stage nothing". Delete that line when convenient. Not judged against the verdict because the diff does not touch it.
+- nit README.md:47 The parenthetical "(ignored exit codes in shell steps are among the most frequent causes of silent CI failures)" is a general claim with no source in the README; the paper it comes from (Aïdasso et al. 2025) is named only in SCOUT.md. The code also still ignores `git add`'s exit code (`|| true`, and output is captured but never logged), so the rationale points at a fix this PR does not make. It is slop only; agents never read forge/README.md.
+- info siblings: these open PRs on base `forge` touch forge.py, README.md or selftest.py: #31, #28, #25, #23, #20, #19, #16, #8, #7, #6, #5. None changes the planner or steward commit lines, `discard_strays`, or the steward and planner path lists. #25 and #8 show `def plan` only as context. #19 (union_merge) and #23 deal with PROGRESS.md and LEARNINGS.md elsewhere (lane rebase, reviewer prompt). The README rows are added to the same table, so the only overlap is textual: no contradiction and no duplicate.
+
+
 ## PR #36 · 2026-10-24T20:28:36Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
