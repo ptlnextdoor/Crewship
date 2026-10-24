@@ -387,8 +387,9 @@ class Forge:
         """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge."""
         if not pr:
             return False
-        # GitHub recomputes mergeability after the push that precedes this call; until it has, the merge fails on
-        # the stale state (34 of reflex1's first 37 merges fell to the local path that way, leaving 58 remote branches).
+        # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
+        # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`, and that
+        # path never deletes the remote branch.
         for _ in range(10):
             if self.gh(f"pr view {pr} --json mergeable --jq .mergeable") == "MERGEABLE":
                 break
