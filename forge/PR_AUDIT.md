@@ -2,6 +2,28 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #28 · 2026-10-24T11:36:32Z · MERGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE
+Risk: low
+
+## PR #28 forge: protected-path check diffs against origin/main, not the lane's stale main
+What it changes: forge.py:282, :470 and :489 change the three-dot diff base from the lane's local `main` to `origin/main`. This covers `touched_protected`, the "builder produced no diff" check and the reviewer's `{DIFF}`. Selftest 2 is rebuilt on a bare origin plus a second clone, and the README protected-path row gets a parenthetical.
+Findings:
+- none forge/forge.py:282 The bug is real and this fixes it. Local `main` stays at the claim commit for the whole cycle: the worktree is cut from it (forge.py:461) and nothing moves it until `land()`/`fail()` call `sync_main()`. If the builder runs `git pull --rebase` or `git merge origin/main`, `main...HEAD` diffs from the claim commit and charges the builder with every ticket flip other lanes pushed since then. Checked on ptlnextdoor/reflex1: forge closed PRs #30 (a merge of origin/main), #55 and #93 for `tickets/...` paths, yet GitHub's file list for each of them has zero `tickets/` paths. `origin/main...HEAD` diffs from the commit the builder last integrated, so all of the builder's own commits stay in the diff, including a hand-edited merge resolution. If the builder never fetched, origin/main equals main at cut time: `claim()` returns only after `git push origin main` succeeds, and that push updates the tracking ref.
+- none forge/selftest.py:57-77 The regression test discriminates. The PR's selftest against the base forge.py fails with `['gate.sh', 'tickets/0002-y.md']`; with the PR applied it passes and the full selftest exits 0. Under `init.defaultBranch=master` the empty bare clone still checks out `main` (git 2.43), so old and new code still give different results. Check 4d ("landing survives main moving") already fails under master on the base branch; that predates this PR.
+- low forge/forge.py:282,470 Ref trust is unchanged. `refs/remotes/origin/main` lives in the lane clone's ref store, which the builder worktree shares, exactly like `refs/heads/main`. In a throwaway repo, `git update-ref` from the worktree on either ref hid a `gate.sh` commit from the check; `git branch -f main` is refused but `update-ref` is not. So the PR opens no bypass that did not already exist. A routine `git fetch` only moves origin/main to the remote state, which never contains the builder's unpushed commits. If `origin/main` cannot be resolved, `git diff` exits 128 with empty stdout and `touched_protected` returns [], because `sh()` ignores the return code. That was equally true for `main` before. The first use at :470 then fails the ticket as "no diff", so only a deliberate ref deletion during the repair session (:481-484) can reach that path, the same exposure as deleting `main` before.
+- low forge/prompts/reviewer.md:9 (not in this diff) Step 6 still has the reviewer run `git diff main...HEAD -- Cargo.toml Cargo.lock ...`. After this PR, `{DIFF}` is taken against origin/main but the reviewer's own dependency diff is taken against the stale claim commit. On a rebased branch, a crate that another lane's ticket named and landed then looks new, and the reviewer issues a false REJECT. That is the same kind of false charge this PR removes. It fails closed, because the reviewer sees more, not less. Follow-up: use `origin/main...HEAD` there. Not blocking.
+- nit forge/selftest.py:101 The comment "the git push to a missing origin fails harmlessly" is no longer true: the fixture now has a real bare origin. The push still fails, but only because branch `b` does not exist.
+- nit forge/forge.py:280-281 The comment says the builder "rebased", but #30 was a merge of origin/main. The fix covers both cases.
+- none forge/forge.py:470,489 Checked for gate, reviewer and protected-path weakening and found none. There is no prompt change and no new shell interpolation (the commands are static strings). No new state, quota or GPU spend, and no new exception path. Worktree and branch cleanup in `finally` is unchanged. The reviewer's `{DIFF}` loses only other lanes' already-merged hunks; every hunk of the builder's own is still there, and the 120000-char cap truncates less.
+- Siblings on base `forge` that touch the same files:
+  - #8 duplicates this fix with `touched_protected(cwd, base="main")` plus an `origin/main` call after the rebase, and it conflicts at forge.py:279-281. #8 should change: drop the `base` parameter and call `touched_protected(wt)` after `rebase_onto_main`. #8 is also written against code from before `land()`.
+  - #25 rewrites the same line (forge.py:489, `diff = ...`) into `review_diff()` using `main...HEAD`, and its reviewer.md text tells the reviewer to run `git diff main...HEAD -- <path>`. That is a textual conflict and brings the stale base back. #25 should change to `origin/main...HEAD`.
+  - #5 rewrites line 489 with `main...HEAD` for both diff and notes. #6 adds `diff = self.sh("git diff main...HEAD")` after its review repair. Both carry the stale base, and both should change.
+  - #16, #20 and #23 overlap only in context lines (around forge.py:470 and in adjacent README rows). No contradiction.
+
+
 ## PR #27 · 2026-10-24T10:34:05Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
