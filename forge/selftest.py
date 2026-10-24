@@ -137,6 +137,16 @@ with tempfile.TemporaryDirectory() as d:
     why = f.land(wt, "land", "0001-x", "builder")
     check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
 
+    # 4f. pr_merge waits for GitHub to finish recomputing mergeability after the push, then merges through gh.
+    bindir = Path(d) / "bin"; bindir.mkdir()
+    (bindir / "gh").write_text('#!/bin/sh\necho "$@" >> "$0.log"\ncase "$1 $2" in "pr view") n=$(grep -c "pr view" "$0.log"); [ "$n" -ge 3 ] && echo MERGEABLE || echo UNKNOWN;; esac\n')
+    (bindir / "gh").chmod(0o755)
+    f.env["PATH"] = f"{bindir}:{f.env.get('PATH', os.environ['PATH'])}"
+    f.sync_main = lambda: None; forge.time.sleep = lambda s: None
+    merged = f.pr_merge("https://github.com/x/y/pull/1", "land")
+    calls = (bindir / "gh.log").read_text().splitlines()
+    check("pr_merge polls mergeability, then merges once", merged and calls.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable") == 3 and calls[-1].startswith("pr merge https://github.com/x/y/pull/1"), "\n".join(calls))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
