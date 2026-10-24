@@ -2,6 +2,36 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #29 · 2026-10-24T12:35:02Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #29 forge: steward commits its SCORE.md edits instead of discarding them
+What it changes: forge/forge.py:559 adds `SCORE.md` to the steward's `git add -A` pathspec list, so `discard_strays("steward")` stops resetting it. Selftest 4h runs the real `steward()` with a stub agent that edits `SCORE.md` and `main.rs`, then expects the SCORE.md value on origin/main, main.rs dropped, and a clean tree.
+Findings:
+- none forge/forge.py:559 The bug is real and this fixes it. Owner commit 75f2647b (ptlnextdoor) put `SCORE.md` in steward.md step 3 and in the steward's "Edit only" line. The staging list was never updated, so the edit got reset. reflex1 forge.log:710 (05:20:50Z) and :834 (10:11:33Z) both log `steward left edits outside its paths, discarding: ['M SCORE.md']`. On reflex1 origin/main, SCORE.md has no `forge: steward update` commit.
+- ok forge/forge.py:559 Nothing here weakens the gate, the reviewer or the protected paths:
+  - `SCORE.md` is not in `protected_paths` (reflex1.toml:10, default forge.py:75). It is not read by `gate.sh` or by any .sh, .toml or .rs file in reflex1 (grep).
+  - It is not mentioned in builder.md or reviewer.md. Only the planner (planner.md:3,5,17) and the steward read it.
+  - Committing it unreviewed puts it in the same trust class the steward already has for ROADMAP.md and README.md, which the planner also follows. `gate.sh`, `.forge/` and `STEERING.md` are still not in the add list.
+  - The command is a static string, so there is no ticket-text interpolation. It adds no model call, quota spend or GPU spend.
+  - Only lane 1 runs `steward()` (forge.py:641,649), on its own clone, between cycles, so two lanes never write this state at once.
+  - Push conflicts go through the existing `push()`/`sync_main()` reset path. Builders are not told to edit SCORE.md, so conflicts with lane PRs should be rare.
+- low forge/forge.py:559 The PR does not create this, but it widens it. `git add -A <paths>` stages nothing if any one path is absent from both the index and the worktree. I checked: `git add -A PROGRESS.md SCORE.md` with SCORE.md missing exits 128 with ` M PROGRESS.md` still unstaged, and `discard_strays` then resets the whole steward turn (with a log line, not silently).
+  - All 7 paths are tracked on reflex1 origin/main (`git ls-tree`), and reflex1 is the only configured project (~/.config/forge/, forge/projects/). So nothing changes today.
+  - A future project with no SCORE.md would lose every steward edit. The PR body discloses this. Its planner already assumes SCORE.md exists (planner.md:17).
+  - No change required.
+- ok forge/selftest.py:158-172 The test discriminates. On origin/forge (d38bf8c) with the PR applied, the full selftest exits 0. With the base forge.py and the PR's selftest it fails 4h with `discarding: ['M SCORE.md', ' M main.rs']`.
+  - The fixture creates every staged path (including docs/assets/.keep), and the comment on line 159 explains why. That comment is accurate, not slop.
+  - It inherits `f.sync_main = lambda: None` from 4f, which `push()` only calls when a push is rejected. Harmless here.
+- nit sibling #25 (selftest.py, same anchor after 4g) adds its own `# 4h.` block at the same spot. The two textually conflict, and the 4h label is duplicated.
+  - I composed both: applied #25 with `--3way` on origin/forge, resolved #25's own unrelated forge.py conflict by keeping both `startable()` and `review_diff()`, then applied #29 (fuzz 2). The selftest exits 0, with both "review diff keeps code hunks…" and "steward commits SCORE.md, drops code" passing.
+  - No contradiction. Whichever lands second should renumber its check to 4i.
+- none siblings The other open PRs on `forge` that touch forge.py or selftest.py are #28, #20, #19, #16, #8, #7, #6 and #5. Their hunk headers and +/- lines touch neither `steward()`, the steward `git add` line, `discard_strays` nor SCORE.md. No overlap.
+- info deploy: the live loop runs `~/Dev/Crewship/forge/forge.py`. The fix takes effect only after that checkout is pulled; lanes exit 75 on the forge.py mtime change.
+
+
 ## PR #28 · 2026-10-24T11:36:32Z · MERGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE
