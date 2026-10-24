@@ -2,6 +2,45 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #22 · 2026-10-24T04:18:38Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #22 forge: wait for GitHub to recompute mergeability before gh pr merge
+What it changes: `pr_merge` (forge/forge.py:386-401 at head 754816de) polls `gh pr view <url> --json mergeable --jq .mergeable` up to 10 times, 3 s apart, until it returns `MERGEABLE`. It then runs the same `gh pr merge --merge --delete-branch` as before. The docstring now says "Merge" instead of "Squash-merge". selftest 4f drives `pr_merge` against a fake `gh`.
+Findings:
+- ok forge/forge.py:392-395 The gate, the reviewer and the protected paths are not touched.
+  - `pr_merge` runs only from `land()` (forge.py:410). That is after `rebase_onto_main`, the re-gate and the force-push (:403-409), so the gate result and the merge decision are the same as before.
+  - The only new command is a read-only `gh pr view`. `pr` is the URL that `gh pr create` printed in `pr_open` (:370-375, kept only if it starts with `http`), not ticket text, and it is already interpolated the same way into the existing `pr comment`/`pr close`/`pr merge` calls. No new injection path.
+  - `gh()` writes `gh-body.md` only when it gets a `body`, and this call has none, so two lanes share no new state. No model quota, GPU or prompt text is involved.
+  - If the PR never reaches `MERGEABLE`, the loop falls through to the same single `gh pr merge` and the same local `--no-ff` fallback as before.
+  - The GitHub path merges into whatever main is at that moment, without a re-gate. The local fallback does the same after `sync_main()`, and reflex1's main has no branch protection (PR_AUDIT.md #8 audit). Sending more landings through GitHub therefore adds no ungated path.
+- low forge/forge.py:390-391 The comment's evidence is wrong, and it will mislead the scout loop that reads this code. Checked against ~/.local/state/forge/reflex1/forge.log and the reflex1 API:
+  - As of 04:05 the log has 37 `: MERGED` lines and 34 `gh pr merge failed` lines. Pairing each failure with the next event on the same lane: 24 were followed by MERGED (the local fallback), and 10 were followed by RETRY/BLOCKED. Those 10 were real landing conflicts, and the attempt failed. So 24 of the first 37 merges fell to the local path, not 34. The rest either merged through GitHub or are the 5 early pre-lane merges.
+  - `gh api repos/ptlnextdoor/reflex1/branches` lists 57 `forge/*` branches. Joined with `gh pr list --state all`: 24 belong to MERGED PRs, 24 to CLOSED PRs and 9 to OPEN PRs.
+  - Only the 24 merged ones come from this path, and that count matches the 24 local-path merges. Closed-PR branches come from `pr_close` (forge.py:381-384), which never deletes the branch, and this PR does not change that.
+  - 5 of the 24 failures were races ("Base branch was modified" ×3, "Head branch is out of date" ×2), not stale mergeability.
+- low forge/forge.py:392-395 Cost and exception path, traced:
+  - Each `land()` round adds up to 10 `gh` calls and 30 s of sleep before falling back. The 10th sleep is wasted. With at most 3 rounds, that is about 1.5–2 min on a real conflict, against an 8–25 min gate. Bounded.
+  - Despite its "Never raises" docstring, `gh()` goes through `sh()` with `timeout=120`, and `subprocess.run` raises `TimeoutExpired` on a hung `gh`. This PR adds up to 10 such calls per round.
+  - Traced the raise: it leaves `cycle()`, the `finally` (forge.py:494-501) removes the worktree and local branch, and `lane_loop`'s `except Exception` (:632-634) calls `recover()`. The ticket goes back to `retry` with a forge-recover note that does not count as an attempt. Nothing stays `in_progress`.
+  - The PR and its remote branch stay open. `recover()` already leaves them that way for any mid-cycle failure. Acceptable.
+- info forge/forge.py:409-410 The force-push's return code is not checked (this was already true before the PR). If that push fails, GitHub merges the earlier PR head. That head is the revision the reviewer approved and `touched_protected` checked (forge.py:449, 460), so the change opens no protected-path bypass. The same thing could already happen on today's GitHub merges. Adding `--match-head-commit` would pin the merge to the gated SHA, but this PR does not need it.
+- nit forge/selftest.py:145 `forge.time.sleep = lambda s: None` replaces the stdlib `time.sleep` for the rest of the selftest process (`forge.time` is the `time` module). Sections 5 and 6 never sleep, so this has no effect today. The test itself is sound:
+  - I ran `forge/selftest.py` on a `git archive` of the PR head: all checks pass.
+  - With the base `forge.py` plus the PR's selftest, 4f fails with `pr merge … -R --merge --delete-branch` as the only call. The test fails on the old code.
+- info forge/forge.py:387 The docstring fix ("Merge", not "Squash-merge") matches `--merge`. `pr_open`'s PR body (forge.py:368) still says "forge squash-merges on approval". That line was already there and is outside this diff.
+- info sibling #19 (union_merge) also inserts a selftest block right after 4d. `git merge-tree --write-tree 754816de 4d9ccd5c` reports `CONFLICT (content): Merge conflict in forge/selftest.py`, while forge.py and README auto-merge. This is a textual collision, not a contradiction or duplicate, so neither PR's text needs to change. Whichever lands second resolves it: #22's 4f lines stay inside the 4d `with` block (they use its `d` and `f`), and #19's 4e stays a separate top-level block.
+  - #5, #6, #7, #8, #16 and #20 touch forge.py in other functions. None of them touches `pr_merge` or `land()`. GitHub reports #22 as MERGEABLE/CLEAN against `forge` e1e26033; the base moved only in SCOUT.md.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, replace lines 390-391 at PR head 754816de (the two `# GitHub recomputes mergeability …` comment lines) with exactly:
+```
+        # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
+        # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`, and that
+        # path never deletes the remote branch.
+```
+
+
 ## PR #21 · 2026-10-24T03:22:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
