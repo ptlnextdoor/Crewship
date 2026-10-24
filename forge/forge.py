@@ -556,7 +556,7 @@ class Forge:
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
         self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
-        self.sh("git add -A PROGRESS.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets 2>/dev/null; git commit -qm 'forge: steward update' || true")
+        self.sh("git add -A PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets 2>/dev/null; git commit -qm 'forge: steward update' || true")
         self.discard_strays("steward")
         self.push()
 
