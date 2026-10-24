@@ -2,6 +2,88 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #19 · 2026-10-24T01:46:43Z · MERGE WITH CHANGE · risk medium · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #19 forge: notes files merge with git's union driver instead of a builder session
+What it changes: `Forge.__init__` writes `<path> merge=union` for each config `union_merge` entry into the lane clone's `.git/info/attributes` (forge.py:88-96). reflex1.toml sets `union_merge = ["PROGRESS.md", "LEARNINGS.md", "tools/README.md"]`. Adds a README row and selftest 4e (a notes-only conflict rebases with no agent call; a code conflict still calls the builder).
+Findings:
+- medium forge/forge.py:88-96 with :419-424. The attributes file is repo-wide, so the union driver applies to every merge in the lane clone, including `land()`'s local fallback `git merge --no-ff` (:422), not just to the rebase that the re-gate follows. That fallback is the path for the case #18 was built for:
+  - Another lane lands while this branch's post-rebase gate runs (8 to 25 min). GitHub cannot merge the PR: it never sees the lane-local attributes file. `pr_merge` returns False, and the local merge then runs in `self.repo`.
+  - Before this PR, the PROGRESS.md/LEARNINGS.md conflict made the local merge fail, so land() aborted and looped: rebase, re-gate, merge.
+  - With this PR, union resolves the conflict, and `push()` sends to main a tree that combines the other lane's new code with this branch's code. No gate ran on that tree.
+  - The "Rebase and re-gate before merge | green branch, red main" rule is now skipped on a common path. Every builder is told to append to PROGRESS.md (builder.md:16). forge.log has 26 `gh pr merge failed` lines, and in the four most recent the local fallback merged 4 to 6 s later (23:56:18 to 23:56:22 for 0064, 23:59:41 to 23:59:47, 01:07:33 to 01:07:37, 01:22:46 to 01:22:51).
+  - The PR's own cited session (lane2/00025-builder.log) shows main bringing in a new crate `crates/reflex-policy` and `Cargo.toml` changes beside the notes conflict. That is exactly the kind of combination that needs the gate.
+  - Reproduced with a throwaway two-clone fixture that drives the real `Forge.land()` (pull_requests=false, so the same local-merge path runs; the first gate call pushes another lane's code plus a notes entry). On base `forge`: 2 gate runs, builder called once, and the landed tree is one that was gated. On PR head: 1 gate run, 0 builder calls, and origin/main's tree matches no gated revision.
+- low forge/forge.py:307. Same root cause in `sync_main()`: its `git rebase origin/main` on local main now unions notes too. Before, a steward/planner commit whose PROGRESS.md conflicted was reset away, with a log line. Now it is unioned and pushed, so a stale status block can sit next to the new one (see the next finding). Not gated, as before.
+- low union semantics, PROGRESS.md/LEARNINGS.md. Union keeps both sides of an overlapping hunk, so it also brings back lines one side deleted. Checked with `git merge-file --union`:
+  - Steward trims the oldest entry while a builder appends at EOF: the trimmed entry comes back.
+  - Steward rewrites the status line while a builder inserts right under it: both status lines are kept.
+  - The steward deletes wrong LEARNINGS entries (steward.md:10), and a deleted entry can come back the same way. Builders read LEARNINGS.md as guidance (builder.md:4).
+  - The PR body names only the same-line case. This is acceptable for append-only notes because the steward cleans up every 4 cycles. No change required.
+- low forge/forge.py:93-96. The file is overwritten without reading it first, and it is written only `if union:`.
+  - Overwrite: any attributes the owner set there are lost. None exist today: I checked `~/Dev/reflex1{,-lane2,-lane3,-lane4}/.git/info/attributes`, and they are all absent.
+  - Rollback: setting `union_merge = []` or removing the key leaves the old file in every clone, so union stays on after an owner turns it off.
+- ok, traced:
+  - No ticket text reaches a shell. Paths come from the owner's project config.
+  - No prompt change. No model, quota or GPU spend is added, and conflict-builder sessions are removed.
+  - Protected paths are untouched: `tickets/`, `gate.sh`, `.forge/` and STEERING.md are not in the list, and `touched_protected` is unchanged.
+  - `claim()`, `recover()` and `discard_strays()` are unaffected.
+  - Lane k>1 clones exist before the write (forge.py:66-68).
+  - `--git-path info/attributes` resolves to the common dir, so worktrees inherit it.
+  - The PR head selftest passes (all checks, 4e included).
+- info sibling #8 (protected-path check and gate evidence "on the exact revision that merges", forge.py/README.md):
+  - Contradiction: #19 as written makes the landed revision differ from the gated one more often, which is the gap #8 exists to close. #19 is the side that should change. The edit below keeps union inside the rebase that the re-gate follows, so #8's post-rebase `touched_protected(wt, "origin/main")` and re-gate cover the union result.
+  - No textual overlap with #8.
+- info sibling #5 (reviewer.md, forge.py): treats PROGRESS.md/LEARNINGS.md as builder notes, as #19 does. Consistent.
+- info siblings #16, #6, #7: no semantic overlap.
+- info textual conflicts: `git merge-tree` of #19 with #16/#8/#6/#5 gives the same conflict counts as each sibling against `origin/forge` alone (1/1/2/3), so #19 adds no new textual conflict. #7 is clean.
+- nit forge/selftest.py:161. "A code conflict beside it" overstates the test: the second rebase conflicts only on `a.rs`, and PROGRESS.md does not conflict at the same time.
+- nit forge/forge.py:95. `attrs.parent.mkdir(...)` is defensive: `git clone` always creates `.git/info`. It is harmless, and the edit below removes it anyway.
+Change needed (only for MERGE WITH CHANGE): Scope the union driver to the pre-gate rebase instead of the clone's attributes file.
+1. In `forge/forge.py`, delete the 9 added lines in `__init__` (88-96, from `# Append-only notes ...` through `attrs.write_text(...)`).
+2. In `rebase_onto_main`, replace `if self.sh("git rebase -q origin/main", cwd=wt).returncode == 0:` with:
+```
+        # union_merge notes files merge with git's union driver in this rebase only: a gate always follows it, while
+        # land()'s local merge must still stop on a notes conflict so another lane's code never lands with ours ungated.
+        attrs = self.home / "union_merge.attributes"
+        attrs.write_text("".join(f"{p} merge=union\n" for p in self.cfg.get("union_merge", [])))
+        if self.sh(f"git -c core.attributesFile={attrs} rebase -q origin/main", cwd=wt).returncode == 0:
+```
+3. In `forge/README.md:34`, change "merge with git's union driver" to "merge with git's union driver when the branch is rebased onto main before the re-gate".
+4. Add this selftest block after 4e:
+```
+# 4f. A notes conflict at the local landing merge still re-gates: union applies only to the rebase a gate follows.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
+    (repo / "tickets").mkdir(); (repo / "PROGRESS.md").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\nunion_merge=["PROGRESS.md"]\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg); f.pr = ""
+    wt = Path(d) / "wt"
+    git(f"worktree add -q -b land {wt} main", repo)
+    (wt / "PROGRESS.md").write_text("base\nbranch\n"); git("add -A", wt); git("commit -qm branch", wt)
+    gates: list[int] = []
+    def gate(cwd):
+        gates.append(1)
+        if len(gates) == 1:  # another lane lands code and a notes entry while this gate runs
+            git("pull -q origin main", other); (other / "PROGRESS.md").write_text("base\nmain\n"); (other / "b.rs").write_text("x\n")
+            git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
+        return True, ""
+    f.gate, f.agent = gate, lambda role, prompt, cwd, timeout_min=0: (0, "")
+    why = f.land(wt, "land", "0001-x", "builder")
+    check("a notes conflict at landing re-gates the combined tree", why == "" and len(gates) == 2, f"why={why!r} gates={len(gates)}")
+```
+Verified in a throwaway copy of the PR tree:
+- With the edit, the full selftest passes, including 4d, 4e and the new 4f. The fixture lands after 2 gate runs with 0 builder calls, and the landed tree is a gated one.
+- On the unmodified PR head, 4f fails with `gates=1`.
+
+
 ## PR #18 · 2026-10-24T00:38:32Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
