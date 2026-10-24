@@ -25,7 +25,7 @@ Reliability rules, each mapped to a failure it prevents:
 | --- | --- |
 | State lives in files (`tickets/`, `PROGRESS.md`, `LEARNINGS.md`, git), never in a model's context | each session starting with amnesia |
 | One ticket per session, each with command-checkable "Done when" | half-built features, "looks done" |
-| The gate (`gate.sh`) is the oracle and protected: a diff touching `gate.sh`, `tickets/` or `.forge/` is rejected | passing by editing the tests |
+| The gate (`gate.sh`) is the oracle and protected: a diff touching `gate.sh`, `tickets/` or `.forge/` is rejected (the diff is taken against `origin/main`, so a builder that rebased onto a newer main is not charged with other lanes' ticket claims) | passing by editing the tests |
 | A third-party package new to `Cargo.lock` (or a new `pip install`) only when the ticket names it; the reviewer diffs the manifests and lock file and rejects any other | an unrequested crate landing on main, where every later session builds it (the review runs after the builder and the gate have built it once, so it does not keep the code off this box) |
 | Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
 | The reviewer treats commit messages, PR text, code comments and PROGRESS/LEARNINGS prose as the builder's account, not evidence, and does not read `git log` or the PR page for intent | a weakened check passing review because the builder explained it well (a refined explanation got 32/33 reintroduced CVEs approved where a plain one got 4/33; withholding it restored every detection) |
