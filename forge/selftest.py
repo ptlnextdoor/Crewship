@@ -54,22 +54,27 @@ for cfg in sorted((ROOT / "projects").glob("*.toml")):
     check(f"{cfg.name}: gate is not editable by builders",
           any(p in str(c.get("protected_paths", [])) for p in ("gate.sh",)))
 
-# 2. The protected-path check must reject a diff that touches the gate or tickets.
+# 2. The protected-path check must reject a diff that touches the gate or tickets, and must not count a ticket
+# another lane flipped on main after the builder rebased its branch onto a newer origin/main (reflex1 PR #93).
 with tempfile.TemporaryDirectory() as d:
-    repo = Path(d) / "repo"
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
     (repo / "tickets").mkdir(parents=True)
     (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
     (repo / "tickets/0001-x.md").write_text("status: open\n---\n# x\n")
-    git("init -q -b main", repo); git("add -A", repo); git("commit -qm i", repo)
+    (repo / "tickets/0002-y.md").write_text("status: open\n---\n# y\n")
+    git("add -A", repo); git("commit -qm i", repo); git("push -q origin main", repo)
     cfg = Path(d) / "c.toml"
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg)
-    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered\n")
-    git("add -A", repo); git("commit -qm t", repo); git("branch -f other", repo)
     git("checkout -q -b work main", repo)
-    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered again\n")
+    git("pull -q origin main", other); (other / "tickets/0002-y.md").write_text("status: in_progress lane=2\n---\n# y\n")
+    git("add -A", other); git("commit -qm claim", other); git("push -q origin main", other)
+    git("fetch -q origin", repo); git("rebase -q origin/main", repo)  # the builder brought its branch up to date
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered\n")
     git("add -A", repo); git("commit -qm t2", repo)
-    check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
+    check("protected paths catch a gate edit, not another lane's ticket claim", f.touched_protected(repo) == ["gate.sh"], str(f.touched_protected(repo)))
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"
     f.set_status(t, "in_progress lane=2")
