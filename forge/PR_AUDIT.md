@@ -2,6 +2,43 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #31 · 2026-10-24T14:42:27Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #31 forge: hold tickets whose touches: overlaps an in-progress ticket
+What it changes: adds an optional `touches:` ticket header. `ready()` now returns False while any `in_progress` ticket declares an overlapping path (segment-prefix match). That changes `claim()`, `startable()`, the lane-1 planner trigger and the planner's READY/NEED numbers. The planner template and parallelism rule tell the planner to declare the header. Also adds a README row and selftest 4a.
+Findings:
+- medium forge/prompts/planner.md:13 + forge/forge.py:322: the template asks for "files or directories the builder will edit". Every builder edits PROGRESS.md and LEARNINGS.md (prompts/builder.md:16). In reflex1, 121 of 132 tickets name them, and the Do sections of 0120–0122 say "Docs: PROGRESS.md: replace the `- 0120: not landed` line …". `touches()` keeps those paths, so any two tickets that list PROGRESS.md overlap. Traced effects:
+  - `claim()` (:345) skips the held tickets, so idle lanes sleep 120 s.
+  - In `cycle()` (:461) the check `len(startable()) < min_queue` (reflex1 min_queue=6) runs `plan()` on every lane-1 cycle while another lane is building. `plan()` reports READY≈0 and a high NEED.
+  - planner.md:32 then tells the planner to chain same-file tickets with `depends:`. That brings back the "chained, not startable" planner churn that README:34 exists to stop.
+  Probe on the PR head: 3 in_progress tickets and 6 open tickets, each with different code paths plus PROGRESS.md. Result: 0 of 6 startable, and the planner fires. Cost: one lane builds at a time, plus repeated Fable-xhigh planner turns (up to 40 min each) on the shared quota. Only the 80% quota floor and the deadline limit this. Whether the planner will actually list PROGRESS.md is [INFERENCE]: no live planner turn has used this template (the PR body says so), but the wording invites it.
+- low forge/forge.py:322: paths are compared exactly as written. reflex1 tickets wrap every path in backticks, so `` `src/a` `` vs `src/a/b.rs` (or `./src/a`) never overlap. This fails open: lanes collide as they do today, so it is not a safety problem. The same edit below fixes it.
+- info forge/forge.py:333-339 claim race: the hold is consistent across lanes.
+  - `claim()` pushes the status change, and the push only succeeds if it is a fast-forward. A lane that synced before another lane's claim gets its push rejected, runs `reset --hard origin/main`, fetches on its next pass and then sees the overlapping in_progress ticket.
+  - No new state that two lanes write. `touches` values are only compared as strings and never reach a shell.
+  - Unchanged: `protected_paths`, `touched_protected()`, gate.sh and the reviewer prompt.
+  - Every way out of in_progress (done, `fail()`, `recover()` on an exception, QuotaExhausted, supervisor restart) is unchanged. A hold therefore lasts only as long as an in_progress status that `recover()` already clears.
+  - Selftest on the PR head (scratch copy): all checks pass, including the three new 4a checks.
+- info sibling #19 (`union_merge` for PROGRESS.md, LEARNINGS.md, tools/README.md; also edits README.md, forge.py, selftest.py): it complements #31 and does not contradict it. #19 makes conflicts in those notes files cheap at rebase, which is one more reason #31 should not hold tickets on them. #31 cannot rely on #19's config, which is not merged yet, so the exclusion belongs in #31.
+  - Other open PRs that share files (#28, #25, #23, #20, #16, #8, #7, #6, #5) touch neither `ready()`/`claim()`/`startable()` nor planner.md. They only overlap in nearby README rows and selftest hunks: possible textual merge conflicts, no contradiction.
+  - #28 rewrites the section-2 selftest setup. #31's 4a still overwrites `dep` and uses its own 0003-z.md, so the two do not interfere.
+- nit forge/prompts/planner.md:32: the hold rule appears both in the template comment (:13) and in the parallelism rule. One place is enough. Not blocking.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `touches()`, replace the `return` line (:322) with:
+```
+        # Every builder edits PROGRESS.md and LEARNINGS.md (prompts/builder.md); holding on them would serialize the lanes.
+        paths = [p.strip().strip("`").rstrip("/") for p in (m.group(1) if m else "").split(",")]
+        return [p + "/" for p in paths if p and p not in ("PROGRESS.md", "LEARNINGS.md")]
+```
+and add this to selftest 4a:
+```
+    check("notes files and backticks do not hold", f.touches("touches: `PROGRESS.md`, LEARNINGS.md, `src/a/`") == ["src/a/"])
+```
+Tested in a scratch copy: the same probe now has 6 of 6 tickets startable and no planner trigger. The existing selftest passes with the edit; the new check line was not run there (the same input, called directly, gives `["src/a/"]`).
+
+
 ## PR #30 · 2026-10-24T13:35:47Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
