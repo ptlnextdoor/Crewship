@@ -85,6 +85,15 @@ class Forge:
                     **{k: os.path.expanduser(str(v)) for k, v in c.get("env", {}).items()}}
         if lane > 1 and "CARGO_TARGET_DIR" in self.env:
             self.env["CARGO_TARGET_DIR"] += f"-lane{lane}"
+        # Append-only notes (PROGRESS.md, LEARNINGS.md) conflict whenever two lanes add an entry at the same
+        # spot; 23 of the first 54 reflex1 PRs paid an Opus session plus a gate run to "keep both sides". The
+        # union merge driver does that without a model, so the rebase in rebase_onto_main simply succeeds.
+        # info/attributes lives in the clone's common git dir, so every worktree of this lane inherits it.
+        union = c.get("union_merge", [])
+        if union:
+            attrs = self.repo / self.sh("git rev-parse --git-path info/attributes").stdout.strip()
+            attrs.parent.mkdir(parents=True, exist_ok=True)
+            attrs.write_text("".join(f"{p} merge=union\n" for p in union))
 
     @property
     def version(self) -> str:

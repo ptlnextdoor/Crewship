@@ -137,6 +137,33 @@ with tempfile.TemporaryDirectory() as d:
     why = f.land(wt, "land", "0001-x", "builder")
     check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
 
+# 4e. Two lanes appending to a notes file is not a conflict for the builder: union_merge files rebase on their own.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
+    (repo / "tickets").mkdir(); (repo / "PROGRESS.md").write_text("base\n"); (repo / "a.rs").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nunion_merge=["PROGRESS.md"]\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    wt = Path(d) / "wt"
+    git(f"worktree add -q -b notes {wt} main", repo)
+    (wt / "PROGRESS.md").write_text("branch entry\nbase\n"); git("add -A", wt); git("commit -qm branch", wt)
+    git("pull -q origin main", other); (other / "PROGRESS.md").write_text("main entry\nbase\n")
+    git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
+    called: list[str] = []
+    f.agent = lambda role, prompt, cwd, timeout_min=0: (called.append(role), (0, ""))[1]
+    ok = f.rebase_onto_main(wt, "builder")
+    check("notes-only conflict rebases without the builder",
+          ok and not called and sorted((wt / "PROGRESS.md").read_text().splitlines()) == ["base", "branch entry", "main entry"],
+          f"ok={ok} called={called} text={(wt / 'PROGRESS.md').read_text()!r}")
+    # A code conflict beside it still goes to the builder.
+    (wt / "a.rs").write_text("branch\n"); git("add -A", wt); git("commit -qm code", wt)
+    (other / "a.rs").write_text("main\n"); git("add -A", other); git("commit -qm code2", other); git("push -q origin main", other)
+    f.rebase_onto_main(wt, "builder")
+    check("code conflict still goes to the builder", called == ["builder"], str(called))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)

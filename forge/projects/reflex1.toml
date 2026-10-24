@@ -8,6 +8,8 @@ min_queue = 6
 max_attempts = 3
 steward_every = 4
 protected_paths = ["gate.sh", "tickets/", ".forge/"]
+# Notes files both lanes append to; git keeps both sides instead of asking a builder to (forge/README.md).
+union_merge = ["PROGRESS.md", "LEARNINGS.md", "tools/README.md"]
 
 [limits]
 # Stop at this UTC time (12 h after launch). Final steward pass, then GPU reap.
