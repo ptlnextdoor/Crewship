@@ -296,7 +296,7 @@ class Forge:
         self.board("planner is writing the next tickets")
         rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
                                                     READY=str(ready), NEED=str(max(self.lanes, need - ready))), self.repo)
-        self.sh("git add -A tickets PROGRESS.md ROADMAP.md 2>/dev/null; git commit -qm 'forge: planner refills the ticket queue' || true")
+        self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
         self.discard_strays("planner")
         self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
         self.push()
@@ -560,9 +560,17 @@ class Forge:
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
         self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
-        self.sh("git add -A PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets 2>/dev/null; git commit -qm 'forge: steward update' || true")
+        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
         self.discard_strays("steward")
         self.push()
+
+    def commit_docs(self, paths: str, msg: str) -> None:
+        """Commit a role's doc edits. `git add -A a b c` is all-or-nothing: one path a project does not
+        have and nothing at all is staged (the error went to /dev/null), so discard_strays threw the
+        whole turn away. Stage the paths that exist; a path the role deleted outright is restored there."""
+        here = " ".join(p for p in paths.split() if (self.repo / p).exists())
+        if here:
+            self.sh(f"git add -A {here}; git commit -qm '{msg}' || true")
 
     def discard_strays(self, role: str) -> None:
         """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""

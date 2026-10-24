@@ -180,6 +180,19 @@ with tempfile.TemporaryDirectory() as d:
     check("fail() logs the cause when there is a PR", "RETRY 0009-z: diff edits protected" in logged and "https://" not in logged, logged)
     check("ticket note still carries the PR url", "PR: https://example.invalid/pull/1\ndiff edits" in git("show origin/main:tickets/0009-z.md", repo))
 
+    # 4j. A project that does not have every path the steward stages still gets its turn committed:
+    # `git add -A a b c` stages nothing when one path is missing, so discard_strays threw the turn away.
+    (repo / "SCORE.md").unlink(); (repo / "LEARNINGS.md").unlink()
+    (repo / "docs/assets/.keep").unlink(); (repo / "docs/assets").rmdir(); (repo / "docs").rmdir()
+    (repo / "PROGRESS.md").write_text("p\n")
+    git("add -A", repo); git("commit -qm 'project without SCORE.md, LEARNINGS.md, docs'", repo); git("push -q origin main", repo)
+    def sparse_agent(role, prompt, cwd, timeout_min=0):
+        (cwd / "PROGRESS.md").write_text("p\nsteward was here\n")
+        return 0, ""
+    f.agent = sparse_agent
+    f.steward()
+    check("steward turn survives a project missing one of its staged paths", "steward was here" in git("show origin/main:PROGRESS.md", repo))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
