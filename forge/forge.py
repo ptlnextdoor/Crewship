@@ -158,7 +158,8 @@ class Forge:
         tmp.replace(self.state_file)
 
     def sh(self, cmd: str, cwd: Path | None = None, timeout: int = 600, check: bool = False) -> subprocess.CompletedProcess:
-        r = subprocess.run(cmd, shell=True, cwd=cwd or self.repo, capture_output=True, text=True, timeout=timeout, env=self.env)
+        r = subprocess.run(cmd, shell=True, cwd=cwd or self.repo, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                           timeout=timeout, env=self.env)
         if check and r.returncode:
             raise RuntimeError(f"{cmd} -> {r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
         return r
@@ -200,8 +201,10 @@ class Forge:
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:
             # New session so a timeout kills the whole tree (cargo, rustc, test binaries), not just omp.
-            p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
-                                 env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
+            # stdin from /dev/null: `omp -p` waits for EOF on a piped stdin (startup phase readPipedInput) before
+            # it reads the prompt, so a loop started over `ssh host forge.py run` would hang every session.
+            p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                 start_new_session=True, env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
             try:
                 so, se = p.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
