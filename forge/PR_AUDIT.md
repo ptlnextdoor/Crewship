@@ -2,6 +2,50 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #21 · 2026-10-24T03:22:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #21 forge: a dependency is added only when the ticket names it; reviewer diffs manifests and lock file
+What it changes: Prompts and README only; no forge.py change. builder.md:14 allows a new or upgraded package only when the ticket names it. planner.md:20 makes the planner name each package with its version. reviewer.md:9 adds step 6: diff the manifests and lock file, and REJECT any dependency change the ticket does not name. It also joins the must-reject set ("steps 1 to 6"). README.md:29 adds a matching rule row.
+Findings:
+- medium forge/prompts/reviewer.md:9, forge/prompts/builder.md:14 The rule is too broad. It rejects "a direct dependency added or changed in a manifest that the ticket does not name", including crates that bring no new code onto the box. Two merged reflex1 tickets show this:
+  - 47d69dc (ticket 0018) added `base64 = "0.22"` to the reflex-serve dev-dependencies, with the comment "the version reflex-vision already builds". The only base64 in ticket 0018 is `python3 -c 'import base64...'`. Cargo.lock gained 2 lines and no new package.
+  - 74d7481 (ticket 0064) gave the new reflex-policy crate candle-core/candle-nn 0.11, safetensors 0.8 and serde/serde_json/thiserror. The ticket says only "ports it to candle". The lock gained only the `reflex-policy` path entry, which has no `source =` line.
+
+  Under step 6 both are REJECT "whatever the commit message says", and builder.md now tells builders not to add them at all. What happens next: `fail()` counts an attempt (forge.py:481-482). The builder may not edit `tickets/` to add the name (builder.md:10, forge.py:449). So the ticket either hits `blocked` at max_attempts=3 (reflex1.toml) or the builder hand-rolls the code. Each lost attempt costs up to 75-90 min of builder time plus gate and a 30-min review on the shared quota. The planner change only covers tickets written from now on, and the queue already holds older ones. The project's own tickets already draw the right line: 0015 says "no new dependency unless `rand` is already built", 0019 says "`libc` is already in the lock file". Narrowing the rule to third-party entries that are new to Cargo.lock, or that change version there, loses no supply-chain protection: a crate already in the lock at the same version is code already downloaded and built.
+- low forge/prompts/reviewer.md:9 The command `git diff origin/main --stat -- ...` is a two-dot diff of origin/main against the working tree. Forge's own diffs use the merge base: `main...HEAD` at forge.py:275, :446 and :465. Forge does not fetch between the claim (forge.py:314) and the review (:471); it only pushes the branch (:361, :459). But in the lane clone, origin/main moves whenever anything fetches: the yolo agents in the worktree, or any process in ~/Dev/reflex1, which is lane 1's clone. This audit's own `git fetch` there moved it under lane 1's in-flight 0072 worktree.
+  - Simulated in a throwaway /tmp clone: a branch from 0d02abd that adds one `libc` line to crates/reflex-cpu/Cargo.toml, with origin/main set to 74d7481.
+  - The PR's command lists 5 manifest files with 42 deletions, none of them the builder's, and leaves out the builder's own line. The result is a false REJECT plus a missed addition.
+  - `main...HEAD` lists only `crates/reflex-cpu/Cargo.toml | 1 +`.
+  - `--stat` also hides which package changed, and that is exactly what the REJECT rule depends on.
+- low forge/README.md:29 The "prevents" cell says the rule stops "a builder pulling a day-old release that ships a credential stealer onto a box holding the owner's tokens". It does not. In `cycle()`, the builder session (forge.py:444) and the gate (forge.py:452, where gate.sh runs `cargo clippy --all-targets` and `cargo test`, which executes build scripts and proc macros) both compile the crate before the reviewer runs (forge.py:471). A REJECT only keeps the crate off main. Also, when a ticket names `foo 1.2`, the Cargo.toml entry `"1.2"` is a caret requirement, so cargo resolves the newest 1.x and a day-old patch release still gets through. The README should state what the rule actually prevents.
+- low forge/prompts/reviewer.md:9 "(and the equivalent for any other manifest)" does not cover the builder's "(or any package)" in this project. `git ls-files` finds no requirements*.txt or pyproject.toml in reflex1. Python packages come from `pip install` lines in tools/venv.sh (unpinned `torch`, `pillow`), which forge tickets 0010, 0026 and 0048 edited. A reviewer looking for "manifests" will skip that file.
+- info Checked, nothing weakens the gate, the protected paths or the reviewer:
+  - Step 6 is strictly additive. The renumbering is consistent: step 7 stays advisory, as the old step 6 was.
+  - The new text grants no permission over `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, and says nothing about skipping tests.
+  - The new text has no `{...}` tokens that `prompt()` (forge.py:96-100) would substitute. No new shell interpolation, no new state, and no GPU or quota spend beyond one git command per review. The `version` hash (forge.py:93) changes as intended.
+  - Slop: none beyond the README claim above. The planner's "with version" matches what tickets 0009/0010/0011 already do.
+- info Siblings:
+  - #20 changes README.md:29, the line right after #21's new row. A `git merge-file` of the two heads conflicts at that spot. The conflict is only textual and nothing contradicts: keep both rows. Whichever PR lands second rebases.
+  - #19 (README) merges cleanly.
+  - #1 and #3 (builder.md) and #5 and #9 (reviewer.md) change other lines and other rules. #6, #8 and #16 change other README rows. None of them duplicates or contradicts the dependency rule.
+Change needed (only for MERGE WITH CHANGE): Replace three lines. planner.md stays as is.
+1. forge/prompts/builder.md line 14 becomes:
+```
+- Dependencies: `cargo` with the existing workspace. A crate already in `Cargo.lock` you may use from any workspace crate at that version. A package that would be new to `Cargo.lock` or change version there, or a new or changed `pip install`, needs the ticket to name it (new lock entries only for what the named crates pull in); one you chose yourself is rejected in review, whatever the reason in the commit message. A fresh release can carry a credential stealer, and this box holds the owner's tokens.
+```
+2. forge/prompts/reviewer.md line 9 becomes:
+```
+6. Dependencies: run `git diff main...HEAD -- Cargo.toml Cargo.lock '*/Cargo.toml'` yourself, and the same for any other file that installs packages (`requirements*.txt`, `pyproject.toml`, a `pip install` line in a script). A third-party package (a `Cargo.lock` entry with a `source =` line) that is new to `Cargo.lock` or changes version there and is neither named by the ticket nor pulled in by a crate it names, or a pip package added or changed that the ticket does not name, is a REJECT, whatever the commit message says. A dependency on a crate already in `Cargo.lock` at the same version, or on a workspace path crate, is not.
+```
+3. forge/README.md line 29 becomes:
+```
+| A third-party package new to `Cargo.lock` (or a new `pip install`) only when the ticket names it; the reviewer diffs the manifests and lock file and rejects any other | an unrequested crate landing on main, where every later session builds it (the review runs after the builder and the gate have built it once, so it does not keep the code off this box) |
+```
+
+
 ## PR #20 · 2026-10-24T02:50:28Z · MERGE WITH CHANGE · risk medium · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
 
 Verdict: MERGE WITH CHANGE
