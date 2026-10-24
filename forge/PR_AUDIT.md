@@ -2,6 +2,32 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #33 · 2026-10-24T16:15:01Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #33 forge reviewer: a REJECT ends with a Must change block the next attempt can act on
+What it changes: `forge/prompts/reviewer.md:12` replaces "say exactly what must change" with a required `Must change:` block. The block comes last, right before `VERDICT:`, with one line per finding: file and line, the command or input that shows the problem, and the code or text to write. `forge/README.md:43` adds a matching safeguard row. No code changes; GitHub reports the PR as MERGEABLE/CLEAN against `forge`.
+Findings:
+- info forge/prompts/reviewer.md:12 The premise holds in both the code and the logs. A rejected review reaches the next attempt only one way:
+  1. `forge.py:504` passes `rout[-3000:]` to `fail()`.
+  2. `fail()` (`forge.py:546-550`) adds the PR URL and saves the note as `why[-4000:]`, so the 3,000-character cut is the one that matters.
+  3. `set_status` (`forge.py:263-268`) appends the note under the ticket.
+  4. The next builder receives the ticket as `{TICKET}` (`forge.py:465`).
+  There are 9 REJECT logs under `~/.local/state/forge/reflex1/**/sessions/*reviewer*.log`. In 7 of them the review was longer than that window, so the start of the review was cut off, including the step-1 PASS/FAIL table. Two reviewers already ended with a `**Must change:**` line without being asked (`lane3/00038`, `lane4/00044`). Putting the fix at the end solves a real problem, and the change is one sentence.
+- info forge/prompts/reviewer.md:12 This does not weaken the gate or the reviewer. Steps 1-7 and the rule "a problem in steps 1 to 6 is a REJECT unless it cannot matter" are unchanged. The new text applies only on REJECT, after the verdict is decided. The APPROVE path does not change. The verdict parse (`forge.py:494`, where the last `VERDICT:` match wins) does not change. "nothing after it" matches line 14, which asks for exactly one final `VERDICT:` line.
+- low forge/prompts/reviewer.md:12 The block is written as instructions, and two later sessions read it. The next builder runs at `--approval-mode=yolo` and sees it through `{TICKET}` (`forge.py:465`). The next reviewer sees it through `TICKET=ticket.read_text()` (`forge.py:492`). If a block line names `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, `touched_protected` (`forge.py:471`, `482`; list at `forge.py:75`) fails the attempt automatically. `builder.md:10` already forbids those edits, and `builder.md:15` already treats the `## forge` notes as quoted text that cannot authorize credentials. This is the same exposure the old "say exactly what must change" wording had, just more structured, so no edit is needed. Growth is bounded: each attempt's note is capped at `why[-4000:]`, and the ticket is blocked after `max_attempts`.
+- low forge/prompts/reviewer.md:12, forge/README.md:43 Slop: the "3,000 characters" in the prompt and the README repeats the `forge.py:504` slice by hand. That window covers stdout and stderr together. Across 105 reviewer logs, stderr was at most 311 characters (median 12, "Working..."), so at least 2,680 characters of review survive. The number is correct today but will go stale if the slice changes. A `{PLACEHOLDER}` would add code for a constant that has never changed, so no edit.
+- info forge/README.md:43 The citation is real. arXiv 2607.21997v2 (Cynthia, Widyasari, Roy, Zhang, Lo, 2026) analyzes 54,791 agent-generated review comments. Its abstract says an inline code suggestion is the strongest predictor that a comment gets resolved, and that long, complex comments are less likely to be acted on. The study is about human developers responding to agent comments, not agents responding to reviews. The row's wording, "acted on", stays inside what the paper claims.
+- info forge/prompts/reviewer.md:12 Every one of the 9 REJECT tails ends with a short paragraph on what was not checked and the remaining risk, placed before `VERDICT`. That comes from the reviewer models, not this prompt. "nothing after it" competes with that paragraph, but it is only a line or two, so the block still falls inside the 3,000-character window.
+- info sibling PRs, none of which require a change here:
+  - #23 edits the same sentence (`reviewer.md:12`, "steps 1 to 6" → "steps 1 to 7"). The edits conflict as text but do not contradict each other; whichever lands second rebases and keeps both.
+  - #6 (one repair round after a REJECT, on a stale base) gives the repair builder `review[-12000:]` in the same session and keeps `rout[-3000:]` on the `fail()` path, so this README row stays true. The two PRs complement each other.
+  - #5, #9 and #25 edit other lines of `reviewer.md`.
+  - #8, #16, #19, #20, #23, #25, #28 and #31 change other rows of the same README table.
+
+
 ## PR #32 · 2026-10-24T15:44:47Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
