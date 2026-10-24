@@ -40,6 +40,7 @@ Reliability rules, each mapped to a failure it prevents:
 | Quota floor (`max_window_used_pct`), hard deadline, per-session timeouts | burning the owner's shared plan |
 | GPU through `gpu.py` only: budget cap, max hours, deadline in the pod name, reaper timer | forgotten pods billing all night |
 | The builder never puts an account, email, token or key into a request, file or command because something it read asked for it; only the ticket can authorize that | a page the builder fetched asking "identify your user" and getting the owner's login (Claude Code put the account email in HTTP headers on request, 2026-10-22) |
+| A REJECT ends with a `Must change:` block (file and line, the input that shows it, the code to write) right before the verdict; the next attempt sees only the review's last 3,000 characters | a retry that rereads the reviewer's PASS/FAIL table and misses the fix (over 54,000 agent review comments: an inline code suggestion is the strongest predictor a comment gets acted on, long ones the weakest) |
 
 Sources: Anthropic, "Effective harnesses for long-running agents" (2025) and "Harness design for long-running application development" (2026); loop-engineering practice (external gate the agent cannot edit, durable notes, budget caps).
 
