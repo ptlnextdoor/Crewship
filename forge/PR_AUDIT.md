@@ -2,6 +2,51 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #24 · 2026-10-24T07:25:45Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #24 forge: session prompts go to omp through a file, not argv (E2BIG on large review diffs)
+What it changes: `_agent_once` writes the full session prompt, with the STEERING.md prefix, to `<state_dir>/sessions/<cycle>-<role>.prompt` and runs omp with `@<path>` instead of passing the prompt as the last argv string. The PR also adds selftest 4g, which sends a 200,000-char prompt through a fake omp, and one README reliability row.
+Findings:
+- low forge/selftest.py:156 + sibling #7: the new check also requires the `.prompt` file to be byte-identical to the raw prompt (`(f.home / "sessions/00000-reviewer.prompt").read_text() == big`). That ties the test to whatever `_agent_once` adds to the front of the prompt, not to the behavior being fixed.
+  - Open PR #7 adds a "Session clock" prefix to `prompt` at the top of `_agent_once`.
+  - In a /tmp copy I applied #24 and then #7. The patch applies cleanly (offset 9) and the order STEERING > clock > role prompt is kept.
+  - selftest then fails with `FAIL a 200,000-char prompt reaches the agent`. rc was 0 and the output ended in `END-OF-PROMPT`, so only the equality clause failed.
+  - Whichever of the two lands second breaks selftest. #24's test is the side to change, because #7's prefix is intended.
+  - With the clause removed, the check passes on #24 alone and on #24+#7, and still fails on the base forge.py with `[Errno 7] Argument list too long`.
+- info forge/forge.py:196-199 The fix works end to end:
+  - The incident is real: `~/.local/state/forge/reflex1/lane4/sessions/00039-reviewer_alt.log` is exactly `failed to start agent: [Errno 7] Argument list too long: '/home/ubuntu/.local/bin/omp'`.
+  - omp 18.12.6 handles `@file` in `processFileArguments` (cli.js). A text file up to 5 MiB (`dAu=5242880`) is read whole into the initial message as `<file name="…">\n…\n</file>`, with no truncation and no line numbers.
+  - A file over 5 MiB would arrive as `(skipped: too large)`. That session has no instructions and gives no VERDICT, so it fails closed. The largest reviewer prompt is about 130 KB.
+  - omp's magic-byte sniffing (PNG/JPEG/RIFF/GIF) and its video and document extension sets do not match `.prompt` or the prompt text.
+  - The prompt now arrives as file content with no instruction around it, so I checked that models still act on it. I ran forge's command shape (`omp -p --no-session --model=… --thinking=low --approval-mode=yolo @<abs path>`, bash only) on `anthropic/claude-fable-5-1` and `openai-codex/gpt-6-astra`. Both ran the command the file asked for (`forge-smoke-42`) and ended with the requested `VERDICT:` line.
+  - Selftest: all checks pass with the PR applied. The base forge.py with the new test fails with E2BIG.
+- info This PR does not weaken the gate or the reviewer.
+  - Gate, reviewer and steward prompt text, `touched_protected`, `recover()` and `discard_strays()` are unchanged.
+  - The prompt file is under `self.home/sessions`. That path is absolute (`expanduser`, :58) and outside both the repo and the worktree, so no `git add -A` picks it up.
+  - The path is built from the config's state_dir, the integer cycle and the role key, and goes to omp as one argv element with no shell. Ticket text only goes into the file content.
+  - Lane k>1 uses `base_home/lane{k}` (:65), so no two lanes write the same `.prompt`. Sessions within a lane run one at a time.
+  - Quota fallback: `agent()` passes the caller's prompt to each `_agent_once` call, and the STEERING prefix is rebuilt locally. The file is rewritten with the same content each time and nothing piles up.
+- info forge/forge.py:197 What happens if writing the prompt file fails:
+  - `pfile.write_text` runs before the `try`. A disk-full or permission OSError propagates up.
+  - `cycle()`'s `finally` (:506) then removes the worktree and branch, and `lane_loop`'s `except Exception` (:644) calls `recover()`, which puts the in_progress ticket back to retry.
+  - This is the same failure class as the existing `out.write_text` (:220), but it now fires before any quota is spent, and a partial prompt never reaches omp.
+- low forge/forge.py:196 The `.prompt` files are never pruned; the PR body says so. There is one file per (lane, cycle, role), overwritten on rerun and fallback, and reviewer files are up to about 130 KB. Today the four `sessions/` dirs total about 750 KB (260K+156K+188K+144K). This adds a few MB per day at most, and the deadline caps it. No change needed.
+- info forge/forge.py:204 TOCTOU check:
+  - The builder gets `FORGE_STATE_DIR`, so a process it leaves running could rewrite `sessions/<cycle>-reviewer.prompt` after :197 and before omp reads it.
+  - That gives it no new capability. `prompt()` re-reads `prompts/reviewer.md` on every call (:97), from a path the same user can write.
+  - Before this PR the full prompt was world-readable in `/proc/<pid>/cmdline` while the session ran.
+  - No change needed.
+- info siblings, no contradiction or duplicate:
+  - #5 (NOTES[:8000] in the reviewer prompt) and #6 (review-repair prompt with review[-12000:]) make prompts longer. PR_AUDIT.md:438 already traced #5 into this same E2BIG. #24 removes that ceiling, so these PRs complement it.
+  - #8, #16, #19, #20 and #23 touch other README rows or other regions of forge.py and selftest.py.
+- nit forge/forge.py:193-195 The comment includes the incident story ("attempt charged to the ticket"), which belongs in the commit message; its first clause already gives the why. Optional.
+Change needed (only for MERGE WITH CHANGE): in forge/selftest.py:156 delete ` and (f.home / "sessions/00000-reviewer.prompt").read_text() == big`, so the line reads
+`    check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT"), text[-200:])`
+
+
 ## PR #23 · 2026-10-24T06:23:28Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (the fixer changed nothing)
 
 Verdict: MERGE WITH CHANGE
