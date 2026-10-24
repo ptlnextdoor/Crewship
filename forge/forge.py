@@ -185,14 +185,19 @@ class Forge:
         logdir = self.home / "sessions"
         logdir.mkdir(exist_ok=True)
         out = logdir / f"{self.state['cycle']:05d}-{role}.log"
-        cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
-               "--approval-mode=yolo", prompt]
-        self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         steer = self.repo / "STEERING.md"
         if steer.exists() and steer.read_text().strip():
             # The owner's standing instructions come first in every session (borrowed from
             # Autonomous-Company's Human Overrides). Agents may not edit this file.
-            cmd[-1] = f"Owner's standing instructions (STEERING.md), these override anything below:\n\n{steer.read_text()}\n\n---\n\n{prompt}"
+            prompt = f"Owner's standing instructions (STEERING.md), these override anything below:\n\n{steer.read_text()}\n\n---\n\n{prompt}"
+        # The prompt goes through a file (omp reads `@path`): one argv string is capped at 128 KiB on
+        # Linux, and a review prompt with a 120,000-char diff plus ticket and STEERING.md exceeded it
+        # (E2BIG, "failed to start agent", attempt charged to the ticket).
+        pfile = out.with_suffix(".prompt")
+        pfile.write_text(prompt)
+        cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
+               "--approval-mode=yolo", f"@{pfile}"]
+        self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:
             # New session so a timeout kills the whole tree (cargo, rustc, test binaries), not just omp.
             p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True,
