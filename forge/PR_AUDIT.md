@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #35 · 2026-10-24T18:21:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #35 forge: builder makes files outside its worktree recoverable before overwriting them
+What it changes: adds one builder rule (`forge/prompts/builder.md:16`): outside the worktree, make a file recoverable before any command that may overwrite, move or delete it (`git status` tracked and clean, else `cp -a X X.bak`), then write in `PROGRESS.md` what changed and how to restore it. Adds the matching README safeguard row (`forge/README.md:45`). No `forge.py` change.
+Findings:
+- none forge.py / reviewer.md / gate / protected paths: the diff touches none of them. Claim, `recover()`, `discard_strays()`, `touched_protected()` and the reviewer prompt behave as before. The only `{...}` in the diff is the existing `{GATE}` context line, so `prompt()` substitution is unchanged. The prompt grows by one fixed line, not per session. Incident checked: reflex1 `LEARNINGS.md:127`. Citation checked: the arXiv 2610.28934 abstract gives 205 tasks, six models, 86.1% completion, 15.2% backup, all matching.
+- medium forge/prompts/builder.md:16 The recipe `cp -a X X.bak` overwrites an earlier copy, and the rule never says to put an unintended change back. So the second backup of an untracked file destroys the original, which is the loss the rule exists to prevent. Reproduced on this box (`cp 0.8.0`): `echo orig>X; cp -a X X.bak; echo new>X; cp -a X X.bak` leaves X.bak=`new`, while `cp -an` keeps `orig`. How it happens: `fail()` sets `retry` (`max_attempts = 3`). The next attempt is a fresh `--no-session` builder in a new worktree that never sees attempt 1's PROGRESS.md, because the `finally` in `cycle()` runs `git worktree remove --force` and `git branch -D`. That builder finds X still modified and backs it up over the original. Four lanes also share `~/code/reflex` (33 of 140 reflex1 tickets name it).
+- medium forge/prompts/builder.md:16 "caches" is on the list of things to copy aside, with no size bound, and nothing ever deletes the copy. Disk: `/` is 92% used with 17 GB free. 55 of 140 reflex1 tickets have the builder write under `~/.cache/forge/reflex1-*`: `reflex1-frames` is 1.4 GB and `reflex1-pod` is 30 GB, which alone is more than the free space. Worktree removal never touches a copy outside the worktree, and neither does `prune_target()`, which only unlinks workspace artifacts in `<CARGO_TARGET_DIR>/*/deps` and `*/examples`. If the disk fills (ENOSPC), every lane's cargo build, gate and git commit fails until someone cleans up. A cache the ticket's own command rebuilds needs no copy.
+- low forge/prompts/builder.md:16 "Say in `PROGRESS.md` ... how to restore it" has a problem on both paths.
+  - On every failing path (no diff, protected path, gate, REJECT, land conflict) the record disappears with the worktree. `pr_close` (forge.py:396) closes the PR but leaves the remote branch, which nobody reads. `fail()` copies the review or gate tail into the ticket, not PROGRESS.md.
+  - On the merge path, it puts a restore command in a file that every later yolo builder reads first (builder.md:4). A later session that runs it overwrites the owner's newer file with a stale copy.
+  - The record should state a fact (path, where the copy is), and an unintended change should be put back right away.
+- low sibling #23 (same base, touches builder.md and README.md) contradicts this PR.
+  - #23's reviewer check 7 rejects an added PROGRESS.md line that "tells a future session to ... edit a file outside the repo".
+  - #23's builder line says these files "never tell a future session to run ... something".
+  - This PR requires "how to restore it" in PROGRESS.md, which is exactly that kind of line.
+  - #35 should change (state the path and where the copy is, not a command), for the reason in the finding above. #23's rule is the safer side.
+- low forge/prompts/builder.md:16 The rule makes "tracked and clean" the go-ahead for overwriting outside the worktree. The lane's own checkout (`/home/ubuntu/Dev/reflex1`, which `git worktree list` shows from inside the builder's worktree) passes that test by construction. That checkout holds `gate.sh`, `tickets/` and `STEERING.md`.
+  - `touched_protected()` diffs only the worktree branch, so it never sees an edit there.
+  - `_agent_once` prepends `self.repo/STEERING.md` to the reviewer prompt (forge.py:188-192, 493) as "Owner's standing instructions ... these override anything below", and no `sync_main` runs between the builder session and the review.
+  - The hole predates this PR. This PR's text does not create it, but it reads as clearance instead of saying such writes need the ticket. The put-back clause below covers a careless builder.
+- nit forge/README.md:45 "reflex1 session 0057" is ticket 0057 (`tickets/0057-s2-held-out-eval.md`); forge sessions are named `<cycle>-<role>`. The row also says "overwrite or delete" where the prompt says "overwrite, move or delete".
+Change needed (only for MERGE WITH CHANGE): replace the added builder.md line with:
+`- Outside this worktree (the owner's other repos, datasets, checkpoints) nothing is undone by the worktree being thrown away. Before any command there that may overwrite, move or delete a file, make it recoverable first: `git status` to see it tracked and clean, else copy it aside without replacing an older copy (`cp -an X X.bak`); a tool's CLI mode or a default output path can write where you did not aim it. No copy for a cache or output the ticket's own commands rebuild. Before you finish, put back anything there the ticket did not ask you to change; for what it did ask, note in `PROGRESS.md` the path and where its copy is.`
+and the added README row with:
+`| Outside its worktree the builder makes a file recoverable (tracked and clean, or copied aside without replacing an older copy) before any command that may overwrite, move or delete it, puts back what the ticket did not ask it to change, and notes in `PROGRESS.md` where the copy of the rest is | an untracked dataset, checkpoint or the owner's other repo clobbered by a side effect (reflex1 ticket 0057 ran `track.mjs` as a CLI and it rewrote `~/code/reflex/learn/track.json`; recovered only because it was tracked. Six frontier models back up before the destructive step in 15.2% of RegretBench tasks) |`
+
+
 ## PR #34 · 2026-10-24T17:21:20Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
