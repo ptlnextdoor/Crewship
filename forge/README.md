@@ -27,6 +27,7 @@ Reliability rules, each mapped to a failure it prevents:
 | One ticket per session, each with command-checkable "Done when" | half-built features, "looks done" |
 | The gate (`gate.sh`) is the oracle and protected: a diff touching `gate.sh`, `tickets/` or `.forge/` is rejected | passing by editing the tests |
 | A third-party package new to `Cargo.lock` (or a new `pip install`) only when the ticket names it; the reviewer diffs the manifests and lock file and rejects any other | an unrequested crate landing on main, where every later session builds it (the review runs after the builder and the gate have built it once, so it does not keep the code off this box) |
+| Added lines in `AGENTS.md`, `LEARNINGS.md`, `PROGRESS.md` are reviewed as instructions: one that tells a later session to run, install, fetch, configure outside the repo, or skip a check is rejected unless the ticket names it | a lane (or a web page it read) writing an order into the file every later lane obeys as the owner's user |
 | Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
 | Rebase and re-gate before merge | green branch, red main |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
