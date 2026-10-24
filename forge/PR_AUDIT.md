@@ -2,6 +2,34 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #25 · 2026-10-24T08:28:08Z · MERGE WITH CHANGE · risk medium · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #25 forge: reviewer diff drops result/data hunks (review_exclude), keeps --stat for every file
+What it changes: adds `Forge.review_diff()` (forge.py:283), which builds the reviewer's `{DIFF}` from `git diff --stat main...HEAD` plus `git diff main...HEAD -- . ':(exclude)<p>'…` for each `review_exclude` entry. It replaces the raw diff at forge.py:486, sets reflex1's `review_exclude = ["*.json", "*.pt", "runs/", "bench/models/"]`, and also edits the reviewer.md "Diff:" header, adds a README row and adds selftest 4h.
+Findings:
+- high forge/projects/reflex1.toml:13 `*.json` is not limited to result files. Git pathspec `*` also matches `/`, so the rule hides the hunks of every JSON file in the repo, and the reviewer sees only a stat line for each. I ran the PR's `review_diff` with this exact list on a reflex1-shaped repo (throwaway script). It showed only `src/lib.rs` and `.jsonl` hunks. These hunks were hidden:
+  (a) Golden test fixtures that the gate's `cargo test` compares against: `crates/reflex-core/tests/fixtures/pyjson_states.json` (read by `tests/request_parity.rs:41`), `tokenizer_sequences.json` (read by `tests/tokenizer_sequence.rs:20`), and `bench/fixtures/forward/*.json` (read by `tests/forward_fixtures.rs:62`). A builder that rewrites the expected values to match broken code passes the gate. Reviewer step 3 ("hard-coded expected values, weakened tolerances") then has no hunk to check.
+  (b) `bench/models.lock.json`, the pinned Hugging Face repo and sha that `crates/reflex-core/src/weights.rs:29` compiles in with `include_str!` and downloads. A swapped repo or sha shows up only as `bench/models.lock.json | 2 +-`. Reviewer step 6 does not name this file.
+  (c) Project MCP configs. I tested this: headless `omp -p --approval-mode=yolo` (omp 18.12.6) spawned the `command` from `.mcp.json`, `.omp/mcp.json` and `.claude/mcp.json` in its cwd at startup, before it even resolved the model. reflex1's .gitignore does not ignore these files, forge.py:457 `git add -A` commits them, and protected_paths does not cover them. A builder that a page it read has prompt-injected can therefore land a command that every later lane session runs as the owner, and the reviewer sees one stat line. The new reviewer.md:19 header calls the omitted hunks "result and data files", which tells the reviewer not to look.
+  The motivating case does not need any of this. reflex1 PR #76 had 166,301 diff bytes, and 143,264 of them were `bench/results/*.json` (2 files) and `runs/laps/**/*.json` (3 files). `git ls-files` shows that `["bench/results/*.json", "runs/*.json"]` matches exactly the 40 result files and 19 lap files and leaves fixtures, the lock file and model meta visible.
+- low forge/projects/reflex1.toml:13 `*.pt` and `bench/models/` add nothing. `.pt` is binary, so its "hunk" is already the single line "Binary files differ" (PR #76's `model.pt` diff was 197 bytes). `bench/models/*/meta.json` was 1.4 KB of PR #76. `runs/` (directory) hides more than the JSON that caused the bloat; `runs/*.json` is enough.
+- low forge/prompts/reviewer.md:19 This prompt is shared by every project, but the header says hunks are left out even for a project with no `review_exclude`. The cost is extra reviewer `git diff` calls, not a safety issue. No change required.
+- info forge/forge.py:283-290 The mechanism is sound. Entries come from owner config and are `shlex.quote`d. It adds no state shared between lanes and no new exception path (same `self.sh` calls as before). The stat comes first, so it survives the `diff[:120000]` cut. `touched_protected` still uses the unfiltered `--name-only` diff, so protected paths are not weakened. Selftest passes on the PR tree (all checks, including 4h).
+- info deploy: the service runs `~/Dev/Crewship/forge/forge.py` with `~/.config/forge/reflex1.toml`, a separate copy (currently identical to the repo's). `review_exclude` takes effect only after the owner re-copies it. The reviewer.md text takes effect immediately, because `prompt()` re-reads it on every call.
+- info sibling #5 (forge.py:477, reviewer.md tail) replaces the same `diff = self.sh("git diff main...HEAD", …)` line with its own `:(exclude)PROGRESS.md`/`LEARNINGS.md` pathspecs, so the two PRs duplicate the mechanism and conflict textually. #5 should change: fold its exclusion into `review_diff`. Its base is also stale; its reviewer.md context lacks steps 4 and 6.
+- info sibling #6 (forge.py) adds a second raw `git diff main...HEAD` for the re-review after a repair. If both land, the re-review bypasses `review_exclude`. #6 should change: call `self.review_diff(wt)`.
+- info sibling #23 (reviewer.md, README) makes the reviewer read files that later sessions obey (AGENTS/LEARNINGS/PROGRESS.md) as instructions. PR #25's `*.json` hides the hunks of the JSON configs that omp executes, which is the same threat class. #25 is the side that should change, via the edit below. #16, #19 and #20 overlap only textually (adjacent lines in reflex1.toml, README and selftest), with no contradiction.
+Change needed: in forge/projects/reflex1.toml replace line 13 `review_exclude = ["*.json", "*.pt", "runs/", "bench/models/"]` with
+```
+# Only result and lap files: a bare `*.json` also hides test fixtures, bench/models.lock.json and the .mcp.json omp runs at startup.
+review_exclude = ["bench/results/*.json", "runs/*.json"]
+```
+and in forge/README.md:37 change `(result JSON, model files)` to `(result and lap JSON)`.
+
+
 ## PR #24 · 2026-10-24T07:25:45Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
