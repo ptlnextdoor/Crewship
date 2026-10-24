@@ -86,6 +86,16 @@ with tempfile.TemporaryDirectory() as d:
     check("depends blocks an unfinished prerequisite", not f.ready(dep))
     f.set_status(t, "done")
     check("depends clears when the prerequisite is done", f.ready(dep))
+    # 4a. ready() holds a ticket whose touches: overlaps an in-progress ticket's, and only then.
+    busy = repo / "tickets/0003-z.md"
+    busy.write_text("status: in_progress lane=2\ntouches: src/a, tools/x.py\n---\n# z\n")
+    dep.write_text("status: open\ntouches: src/a/b.rs\n---\n# y\n")
+    check("touches inside an in-progress path waits", not f.ready(dep))
+    dep.write_text("status: open\ntouches: src/ab, tools/x.py.bak\n---\n# y\n")
+    check("touches with a shared prefix but a different path starts", f.ready(dep))
+    dep.write_text("status: open\n---\n# y\n")
+    check("no touches: line never waits", f.ready(dep))
+    busy.unlink()
     # 4b. The PR title is model-written text; it must reach gh verbatim after the real shell, never run as shell.
     t.write_text("status: open\n---\n# `tools/x.py`: $(echo pwned) and `agree`\n")
     f.cfg["pull_requests"] = True
