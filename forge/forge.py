@@ -188,7 +188,7 @@ class Forge:
         # A role can run twice in one cycle: the builder repairs after a gate failure and again to resolve
         # a merge, a stalled review is rerun, the steward runs once more at the deadline. One name per
         # (cycle, role) let the second session overwrite the first, and the lost one is the session that
-        # wrote the diff (reflex1 cycle 32 kept only the 1.5 KB merge run of a 25-minute builder).
+        # wrote the diff (reflex1 lane 1 cycle 32 kept only the 1.5 KB merge run of a 63-minute builder).
         out = logdir / f"{self.state['cycle']:05d}-{role}.log"
         k = 1
         while out.exists():
