@@ -182,6 +182,12 @@ class Forge:
 
     def _agent_once(self, role: str, model: str, thinking: str, prompt: str, cwd: Path, timeout_min: int) -> tuple[int, str]:
         timeout = 60 * timeout_min
+        # Sessions die at the limit (7 of the first 63 reflex1 sessions did), so the agent is told the clock
+        # and how not to hang on one command.
+        prompt = (f"Session clock: this session and every process it started are killed after {timeout_min} minutes. "
+                  "Prefix any command that can run long with `timeout` (for example `timeout 900 cargo test --workspace`), "
+                  "never start a watcher or server in the foreground, and finish (commit, notes, verdict) before the limit.\n\n"
+                  f"{prompt}")
         logdir = self.home / "sessions"
         logdir.mkdir(exist_ok=True)
         out = logdir / f"{self.state['cycle']:05d}-{role}.log"
