@@ -155,6 +155,22 @@ with tempfile.TemporaryDirectory() as d:
     rc, text = f._agent_once("reviewer", "c/d", "high", big, repo, 1)
     check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT"), text[-200:])
 
+    # 4h. The steward's SCORE.md edit is committed (its prompt tells it to keep SCORE.md true); code it touches is still discarded.
+    # Every path in the steward's `git add` must exist: a missing pathspec makes git add stage nothing.
+    git("checkout -q main", repo); git("pull -q origin main", repo)
+    (repo / "docs/assets").mkdir(parents=True); (repo / "docs/assets/.keep").write_text("")
+    for n in ("SCORE.md", "ROADMAP.md", "LEARNINGS.md", "README.md"):
+        (repo / n).write_text("S1: ?\n")
+    (repo / "main.rs").write_text("fn main() {}\n")
+    git("add -A", repo); git("commit -qm score", repo); git("push -q origin main", repo)
+    def steward_agent(role, prompt, cwd, timeout_min=0):
+        (cwd / "SCORE.md").write_text("S1: 0.42 (3 seeds, `cargo run --release -- bench`, 2026-10-24)\n")
+        (cwd / "main.rs").write_text("fn main() { panic!() }\n")
+        return 0, ""
+    f.agent = steward_agent
+    f.steward()
+    check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
