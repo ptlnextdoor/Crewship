@@ -280,12 +280,22 @@ class Forge:
         files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
+    def startable(self) -> list[Path]:
+        """Open tickets a lane could claim now: every `depends:` ticket is done."""
+        return [t for t in self.open_tickets() if self.ready(t)]
+
     def plan(self) -> None:
-        self.log("queue low: planner turn")
+        # The planner is told how many tickets can start now and how many it must add that can. Without
+        # the number, 16 reflex1 turns wrote 8 to 9 tickets each with a median of 2 startable (the rest
+        # chained on open tickets), so the queue was low again one cycle later: 10 turns in 13 h.
+        ready, need = len(self.startable()), self.cfg.get("min_queue", 3)
+        self.log(f"queue low: planner turn ({ready} of {need} tickets can start now)")
         self.board("planner is writing the next tickets")
-        rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes))), self.repo)
+        rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
+                                                    READY=str(ready), NEED=str(max(self.lanes, need - ready))), self.repo)
         self.sh("git add -A tickets PROGRESS.md ROADMAP.md 2>/dev/null; git commit -qm 'forge: planner refills the ticket queue' || true")
         self.discard_strays("planner")
+        self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
         self.push()
 
     def push(self) -> None:
@@ -433,7 +443,7 @@ class Forge:
         self.state["cycle"] += 1
         n = self.state["cycle"]
         self.sync_main()
-        if self.lane == 1 and len([t for t in self.open_tickets() if self.ready(t)]) < self.cfg.get("min_queue", 3):
+        if self.lane == 1 and len(self.startable()) < self.cfg.get("min_queue", 3):
             self.plan()
         ticket = self.claim()
         if not ticket:

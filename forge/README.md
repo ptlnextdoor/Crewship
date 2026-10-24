@@ -6,7 +6,7 @@ An unattended build loop that keeps developing one project on a Crewship host fo
 
 ```mermaid
 flowchart LR
-  Q{open tickets < min_queue?} -->|yes| P[planner writes tickets]
+  Q{startable tickets < min_queue?} -->|yes| P[planner writes tickets]
   Q -->|no| B
   P --> B[builder: one ticket, fresh worktree]
   B --> G{gate.sh}
@@ -30,6 +30,7 @@ Reliability rules, each mapped to a failure it prevents:
 | Builder and reviewer come from different vendors (`reviewer_alt` when they would match) | one model approving its own blind spots |
 | Rebase and re-gate before merge | green branch, red main |
 | Retry with the failure evidence, escalate to `builder_hard` on the 2nd failure, block after `max_attempts` | infinite loops on one ticket |
+| The planner is told how many tickets can start now (`depends:` all done) and how many startable ones it must add; forge logs the count after the turn | a planner turn every lane-1 cycle (10 in 13 h on reflex1, about 25 min each) because each wrote 8 tickets of which a median of 2 could start |
 | A review that hits its timeout with no `VERDICT` is rerun once before the attempt fails | losing a 75-minute builder attempt to a stalled 30-minute review |
 | A merge conflict at landing re-syncs with main and re-gates, up to three times | losing an approved, gate-green attempt because another lane landed during the 8–25 min post-rebase gate |
 | Model-written text (the ticket heading that becomes the PR title) is shell-quoted; bodies go through files | a backtick or `$(...)` in a ticket running as the owner's user |

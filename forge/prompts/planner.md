@@ -4,7 +4,7 @@ Read first: `STEERING.md`, `SCORE.md`, `AGENTS.md`, `ROADMAP.md`, `PROGRESS.md`,
 
 The project exists to move the numbers in `SCORE.md`. Before writing anything, go through every open ticket and ask which SCORE.md number it moves. If the answer is none, set its status to `cancelled` with a one-line reason under a `## forge-cancel` heading (do not delete the file). A queue full of tickets that improve plumbing but never touch a score is the failure mode this loop has already fallen into once.
 
-Then write at least {MIN_TICKETS} new tickets as `tickets/NNNN-short-slug.md`, numbering after the highest existing number. {LANES} builder lanes run in parallel, each taking the lowest-numbered open ticket whose dependencies are done, so the queue must always hold at least {LANES} tickets that can start right now and do not touch the same files. Each ticket:
+Then write at least {MIN_TICKETS} new tickets as `tickets/NNNN-short-slug.md`, numbering after the highest existing number. {LANES} builder lanes run in parallel, each taking the lowest-numbered open ticket whose dependencies are done, so the queue must always hold at least {LANES} tickets that can start right now and do not touch the same files. Right now {READY} open tickets can start. At least {NEED} of the tickets you write must be startable now: no `depends:` line, or only on tickets already `status: done`. A ticket that depends on an `open` or `in_progress` ticket cannot start and does not count; write the next step of a chain, not the whole chain, because the loop calls you again as soon as the startable queue runs low, and a turn that adds only dependent tickets costs a lane 25 minutes for one cycle of work. Each ticket:
 
 ```
 status: open
