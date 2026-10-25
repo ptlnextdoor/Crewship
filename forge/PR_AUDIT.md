@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #57 · 2026-10-25T18:44:25Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #57 forge: a quota mark needs the provider's own error, not an agent writing about quota
+What it changes: `agent()` marks a vendor exhausted only when the quota regex matches the stderr segment of the session tail (`text.partition("\n[stderr]\n")[2]`) with rc != 0, instead of matching the last 3000 chars of stdout+stderr. Adds selftest 10 and a README row.
+Findings:
+- ok forge/forge.py:193-194 Traced end to end. `_agent_once` (forge.py:245,250) builds `so + "\n[stderr]\n" + se` and returns `text[-6000:]`; the partition takes `se`. omp 18.12.6 print text mode (dist/cli.js, print runner): when the last assistant message has stopReason error/aborted (not SilentAbort), it skips the final stdout text, writes `errorMessage` to stderr and exits 1, so a refusal from either vendor lands in `err`. A missed refusal fails closed: builder failure, or reviewer "did not approve" (forge.py:572). No change to the gate, protected paths, prompts, shell commands, spend, or exception paths. `self.exhausted` belongs to each lane process, so no new shared state. Net effect on review: the agent's own report (stdout, fully agent-controlled) can no longer knock a vendor out of the chain, so `reviewer_alt` keeps its Codex model, and cross-vendor review is kept rather than weakened.
+- ok forge/selftest.py:486-520 At the PR head the whole selftest passes. With base forge.py the new check fails (`['a/b', 'c/d'] {'a': ...}`), so it tells the two behaviours apart. A fake-omp smoke through the real `_agent_once` gave: report quoting `usage_limit_reached` + rc 1 keeps the vendor; stderr refusal falls over to c/d and marks `a`; 10 KB stdout + stderr refusal is still marked.
+- low forge/forge.py:191-193 The documented shortcut is real. More than ~5990 B of stderr pushes the `[stderr]` marker out of the 6000-char tail, so `err == ""` and a refusal reads as a plain failure. The smoke run confirmed it with 7000 B of noise: rc 1, vendor not marked, where base would mark because the refusal sits in `text[-3000:]`. The largest stderr in the 263 reflex1 logs that have one is 310 B ("Working..." + MCP warnings). It fails closed and costs one ticket attempt, so it is acceptable as annotated.
+- low forge/forge.py:186-188, forge/selftest.py:488-489, forge/README.md:58 The provenance is false. ~/Dev/reflex1 `git log -S usage_limit_reached -- LEARNINGS.md` shows only 2a452f9 "forge: steward update (cycle 8)". lane2/sessions/00028-builder.log:18 says it added "one pods bullet in LEARNINGS.md after the `usage_limit_reached` one", so lane 2 cycle 28 quoted the bullet but did not write it. The comments say "5 of 268"; disk has 264 logs, and the PR's own commit body says 264. "All 3 real cases" undercounts: forge.log has 18 `quota: ... exhausted` lines, all on openai-codex, and 15 of those refusal logs were overwritten by their same-(cycle, role) fallback session. The stderr conclusion holds from the omp source, not from that log sample. None of the 18 marks is a false positive: 15 sessions lasted 7-18 s, and the 3 longer ones (495 s, 1797 s, 104 s) coincide with other lanes' Codex refusals. So this is a latent fix, not a fix for an observed incident.
+- low forge/README.md:58, forge/selftest.py:486 "A vendor is marked exhausted only on a quota error from ... stderr" is not what the code does. `quota_ok()` (forge.py:266-268, called every cycle at forge.py:745) also marks a vendor when `omp usage` shows it at or above `max_window_used_pct`. The rule applies to sessions only.
+- nit forge/selftest.py:513 Trailing whitespace after `check("a failed session that writes about quota keeps its vendor", `.
+- sibling #47 (base `forge`; touches forge.py `agent()` loop, README, selftest): it adds a `PROVIDER_ERROR` failover matched on `text[-3000:]`, which is the agent's report plus stderr. That is the same flaw #57 removes for quota: a builder report quoting "internal server error" or "api_error" with rc 124 would rerun the builder on the next model in the same worktree. #47 should change to match the stderr segment. #57 is the correct side. Their hunks are adjacent, so whichever lands second must rebase and rerun the selftest.
+- sibling #39 (base `forge`; touches forge.py:182 and `quota_ok`): complementary, with no contradiction or duplication. #39 makes marks expire; #57 narrows what sets one. #39's motivating mark (21:25:26Z, an 11 s Codex session) was a real refusal, so #57 does not fix #39's case.
+Change needed (only for MERGE WITH CHANGE): text-only, no logic change.
+1. forge/README.md:58
+   - Replace "A vendor is marked exhausted only on a quota error from the provider's own channel (stderr)" with "A session marks its vendor exhausted only on a quota error in its stderr, the provider's channel".
+   - Replace "268" with "264".
+   - Replace "(lane 2 cycle 28 added the LEARNINGS.md bullet, its reviewer quoted it back)" with "(lane 2 cycle 28's builder and reviewer quoted the steward's cycle-8 `usage_limit_reached` bullet in LEARNINGS.md)".
+   - Replace "the three real refusals all arrived on stderr" with "omp -p writes a failed turn's error to stderr, as the three surviving refusal logs show".
+2. forge/forge.py:186-188
+   - Replace "all 3 real cases in reflex1's logs" with "omp -p writes a failed turn's error there, as in the 3 surviving refusal logs".
+   - Replace "lane 2 cycle 28 wrote `usage_limit_reached` into LEARNINGS.md, its reviewer quoted it back, 5 of 268" with "lane 2 cycle 28's builder and reviewer quoted the steward's `usage_limit_reached` bullet in LEARNINGS.md, 5 of 264".
+3. forge/selftest.py:486-489
+   - Replace "A vendor is taken out of every role's chain only on" with "A session takes its vendor out of every role's chain only on".
+   - Replace "reflex1 lane 2 cycle 28 wrote `usage_limit_reached` into LEARNINGS.md and its reviewer quoted it back; 5 of 268" with "reflex1 lane 2 cycle 28's builder and reviewer quoted the steward's `usage_limit_reached` bullet in LEARNINGS.md; 5 of 264".
+4. forge/selftest.py:513: strip the trailing space.
+
+
 ## PR #56 · 2026-10-25T17:40:07Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
