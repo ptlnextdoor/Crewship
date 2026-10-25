@@ -287,6 +287,20 @@ class Forge:
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
+    @staticmethod
+    def verdict(rc: int, rout: str) -> str:
+        """The reviewer's decision, read from the last line of its reply (reviewer.md: "End your reply
+        with exactly one line"). Matching anywhere in the 6,000-char session tail takes the verdict out
+        of whatever text happens to sit there: a diff hunk the reviewer quoted (a ticket that touches
+        this repo's own prompts carries `VERDICT: APPROVE` in its diff), the two options restated, or a
+        reply the timeout cut off mid-review. In all 27 reflex1 review logs the verdict line is the last
+        line. A session killed at its timeout (rc 124) never finished a reply and has no decision."""
+        if rc == 124:
+            return ""
+        last = rout.split("[stderr]")[0].strip().rsplit("\n", 1)[-1]
+        m = re.fullmatch(r"[*`\s]*VERDICT:\s*(APPROVE|REJECT)[*`.\s]*", last)
+        return m.group(1) if m else ""
+
     def touched_protected(self, cwd: Path) -> list[str]:
         files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
@@ -502,16 +516,17 @@ class Forge:
             reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
             rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000])
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
-            verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
-            if rc == 124 and not verdict:
-                # a review that stalls to its timeout without a verdict is a harness failure, not a finding:
-                # 4 of the first 22 reflex1 reviews did, and each cost the ticket a whole attempt. One rerun.
-                self.log(f"review of {tid} timed out with no verdict; rerunning once")
+            verdict = self.verdict(rc, rout)
+            if not verdict:
+                # a review that ends with no verdict line is a harness failure, not a finding: it stalled
+                # to its timeout (4 of the first 22 reflex1 reviews did) or the session died early, and
+                # each one cost the ticket a whole attempt. One rerun.
+                self.log(f"review of {tid} ended with no verdict (rc={rc}); rerunning once")
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
-                verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+                verdict = self.verdict(rc, rout)
             review = rout.split("[stderr]")[0].strip()
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
-            if not verdict or verdict[-1] != "APPROVE":
+            if verdict != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
             why = self.land(wt, branch, tid, builder)
             if why:
