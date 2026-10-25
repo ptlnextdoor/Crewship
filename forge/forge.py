@@ -420,8 +420,7 @@ class Forge:
         if not pr:
             return False
         # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
-        # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`, and that
-        # path never deletes the remote branch.
+        # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`.
         for _ in range(10):
             if self.gh(f"pr view {pr} --json mergeable --jq .mergeable") == "MERGEABLE":
                 break
@@ -451,6 +450,11 @@ class Forge:
             self.sync_main()
             if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}").returncode == 0:
                 self.push()
+                # `gh pr merge --delete-branch` cleans the remote branch; this fallback path never did, and 64 of
+                # reflex1's 106 remote forge branches are landed leftovers. Only once the tip is in origin/main,
+                # so a push that did not reach the remote keeps the branch.
+                if self.sh(f"git merge-base --is-ancestor {branch} origin/main").returncode == 0:
+                    self.sh(f"git push -q origin --delete {branch}", timeout=120)
                 return ""
             self.sh("git merge --abort")
             self.log(f"main moved during the gate; landing {tid} again")

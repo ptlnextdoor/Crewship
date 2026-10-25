@@ -240,6 +240,34 @@ with tempfile.TemporaryDirectory() as d:
           ok and not sessions and (wt / "PROGRESS.md").read_text() == "base\nanother lane\n"
           and (wt / "src.rs").exists(), f"ok={ok} sessions={sessions}")
 
+# 4o. When the PR merge falls back to the local merge, the remote branch goes with it - but only when the
+# merge commit actually reached origin/main.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, wt = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "wt"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "PROGRESS.md").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg); f.pr = ""
+    f.gate = lambda cwd: (True, "")
+    git(f"worktree add -q -b landed {wt} main", repo)
+    (wt / "src.rs").write_text("fn main() {}\n"); git("add -A", wt); git("commit -qm work", wt)
+    git("push -q origin landed", wt)
+    why = f.land(wt, "landed", "0001-x", "builder")
+    check("a branch landed by the local merge is deleted from the remote",
+          why == "" and "landed" not in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
+
+    git(f"worktree add -q -b unpushed {Path(d) / 'wt2'} main", repo)
+    (Path(d) / "wt2" / "other.rs").write_text("fn other() {}\n")
+    git("add -A", Path(d) / "wt2"); git("commit -qm work2", Path(d) / "wt2")
+    git("push -q origin unpushed", Path(d) / "wt2")
+    f.push = lambda: None  # the merge commit never reaches origin
+    why = f.land(Path(d) / "wt2", "unpushed", "0002-y", "builder")
+    check("a branch whose merge did not reach the remote is kept",
+          why == "" and "unpushed" in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
