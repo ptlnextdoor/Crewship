@@ -560,15 +560,18 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "tickets").mkdir()
     (repo / "tickets/0004-r.md").write_text("status: open\n\n# r\n")
     git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
-    # Another lane owns origin from here on: every push this lane makes is rejected.
-    (origin / "hooks/pre-receive").write_text("#!/bin/sh\nexit 1\n")
-    (origin / "hooks/pre-receive").chmod(0o755)
+    # Another lane pushed first and this lane never fetches it: every push it makes is a non-fast-forward.
+    other = Path(d) / "other"
+    git(f"clone -q {origin} {other}", Path(d))
+    (other / "PROGRESS.md").write_text("another lane\n")
+    git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
     # Unpushed work on main, as after a planner turn whose push did not get through.
     (repo / "tickets/0005-planned.md").write_text("status: open\n\n# planned by this lane\n")
     git("add -A", repo); git("commit -qm 'forge: planner refills the ticket queue'", repo)
     cfg = Path(d) / "c.toml"
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg)
+    f.sync_main = lambda: None
     real_sleep = forge.time.sleep
     forge.time.sleep = lambda s: None
     got = f.claim()
