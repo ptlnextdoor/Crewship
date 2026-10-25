@@ -2,6 +2,39 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #46 · 2026-10-25T07:19:59Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #46 forge: a cycle that dies with an exception closes its PR with the error
+What it changes: `cycle()` gets an `except Exception as e` that calls `pr_close(self.pr, "cycle error: <type>: <msg>")` and re-raises. It also adds a README reliability row and selftest 4p, where the gate raises `TimeoutExpired` and the test expects a `pr close` plus a comment that names the exception.
+Findings:
+- low forge/forge.py:537-542 The handler also runs after the PR has merged, and then posts "**forge: not merged.**" on a merged PR. Traced path: `land()` returns "" after `gh pr merge` succeeds, or after the local `--no-ff` merge is pushed, which GitHub records as a merge. The code that runs next can still raise `subprocess.TimeoutExpired`, because `sh()` uses timeout=120 for the fetch and the push. That code is `pr_merge`'s `sync_main()` at :432, or `sync_main()`/`push()` at :530-533. Reproduced on a patched copy by stubbing `land()` to return "" and making `push()` raise. Result: a `pr comment` with "forge: not merged ... cycle error: TimeoutExpired", then `pr close` on the merged PR. The same thing happens when `fail()` has already closed the PR and its `sync_main()`/`push()` (:574+) raises. Reproduced: two "not merged" comments and two `pr close` calls. This writes false evidence on the PR, which is the opposite of what the PR is for. It does not affect the gate, the reviewer or the protected paths.
+- none forge/forge.py:537-542 No effect on the gate, reviewer or protected paths. Traced:
+  - The handler covers only the try body.
+  - A bare `raise` re-raises the same object. `lane_loop`'s `except QuotaExhausted` (:689) still matches, and the generic branch still calls `recover()`. The ticket goes from in_progress to retry exactly as before.
+  - `finally` still runs after the handler, so the worktree is removed, `branch -D` runs and `save()` happens. Selftest 4p exercises this.
+  - `self.pr = ""` is set at :481, before the try, so an exception before `pr_open` is a no-op.
+  - The error text reaches gh only through `--body-file` (`gh()` :377-380), cut to its last 6000 chars by `pr_close`. `pr close {pr}` uses the URL that gh returned, so no ticket or model text reaches a shell command.
+  - `gh-body.md` sits in each lane's own `self.home`, so two lanes never write the same file.
+  - No new agent, quota or GPU spend.
+- low forge/forge.py:415 + forge/README.md:52 (slop) On this path the reused `pr_close` boilerplate says "The ticket goes back to the queue with this evidence". That is false: `recover()` (:621) writes only "interrupted (loop restarted mid-cycle); not counted as an attempt", with no error and no PR link. The README row's failure column lists "ticket went back to the queue without a link to them", and the change does not fix that symptom. Not blocking.
+- info sibling #40 (base `forge`, touches forge.py, README.md and selftest.py) has the same motivation: it cites the same reflex1 0012 gate timeouts at 08:53Z and 14:45Z on 10-23. #40 makes `sh()` return rc 124 on a timeout. A gate timeout then becomes a normal gate FAIL, which `fail()` already closes with evidence, and gh/git timeouts stop raising. The two code changes are complementary, not contradictory. After #40, #46 still covers what keeps raising after `pr_open`: `QuotaExhausted` from the reviewer or the repair builder, `OSError`, and so on. If #40 lands first, #46's comment and README evidence ("gate timeout, gh or git error") go stale, and #46's side should reword them to the quota case. This does not change the verdict. Selftest 4p makes the gate raise directly, so it stays valid after #40.
+- info sibling #44 (adopt the existing PR when `pr create` fails) is complementary: an adopted PR is also closed when the cycle raises. The other open PRs on `forge` that touch forge.py (#42, #39, #31, #28, #25, #20, #19, #16, #8, #7, #6, #5) do not touch the except/finally region, `pr_close`, `recover()` or `lane_loop`'s handler. #40, #44 and #46 each append a README row at the same table end, which is only a textual merge conflict.
+- verified On a /tmp copy with the diff applied: `py_compile` passes and `python3 forge/selftest.py` passes every check. With the change below applied, the selftest still passes. The stubbed probes then give: MERGED gives no comment and no close; CLOSED (closed by `fail()`) gives no comment and no close; OPEN gives a comment and a close.
+Change needed: in forge/forge.py:541 replace
+`            self.pr_close(self.pr, f"cycle error: {type(e).__name__}: {e}")`
+with
+```
+            if self.pr and self.gh(f"pr view {self.pr} --json state --jq .state") == "OPEN":
+                self.pr_close(self.pr, f"cycle error: {type(e).__name__}: {e}")
+```
+and in forge/selftest.py:287 make the 4p stub answer `pr view` with OPEN:
+`    f.gh = lambda args, cwd=None, body=None: (calls.append((args, body or "")), "OPEN" if args.startswith("pr view") else "")[1]`
+(If gh is unreachable, the view returns "" and the PR stays open. That is the same outcome as `pr_close` failing today.)
+
+
 ## PR #45 · 2026-10-25T06:18:52Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
