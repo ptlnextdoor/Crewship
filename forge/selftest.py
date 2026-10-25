@@ -265,8 +265,31 @@ with tempfile.TemporaryDirectory() as d:
     git("push -q origin unpushed", Path(d) / "wt2")
     f.push = lambda: None  # the merge commit never reaches origin
     why = f.land(Path(d) / "wt2", "unpushed", "0002-y", "builder")
-    check("a branch whose merge did not reach the remote is kept",
-          why == "" and "unpushed" in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
+    check("a merge that did not reach the remote is not reported as landed",
+          why != "" and "unpushed" in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
+
+# 4q. push() reconciles with origin by merging it in, not by rebasing local main: a rebase replays the
+# landing merge's commits under new hashes, so GitHub never matches the PR head and the PR stays open on
+# work that is in main (reflex1 #82 and #109), and a conflicted rebase resets the landing away.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other, wt = (Path(d) / x for x in ("origin.git", "repo", "other", "wt"))
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "PROGRESS.md").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    git(f"clone -q {origin} {other}", Path(d))
+    (other / "PROGRESS.md").write_text("base\nanother lane\n")
+    git("commit -qam other", other); git("push -q origin main", other)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    git(f"worktree add -q -b feat {wt} main", repo)
+    (wt / "src.rs").write_text("fn main() {}\n"); git("add -A", wt); git("commit -qm work", wt)
+    git("merge -q --no-ff -m 'forge: land 0003-z' feat", repo)  # push is rejected: the other lane got there first
+    f.push()
+    check("a landing survives a push that lost the race, as the same commits",
+          "YES" in git("merge-base --is-ancestor feat origin/main && echo YES", repo),
+          git("log --oneline -3 origin/main", repo))
 
 # 4p. A cycle that dies outside fail() (reflex1: './gate.sh' timed out, twice) must close its PR with the
 # error on it; the ticket goes back to retry through recover() and the next attempt opens a new PR.
