@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import hashlib
 import json
 import os
@@ -296,18 +297,29 @@ class Forge:
         return [t for t in self.open_tickets() if self.ready(t)]
 
     def plan(self) -> None:
-        # The planner is told how many tickets can start now and how many it must add that can. Without
-        # the number, 16 reflex1 turns wrote 8 to 9 tickets each with a median of 2 startable (the rest
-        # chained on open tickets), so the queue was low again one cycle later: 10 turns in 13 h.
-        ready, need = len(self.startable()), self.cfg.get("min_queue", 3)
-        self.log(f"queue low: planner turn ({ready} of {need} tickets can start now)")
-        self.board("planner is writing the next tickets")
-        rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
-                                                    READY=str(ready), NEED=str(max(self.lanes, need - ready))), self.repo)
-        self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
-        self.discard_strays("planner")
-        self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
-        self.push()
+        """Refill the ticket queue. Any lane that runs dry may call this, so one lane at a time: the lock in
+        the shared state dir is held for the turn, and the lane that takes it re-checks the queue first."""
+        with (self.base_home / "plan.lock").open("w") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                self.log("another lane is refilling the queue; not starting a second planner turn")
+                return
+            self.sync_main()
+            # The planner is told how many tickets can start now and how many it must add that can. Without
+            # the number, 16 reflex1 turns wrote 8 to 9 tickets each with a median of 2 startable (the rest
+            # chained on open tickets), so the queue was low again one cycle later: 10 turns in 13 h.
+            ready, need = len(self.startable()), self.cfg.get("min_queue", 3)
+            if ready >= need:
+                return  # another lane filled it while we waited for the lock
+            self.log(f"queue low: planner turn ({ready} of {need} tickets can start now)")
+            self.board("planner is writing the next tickets")
+            rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
+                                                        READY=str(ready), NEED=str(max(self.lanes, need - ready))), self.repo)
+            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
+            self.discard_strays("planner")
+            self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
+            self.push()
 
     def push(self) -> None:
         """Push main; other lanes push too, so on rejection rebase onto origin and try again."""
@@ -464,7 +476,10 @@ class Forge:
         self.state["cycle"] += 1
         n = self.state["cycle"]
         self.sync_main()
-        if self.lane == 1 and len(self.startable()) < self.cfg.get("min_queue", 3):
+        # Any lane, not only lane 1: the queue runs dry while lane 1 is mid-cycle, and lanes 2-4 then sleep
+        # 2 min at a time until it reaches this check (44 such lines in reflex1's log; lane 4 idled 18 min
+        # on 2026-10-23 while lane 1 was in a builder session). plan() itself keeps it to one turn at a time.
+        if len(self.startable()) < self.cfg.get("min_queue", 3):
             self.plan()
         ticket = self.claim()
         if not ticket:
