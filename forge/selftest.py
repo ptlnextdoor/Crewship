@@ -13,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -203,6 +204,18 @@ with tempfile.TemporaryDirectory() as d:
           kept == ["00007-builder-2.log", "00007-builder-2.prompt", "00007-builder.log", "00007-builder.prompt"]
           and "first session" in (f.home / "sessions/00007-builder.log").read_text()
           and "second session" in (f.home / "sessions/00007-builder-2.log").read_text(), str(kept))
+
+    # 4l. A vendor's quota mark expires. One mid-session quota error used to skip that vendor for the
+    # rest of the lane process: reflex1 marked openai-codex at 21:25Z on 10-23 and the next 76 reviews
+    # all ran on the builder's own vendor, so the cross-vendor review the loop is built on quietly stopped.
+    tried: list[str] = []
+    f.cfg["roles"]["qtest"] = {"model": "x/first", "fallback": ["y/second"]}
+    f._agent_once = lambda role, model, thinking, prompt, cwd, timeout_min: (tried.append(model), (0, ""))[1]
+    f.exhausted = {"x": time.time()}
+    forge.Forge.agent(f, "qtest", "p", repo)
+    f.exhausted = {"x": time.time() - 3700}
+    forge.Forge.agent(f, "qtest", "p", repo)
+    check("a fresh quota mark is skipped, an hour-old one is not", tried == ["y/second", "x/first"] and "x" not in f.exhausted, str(tried))
 
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()

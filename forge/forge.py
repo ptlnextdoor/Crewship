@@ -164,13 +164,25 @@ class Forge:
             raise RuntimeError(f"{cmd} -> {r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
         return r
 
+    def vendor_out(self, model: str) -> bool:
+        """True while this vendor's quota mark is still fresh. A mark set by one mid-session quota
+        error lasted the whole lane process: reflex1 marked openai-codex at 21:25Z on 10-23 and the
+        next 76 reviews, every review of 10-24, fell back to the builder's own vendor while Codex sat
+        at 16% of its 7-day window, so cross-vendor review stopped without a line in the log."""
+        vendor = model.split("/")[0]
+        t = self.exhausted.get(vendor)
+        if t is not None and time.time() - t >= 3600:
+            del self.exhausted[vendor]
+            return False
+        return t is not None
+
     def agent(self, role: str, prompt: str, cwd: Path, timeout_min: int | None = None) -> tuple[int, str]:
         """Run one headless omp session for a role. On a provider quota error, try the role's
         `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
         for model in chain:
-            if model.split("/")[0] in self.exhausted:
+            if self.vendor_out(model):
                 continue
             rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
             if re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", text[-3000:], re.I) and rc != 0:
@@ -247,7 +259,7 @@ class Forge:
                 over[vendor] = max(used) >= floor
         for v, is_over in over.items():
             if is_over:
-                self.exhausted.setdefault(v, time.time())
+                self.exhausted[v] = time.time()  # refresh: the mark expires an hour after it was last true
             else:
                 self.exhausted.pop(v, None)
         vendors = {x["model"].split("/")[0] for x in self.cfg["roles"].values()}
