@@ -462,6 +462,7 @@ with tempfile.TemporaryDirectory() as d:
     rc.log = lambda m: None
     rc.record = lambda v: None  # the real one writes PR_AUDIT.md in the checkout and pushes it
     rc.sh = lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "newbase", "")
+    rc.GH_REPO = "selftest/none"  # a call that gets past the sh stub must not reach a real PR
     rc.open_prs = lambda: [{"number": 28, "headRefName": "b", "files": [{"path": "forge/forge.py"}]}]
     old = {"pr": 28, "sha": "deadbeefcafe", "gate": "fail", "base": "oldbase", "verdict": "MERGE",
            "risk": "low", "audit": "a", "at": "t"}

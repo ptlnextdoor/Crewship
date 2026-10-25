@@ -196,18 +196,16 @@ def run() -> None:
         prev = previous(n)
         if not needs_pass(prev, base):
             continue
-        regate = None
         if prev:  # re-check: the cheap gate decides whether the expensive audit is worth a turn
             ok, gout = gate(pr)
             if not ok:
                 mark(n, {**prev, "base": base, "at": now()})
                 log(f"PR #{n}: still fails the gate on {base[:8]}; not re-audited")
                 continue
-            regate = (ok, gout)
         v = audit(pr)
         v["base"] = base
         bad = touches_protected(pr)
-        ok, gout = regate or gate(pr)
+        ok, gout = gate(pr)
         v["gate"] = "pass" if ok else "fail"
         files = [f["path"] for f in pr.get("files", [])]
         prompt_only = files and all(f.startswith("forge/prompts/") for f in files)
