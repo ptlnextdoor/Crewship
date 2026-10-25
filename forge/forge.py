@@ -158,8 +158,27 @@ class Forge:
         tmp.replace(self.state_file)
 
     def sh(self, cmd: str, cwd: Path | None = None, timeout: int = 600, check: bool = False) -> subprocess.CompletedProcess:
-        r = subprocess.run(cmd, shell=True, cwd=cwd or self.repo, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=timeout, env=self.env)
+        # New session so a timeout kills the whole tree. `subprocess.run(timeout=)` kills only the shell:
+        # cargo/rustc/test binaries survive, keep the worktree's target lock and the CPU, and the next gate
+        # on the same ticket times out too (reflex1 0012 at 08:53Z and 14:45Z on 10-23). A timeout is rc 124
+        # with the partial output, like any failed command, so the gate fails the attempt with a reason in
+        # the ticket instead of raising TimeoutExpired out of the cycle into the error backoff.
+        p = subprocess.Popen(cmd, shell=True, cwd=cwd or self.repo, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             start_new_session=True, env=self.env)
+        try:
+            so, se = p.communicate(timeout=timeout)
+            rc = p.returncode
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, 15)
+                time.sleep(5)
+                os.killpg(p.pid, 9)
+            except ProcessLookupError:
+                pass
+            so, se = p.communicate()
+            so, rc = f"TIMEOUT after {timeout}s (process group killed)\n{so or ''}", 124
+        r = subprocess.CompletedProcess(cmd, rc, so or "", se or "")
         if check and r.returncode:
             raise RuntimeError(f"{cmd} -> {r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
         return r
