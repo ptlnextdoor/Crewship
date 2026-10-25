@@ -297,6 +297,37 @@ with tempfile.TemporaryDirectory() as d:
           any(a.startswith("pr close") for a, _ in calls)
           and any("TimeoutExpired" in b for _, b in calls), str(calls)[:300])
 
+# 4q. A lane that runs dry refills the ticket queue itself. The planner used to run only on lane 1, at the
+# top of its own cycle, so lanes 2-4 slept 2 min at a time until lane 1 finished a build (44 "no open ticket
+# to claim" lines in reflex1's log; lane 4 idled 19:26-19:44 on 2026-10-23). Still one planner turn at a time.
+with tempfile.TemporaryDirectory() as d:
+    import fcntl
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    git("commit -qm base --allow-empty", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nlanes=4\nmin_queue=3\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n[roles.planner]\nmodel="e/f"\n')
+    sleeps, real_sleep = [], forge.time.sleep
+    forge.time.sleep = lambda s: sleeps.append(s)
+    turns: list[str] = []
+    f = forge.Forge(cfg, 2)  # lane 2 gets its own clone
+    f.agent = lambda role, prompt, cwd, timeout_min=None: (turns.append(role), (0, ""))[1]
+    f.cycle()
+    check("a lane with nothing to claim refills the queue itself", turns == ["planner"], str(turns))
+
+    held = (Path(d) / "s" / "plan.lock").open("w")
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)  # another lane is mid planner turn
+    turns.clear()
+    f3 = forge.Forge(cfg, 3)
+    f3.agent = lambda role, prompt, cwd, timeout_min=None: (turns.append(role), (0, ""))[1]
+    f3.cycle()
+    check("only one lane refills the queue at a time", turns == [], str(turns))
+    held.close()
+    forge.time.sleep = real_sleep
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
