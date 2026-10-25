@@ -538,7 +538,8 @@ class Forge:
             # fail() closes the PR on a rejected attempt; a cycle that dies anywhere else (gate timeout,
             # gh or git error, quota) left it open with no evidence on it. reflex1 PRs #12 and #27 are the
             # two `./gate.sh timed out after 1800 seconds` cycles, still open with no gate comment.
-            self.pr_close(self.pr, f"cycle error: {type(e).__name__}: {e}")
+            if self.pr and self.gh(f"pr view {self.pr} --json state --jq .state") == "OPEN":
+                self.pr_close(self.pr, f"cycle error: {type(e).__name__}: {e}")
             raise
         finally:
             self.sh(f"git worktree remove --force {wt}")

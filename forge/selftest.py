@@ -284,7 +284,7 @@ with tempfile.TemporaryDirectory() as d:
     f.plan, f.board = (lambda: None), (lambda doing: None)
     f.claim = lambda: repo / "tickets/0003-t.md"
     f.pr_open = lambda wt, branch, ticket, builder: "https://example.invalid/pull/12"
-    f.gh = lambda args, cwd=None, body=None: (calls.append((args, body or "")), "")[1]
+    f.gh = lambda args, cwd=None, body=None: (calls.append((args, body or "")), "OPEN" if args.startswith("pr view") else "")[1]
     f.agent = lambda role, prompt, cwd, timeout_min=None: ((cwd / "src.rs").write_text("fn main() {}\n"), (0, ""))[1]
     def gate_times_out(cwd):
         raise subprocess.TimeoutExpired("./gate.sh", 1800)
