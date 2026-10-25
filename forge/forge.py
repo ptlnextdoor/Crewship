@@ -522,6 +522,14 @@ class Forge:
         # not run at every lane's cycle start. plan() keeps it to one turn at a time.
         if len(self.startable()) < (self.cfg.get("min_queue", 3) if self.lane == 1 else 1):
             self.plan()
+        # lane_loop checked the deadline before this cycle, but sync_main() and a planner turn run first
+        # (planner timeout_min is 40): reflex1 lane 1 finished cycle 31 at 16:49:00Z, spent 16 min planning,
+        # and claimed 0128 at 17:05:32Z for a 17:00:00Z deadline - 86 more minutes of Opus xhigh (builder,
+        # reviewer, a merge-resolve builder) started after the owner's stop time. Work already claimed is
+        # left to finish: lanes 2 and 4 landed tickets after the deadline that hour.
+        if self.past_deadline():
+            self.log("deadline reached while this cycle was starting; claiming nothing")
+            return
         ticket = self.claim()
         if not ticket:
             self.log("no open ticket to claim; sleeping")

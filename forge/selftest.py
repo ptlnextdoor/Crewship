@@ -582,6 +582,28 @@ with tempfile.TemporaryDirectory() as d:
           "status: open" in (repo / "tickets/0004-r.md").read_text()
           and "starts" not in git("log --oneline -3", repo), git("log --oneline -3", repo))
 
+# 13. A cycle must not claim new work once the deadline has passed. lane_loop checks it before the cycle,
+# but sync_main() and a planner turn (timeout_min 40) run inside it: reflex1 lane 1 claimed 0128 at
+# 17:05:32Z against a 17:00:00Z deadline and spent 86 more minutes on it, and the supervisor's "all lanes
+# finished at the deadline" came at 18:43:52Z.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[limits]\ndeadline="2000-01-01T00:00:00Z"\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    turns: list[str] = []
+    f = forge.Forge(cfg)
+    f.agent = lambda role, prompt, cwd, timeout_min=None: (turns.append(role), (0, ""))[1]
+    f.cycle()
+    check("a cycle past the deadline claims nothing",
+          turns == [] and "status: open" in (repo / "tickets/0001-t.md").read_text(), str(turns))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
