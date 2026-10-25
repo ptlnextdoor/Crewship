@@ -476,10 +476,9 @@ class Forge:
         self.state["cycle"] += 1
         n = self.state["cycle"]
         self.sync_main()
-        # Any lane, not only lane 1: the queue runs dry while lane 1 is mid-cycle, and lanes 2-4 then sleep
-        # 2 min at a time until it reaches this check (44 such lines in reflex1's log; lane 4 idled 18 min
-        # on 2026-10-23 while lane 1 was in a builder session). plan() itself keeps it to one turn at a time.
-        if len(self.startable()) < self.cfg.get("min_queue", 3):
+        # Lane 1 tops the queue up to min_queue; lanes 2-4 refill only an empty queue, so the planner does
+        # not run at every lane's cycle start. plan() keeps it to one turn at a time.
+        if len(self.startable()) < (self.cfg.get("min_queue", 3) if self.lane == 1 else 1):
             self.plan()
         ticket = self.claim()
         if not ticket:
