@@ -518,6 +518,38 @@ with tempfile.TemporaryDirectory() as d:
     check("the provider's own refusal on stderr falls back to the other vendor",
           ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
 
+# 11. A cycle that does not land must take its attempt branch off the remote; a branch already merged into
+# local main must stay (land() keeps it as the only copy when the merge commit did not reach origin/main).
+# 42 of reflex1's 106 remote forge/ refs are not in origin/main: only the merge paths ever deleted a branch.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0004-r.md").write_text("status: open\n\n# r\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan, f.board, f.gh = (lambda: None), (lambda doing: None), (lambda args, cwd=None, body=None: "")
+    f.claim = lambda: repo / "tickets/0004-r.md"
+    f.gate = lambda cwd: (True, "")
+    f.pr_open = lambda wt, branch, ticket, builder: (git(f"push -q -u origin {branch}", wt), "https://example.invalid/pull/9")[1]
+    verdict = ["VERDICT: REJECT"]
+    def build_or_review(role, prompt, cwd, timeout_min=None):
+        (cwd / "src.rs").write_text(f"fn main() {{}} // {role}\n")
+        return 0, verdict[0]
+    f.agent = build_or_review
+    f.cycle()
+    check("a rejected attempt's branch is deleted from the remote",
+          "forge/l1-" not in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
+
+    verdict[0] = "VERDICT: APPROVE"
+    f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
+    f.cycle()
+    check("a branch merged into main is left for land() to decide",
+          "forge/l1-" in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
