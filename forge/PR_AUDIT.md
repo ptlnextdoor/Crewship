@@ -2,6 +2,29 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #39 · 2026-10-25T00:35:21Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #39 forge: a vendor's quota mark expires after an hour, so cross-vendor review comes back
+What it changes: adds `Forge.vendor_out()`, which drops an `exhausted` mark that is 3600 s old or more, and `agent()` now calls it instead of `in self.exhausted`. `quota_ok()` now refreshes over-floor marks (`=` instead of `setdefault`). Also adds selftest 4l and a README safeguard row.
+Findings:
+- medium forge/forge.py:262 (with vendor_out 167-176): the vendor quota floor stops holding partway through a cycle. `quota_ok()` runs once per lane-loop pass, before `cycle()` (forge.py:675). The mark it sets when `omp usage` reports a vendor at or over `max_window_used_pct` now expires 3600 s later, and `vendor_out` deletes it. Every later `agent()` call in that cycle then runs on the over-floor vendor: the reviewer (516/522), the gate-repair builder, the merge-resolution builder (371), and lane 1's steward, which runs straight after `cycle()` with no `quota_ok()` in between. This is common. In the reflex1 log, 24 of 125 reviewer sessions and 10 repair/merge builder sessions started ≥60 min after their `cycle N:` line (longest 114 min), and that line comes after `quota_ok()`, so the real gaps are longer. I reproduced it in a scratch copy with a fake `omp usage` (anthropic 90%, codex 10%, floor 85). The builder falls back to codex, the clock moves 62 min, then `agent("reviewer")` runs. Base 0113e5f8 raises QuotaExhausted. The PR runs `anthropic/opus`. This weakens the README:40 safeguard ("Quota floor ... burning the owner's shared plan"). Today's `omp usage` is that exact case: Claude 7d (Fable) is 100% and Claude 7d is 78% against reflex1's floor of 80. The PR body's "a vendor genuinely out stays out" is false for any cycle longer than an hour.
+- ok forge/forge.py:167-189: expiring the marks set by quota errors in `agent()` is correct. The dict is per lane process, so lanes share no state. `del` only runs after `.get` returned a value. Once a mark expires, a vendor that is still out costs one failed session per lane per hour, and those fail fast (21:25:15→21:25:26). The incident is confirmed in `~/.local/state/forge/reflex1/forge.log`. All 75 reviewer sessions after 21:25:26Z ran on `anthropic/claude-fable-5-1` and Codex was never tried again. Lanes 2-4, which marked Codex at 19:11, 19:16 and 19:37, ran without it until the deadline. The change brings back the cross-vendor reviewer. It does not touch the gate, protected paths, prompts, ticket text in commands, PR/merge, GPU or recover/discard_strays.
+- info forge/forge.py:250-264 (unchanged): the base `quota_ok()` pops a mark when it sees the vendor under the floor. Lane 2's check before cycle 23 (21:03Z) left its Codex mark in place. Lane 1's check before cycle 15 (20:26Z) did not set one. [INFERENCE] The lanes' `omp usage` gave no parsed Codex block that night, so the Codex floor check was blind too. That problem predates this diff and is not part of the verdict.
+- low forge/forge.py:168-171, selftest.py:208-210, README.md:49: the same reflex1 incident is told three times (docstring, test comment, README row), plus once more in the PR body. One telling, beside the code, is enough. README:49's "expires an hour after it was last true" is wrong for floor marks: they are only re-checked at the start of a cycle. The change below fixes that wording.
+- info sibling #20 (reviewer_alt falls back to `xai-oauth/grok-build`; `quota_ok` parses xAI): same motivation, complementary, no contradiction, so neither side needs to change. With #20 merged, an xAI floor mark would leak the same way under this PR as written. The change below covers it. Other open PRs on base `forge` that touch these files (#31, #28, #25, #23, #19, #16, #8, #7, #6, #5) have no hunk in `exhausted`, `quota_ok` or `agent()`'s chain loop. #7 edits `_agent_once`, which does not conflict with 4l's monkeypatch.
+- check: I applied the diff to a scratch copy of base 0113e5f8. `python3 forge/selftest.py` exits 0 and 4l passes.
+Change needed (only for MERGE WITH CHANGE): forge/forge.py:262, replace
+`                self.exhausted[v] = time.time()  # refresh: the mark expires an hour after it was last true`
+with
+`                self.exhausted[v] = float("inf")  # over the floor: out until omp usage reports it under; only quota-error marks expire`
+and in forge/README.md:49 replace the first cell with
+`A vendor's quota-error mark expires an hour after the error, instead of lasting the lane process (a vendor omp usage reports over the floor stays out until it reports under)`.
+Verified in a scratch copy: selftest exits 0 with 4l passing. The 62-minute scenario raises QuotaExhausted again, as base does. A quota-error mark still expires at 3600 s, and a floor mark is still honored at 1e9 s.
+
+
 ## PR #38 · 2026-10-24T23:30:51Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
