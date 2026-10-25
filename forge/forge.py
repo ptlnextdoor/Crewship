@@ -342,7 +342,7 @@ class Forge:
     def sync_main(self) -> None:
         self.sh("git checkout -q main; git fetch -q origin", timeout=120)
         if self.sh("git rebase -q origin/main").returncode:
-            self.sh("git rebase --abort")
+            self.sh("git rebase --abort; git reset -q --hard HEAD")
             # A rebase replays this lane's main commits one at a time, so a ticket line written and rewritten
             # conflicts even when the final trees agree (the lesson rebase_onto_main already carries). A merge
             # resolves the divergence once and keeps the work: the reset below drops unpushed planner tickets,
@@ -350,7 +350,7 @@ class Forge:
             if self.sh("git merge -q --no-edit origin/main").returncode == 0:
                 return
             self.sh("git merge --abort")
-            keep = f"forge/sync-conflict-l{self.lane}-{int(time.time())}"
+            keep = f"sync-conflict/l{self.lane}-{int(time.time())}"
             self.sh(f"git branch -f {keep}")
             self.sh("git reset -q --hard origin/main")
             self.log(f"sync: local main conflicted with origin; reset to origin/main, local commits kept on {keep}")
