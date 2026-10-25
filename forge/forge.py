@@ -643,7 +643,7 @@ class Forge:
             self.log(f"{role} left edits outside its paths, discarding: {stray.splitlines()[:5]}")
             self.sh("git reset -q --hard HEAD && git clean -qfd")
 
-    def recover(self, all_lanes: bool = False) -> None:
+    def recover(self, all_lanes: bool = False, quota: bool = False) -> None:
         """After a crash or restart: this lane's in_progress tickets go back to retry (blocked once the
         interruptions reach max_attempts), stale worktrees go.
         `all_lanes` (the supervisor at startup, when every lane is restarting) recovers every lane's tickets."""
@@ -662,17 +662,17 @@ class Forge:
                 # 3 counted attempts (two of its three recoveries followed `./gate.sh timed out after 1800
                 # seconds`), about 4.6 lane-hours never charged. Past max_attempts interruptions the cause is
                 # the ticket, not the restart, so it stops here instead of being claimed again.
-                # shortcut: one counter for every interruption, so an owner restart or a quota pause mid-cycle
+                # shortcut: one counter for every interruption, so an owner restart
                 # also spends one; resume with `status: open`. Split it per cause if that ever blocks real work.
                 hits = p.read_text().count("## forge-recover ") + 1
-                if hits >= self.cfg.get("max_attempts", 3):
+                if not quota and hits >= self.cfg.get("max_attempts", 3):
                     self.set_status(p, "blocked", f"interrupted {hits} times mid-cycle without finishing an attempt "
                                     "(loop restart, crash or gate timeout), so the interruption is not incidental. "
                                     "Set `status: open` to queue it again, after a look at why its cycle does not finish.")
                     self.log(f"recovered {p.stem} -> blocked after {hits} interruptions")
                 else:
                     self.set_status(p, "retry")
-                    p.write_text(p.read_text() + f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n")
+                    p.write_text(p.read_text() + (f"\n\n## forge-quota {now()}\nno model had quota; not counted as an attempt\n" if quota else f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n"))
                     self.log(f"recovered {p.stem} -> retry")
                 self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
         for wt in (self.home / "wt").glob("*") if (self.home / "wt").exists() else []:
@@ -742,7 +742,7 @@ class Forge:
                     self.steward()
             except QuotaExhausted as e:
                 self.log(f"quota: no model left for {e}; ticket back to the queue, sleeping 15 min")
-                self.recover()
+                self.recover(quota=True)
                 time.sleep(900)
             except Exception as e:  # keep the loop alive; record and move on
                 self.log(f"cycle error: {type(e).__name__}: {str(e)[:500]}")

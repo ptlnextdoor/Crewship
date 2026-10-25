@@ -445,6 +445,12 @@ with tempfile.TemporaryDirectory() as d:
     check("the first interruptions of a ticket are still free retries",
           "status: retry" in once.read_text() and once.read_text().count("## forge-recover ") == 2,
           once.read_text()[:200])
+    quota = repo / "tickets/0013-quota.md"
+    quota.write_text("status: in_progress lane=1\n---\n# quota\n"
+                     "\n\n## forge-recover t1\ninterrupted\n\n\n## forge-recover t2\ninterrupted\n")
+    f.recover(quota=True)
+    check("a quota recovery is not counted toward the interruption cap",
+          "status: retry" in quota.read_text(), quota.read_text()[:200])
 
 print()
 if fails:
