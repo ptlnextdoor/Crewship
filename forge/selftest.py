@@ -193,6 +193,15 @@ with tempfile.TemporaryDirectory() as d:
     f.steward()
     check("steward turn survives a project missing one of its staged paths", "steward was here" in git("show origin/main:PROGRESS.md", repo))
 
+    # 4t. A doc edit the role's first commit did not take is the turn's work, not a stray: reflex1's
+    # steward left SCORE.md dirty on 2026-10-24 at 05:20 and 10:11 and the reset destroyed both turns.
+    (repo / "PROGRESS.md").write_text("p\nsteward numbers\n")
+    (repo / "stray.rs").write_text("fn main() {}\n")
+    f.discard_strays("steward", forge.STEWARD_DOCS)
+    check("a doc the first commit missed is committed, not reset away",
+          "steward numbers" in git("show HEAD:PROGRESS.md", repo))
+    check("an edit outside the role's paths is still discarded", not (repo / "stray.rs").exists())
+
     # 4k. Two sessions of the same role in one cycle (gate repair, the builder resolving a merge, a rerun
     # review, the steward at the deadline) each keep their log and prompt; the second overwrote the first.
     f.state["cycle"] = 7

@@ -38,6 +38,9 @@ from pathlib import Path
 
 OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 UTC = dt.timezone.utc
+# The paths each doc-only role may write, used both to stage its turn and to tell its work from a stray.
+PLANNER_DOCS = "tickets PROGRESS.md ROADMAP.md"
+STEWARD_DOCS = "PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets"
 
 
 class QuotaExhausted(Exception):
@@ -324,8 +327,8 @@ class Forge:
             self.board("planner is writing the next tickets")
             rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
                                                         READY=str(ready), NEED=str(max(self.lanes, need - ready))), self.repo)
-            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
-            self.discard_strays("planner")
+            self.commit_docs(PLANNER_DOCS, "forge: planner refills the ticket queue")
+            self.discard_strays("planner", PLANNER_DOCS)
             self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
             self.push()
 
@@ -624,8 +627,8 @@ class Forge:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
         self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
         self.state["steward_cycle"] = self.state["cycle"]
-        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
-        self.discard_strays("steward")
+        self.commit_docs(STEWARD_DOCS, "forge: steward update")
+        self.discard_strays("steward", STEWARD_DOCS)
         self.push()
 
     def commit_docs(self, paths: str, msg: str) -> None:
@@ -636,8 +639,18 @@ class Forge:
         if here:
             self.sh(f"git add -A {here}; git commit -qm '{msg}' || true")
 
-    def discard_strays(self, role: str) -> None:
-        """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""
+    def discard_strays(self, role: str, paths: str = "") -> None:
+        """Planner and steward may only touch docs/tickets; drop anything else they changed on main.
+        An edit still dirty under the role's own paths is the turn's work, not a stray: reflex1's steward
+        left SCORE.md uncommitted on 2026-10-24 at 05:20 and 10:11 and the reset below destroyed both
+        turns (13 minutes of model time each) behind one log line. Those get a second commit first."""
+        # shortcut: a path git quotes (spaces, non-ASCII) is not matched and goes with the strays; every
+        # doc path forge stages is plain ASCII. Parse `git status -z` instead if that ever changes.
+        dirty = [l[3:] for l in self.sh("git status --porcelain").stdout.splitlines() if not l[3:].startswith('"')]
+        mine = [f for f in dirty if any(f == p or f.startswith(p.rstrip("/") + "/") for p in paths.split())]
+        if mine:
+            self.log(f"{role}: {mine[:5]} left uncommitted by the first pass; committing, not discarding")
+            self.commit_docs(" ".join(mine), f"forge: {role} update (second pass)")
         stray = self.sh("git status --porcelain").stdout.strip()
         if stray:
             self.log(f"{role} left edits outside its paths, discarding: {stray.splitlines()[:5]}")
