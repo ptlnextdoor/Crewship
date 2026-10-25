@@ -2,6 +2,57 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #44 · 2026-10-25T05:18:24Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #44 forge: adopt the PR already open for the branch when `pr create` fails
+What it changes: in `pr_open`, after both `pr create` calls fail, forge looks up a PR for the branch with `gh pr view {branch} --json url --jq .url` and uses it as `self.pr`. It adds a README reliability row and selftest 4n.
+Findings:
+- medium forge/forge.py:405-413 The adopted PR still holds the commits of the earlier, killed attempt, and this code does not replace them. Trace on reflex1:
+  - Lane 3 ran `cycle 1: 0010-vision-preprocess` at 05:32:28. The supervisor restarted at 07:07:16 (`recovered 0010-vision-preprocess -> retry`), and the lane ran `cycle 1` again at 07:07:51. `state["cycle"]` is incremented at :469 but saved only at :548/:672/:700, so the restart reused the branch name `forge/l3-00001-0010-vision-preprocess`.
+  - PR #5 already existed on that branch. Its body says "Opened by forge (cycle 1)" and its only commit is 7441a508 (05:46, from attempt 1). At 07:27:45 the second attempt's `pr create` failed with "already exists".
+  - Attempt 2's branch is cut fresh from main (:485). Its plain pushes at :393 and :507 are refused as non-fast-forward, and #5 still shows 7441a508 today.
+  - With this PR, forge adopts #5. The gate and review comments (:501/:510/:528) get posted under attempt 1's diff.
+  - `land()` force-pushes at :457 but ignores the return code. `pr_merge` (:438) then runs `gh pr merge` without checking the head commit. If that one push fails, attempt 1's code merges to main without passing this attempt's gate or review. The ticket is still marked done with "approved by". For a PR forge creates itself, a failed push only leaves this attempt's own earlier push on the PR, so adoption makes a failed push worse.
+  - Repro (throwaway script: a two-attempt git origin, `gh` stubbed): the PR code prints `remote_head_is_this_attempt=False`. With the change below it prints `True`, and the full selftest still passes.
+- low forge/forge.py:406, forge/selftest.py:243, forge/README.md:51 The stated cause is wrong.
+  - "usually one the builder opened itself" is contradicted by #5 and by #8. #8 was opened at 06:04:03 by lane 2's killed attempt on `forge/l2-00001-0009-serve-http`.
+  - 0009's second attempt did not fail with "already exists". Its `pr create` failed with `/bin/sh: 1: /health: not found`, i.e. the shell ran the title before the shlex fix.
+  - The README calls 0009/0010 "cycles", but they are ticket IDs; both runs were cycle 1.
+  - "PR #5 is still open and empty" is false: #5 has 20 files and a gate PASS comment.
+  - The real trigger is the unsaved cycle counter (:469 vs :548). That code is not in this diff; a `self.save()` right after the increment would prevent the reuse and belongs in a separate PR.
+- low forge/forge.py:411 `gh pr view <branch>` filters neither state nor base. Checked on gh 2.103.0: `gh pr view scout/2026-10-25-merge-before-builder -R ptlnextdoor/Crewship` returns MERGED #43 with base `forge`.
+  - This only matters when both creates fail for some other reason and an older closed or merged PR has the same head name.
+  - What happens then: comments go to that old PR, mergeability is polled for 30 s, `gh pr merge` fails, and forge falls back to the local merge it uses today. Not blocking.
+  - To tighten it later: `gh pr list --head {branch} --base main --state open --json url --jq '.[0].url'` returned #5 for reflex1 and nothing for a merged branch. Selftest 4n's expected call list would need updating.
+- info forge/forge.py:390-416 Traced, nothing found:
+  - Gate and protected paths: `touched_protected` (:497) and the gate (:500) run on the local HEAD whether or not there is a PR handle.
+  - Reviewer: it gets the local `git diff main...HEAD` (:513/:518), not PR text.
+  - Injection: `branch` is interpolated unquoted, as it already is at :393/:402/:485, so there is no new surface.
+  - Concurrency: the new call writes no shared file (no body, so no write to gh-body.md), and branch names include the lane number.
+  - Cost: one extra `gh` call, only after two failed creates. No model quota or GPU spend.
+  - Errors: the new call has the same 120 s `sh` timeout behaviour as the calls next to it.
+- info forge/selftest.py:243-265 Test 4n checks behaviour and fails on the base code (`url='' calls=['create', 'create']`). Because it stubs `sh` to return rc 0, it cannot see the stale head. It passes unchanged with the edit below.
+- info siblings: I read all 14 open PRs on `forge` that touch forge.py, README.md or selftest.py (#5 #6 #7 #8 #16 #19 #20 #23 #25 #28 #31 #39 #40 #42). None changes the create/adopt path in `pr_open`.
+  - #16 adds autofix just before the `pr_open` call, and #28 switches nearby diffs to origin/main. Both are compatible.
+  - #8 labels gate and review comments with `self.rev(wt)`. On an adopted PR without the force push, those labels would name a revision the PR page does not show; the edit below removes that mismatch.
+  - The README rows from all siblings land near line 51. That is a textual merge conflict, not a contradiction.
+- low forge/forge.py:406-410 (slop) The five-line comment repeats the README row and carries the wrong cause. The edit below replaces it.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, replace the body of the third `if not url.startswith("http"):` block in `pr_open` (the comment plus the `pr view` lines, :406-413) with:
+```python
+            # A restart mid-cycle reruns the same cycle number, so this branch and the PR the killed attempt
+            # opened already exist (reflex1 0010, PR #5): the push above was refused and the PR still holds
+            # that attempt's commits. Replace them before adopting it, or its gate and review comments sit
+            # under code nobody gated and a failed push in land() merges that code. No push, no handle.
+            if self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120).returncode == 0:
+                url = self.gh(f"pr view {branch} --json url --jq .url", cwd=wt)
+                if url.startswith("http"):
+                    self.log(f"adopted the PR already open for {branch}")
+```
+
+
 ## PR #43 · 2026-10-25T04:13:49Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
