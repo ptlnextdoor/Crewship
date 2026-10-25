@@ -421,6 +421,47 @@ with tempfile.TemporaryDirectory() as d:
           "local-c" in git("log --oneline --all", repo) and "ours" not in (repo / "PROGRESS.md").read_text(),
           git("log --oneline --all", repo))
 
+# 8. The budget check runs `omp usage` before every cycle, and it is called outside lane_loop()'s try:
+# it must not inherit the loop's stdin (omp waits for EOF on a pipe) and must not raise into the lane.
+# Run in a child whose stdin is a pipe, so "inherited" and "/dev/null" are distinguishable.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir()
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    git("init -q -b main", repo); git("add -A", repo); git("commit -qm i", repo)
+    seen = Path(d) / "stdin.txt"
+    stub = Path(d) / "omp"
+    stub.write_text(f"#!/bin/sh\nreadlink /proc/self/fd/0 > {seen}\n"
+                    "printf 'anthropic (claude)\\n  5h window: 10.0%% used\\n'\n")
+    stub.chmod(0o755)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   '[roles.builder]\nmodel="anthropic/b"\n[roles.reviewer]\nmodel="openai-codex/c"\n')
+    child = f"""
+import json, subprocess, sys
+sys.argv = ['selftest']
+import importlib.util
+spec = importlib.util.spec_from_file_location('fm', {str(ROOT / 'forge.py')!r})
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+m.OMP = {str(stub)!r}
+f = m.Forge(__import__('pathlib').Path({str(cfg)!r}))
+under = f.quota_ok()
+def boom(*a, **k):
+    raise subprocess.TimeoutExpired('omp usage', 120)
+f.sh = boom
+# Every vendor over the floor, so a run that still reads usage pauses and one that cannot read it does not.
+open({str(stub)!r}, 'w').write("#!/bin/sh\\nprintf 'anthropic (claude)\\\\n  5h window: 99.0%% used\\\\ncodex (openai)\\\\n  weekly: 99.0%% used\\\\n'\\n")
+print(json.dumps({{'under_floor': under, 'on_timeout': f.quota_ok()}}))
+"""
+    p = subprocess.Popen([sys.executable, "-c", child], stdin=subprocess.PIPE,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    so, se = p.communicate(timeout=120)
+    got = json.loads(so.strip().splitlines()[-1]) if so.strip() else {}
+    check("the usage check does not inherit the lane's stdin",
+          seen.read_text().strip() == "/dev/null", seen.read_text().strip() + " " + se[-300:])
+    check("a vendor under the floor keeps the lane running", got.get("under_floor") is True, so + se[-300:])
+    check("a usage check that times out does not kill the lane", got.get("on_timeout") is True, so + se[-300:])
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")

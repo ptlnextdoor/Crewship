@@ -244,7 +244,15 @@ class Forge:
     def quota_ok(self) -> bool:
         """Stop spending when the shared Claude/Codex windows are nearly used (the owner works too)."""
         floor = self.cfg.get("limits", {}).get("max_window_used_pct", 85)
-        r = subprocess.run([OMP, "usage"], capture_output=True, text=True, timeout=120)
+        # Through sh(): stdin from /dev/null (`omp` waits for EOF on an inherited pipe, the reason
+        # _agent_once and sh() already pass DEVNULL) and the lane's PATH/env. quota_ok() is called
+        # outside lane_loop()'s try, so an exception here kills the lane process instead of pausing
+        # it; a usage reading we cannot take must not stop work the vendor would still serve.
+        try:
+            r = self.sh(f"'{OMP}' usage", timeout=120)
+        except subprocess.TimeoutExpired:
+            self.log("quota: `omp usage` gave no answer in 120 s; continuing on the per-role fallback")
+            return True
         # Pause only when every vendor the roles use is over the floor; one vendor out is handled
         # by per-role fallback. A vendor is over when any of its windows passes the floor.
         over = {}
