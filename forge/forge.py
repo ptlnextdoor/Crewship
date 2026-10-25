@@ -275,6 +275,25 @@ class Forge:
             return False
         return True
 
+    def disk_ok(self) -> bool:
+        """A build needs room on disk. Out of space, cargo fails the gate exactly like wrong code does, so the
+        repair session, the attempt and the retry are all spent on ENOSPC - and four lanes hit it in the same
+        minute, which burns the queue to `blocked` in three cycles. This box: 177 of 193 GB used, 17 GB free,
+        with 106 GB of it the four lanes' cargo target dirs. prune_target() reclaims the loop's own leavings
+        (25.2 GB / 869 files in lane 1's dir today), so prune first and wait only if that was not enough."""
+        floor = float(self.cfg.get("limits", {}).get("min_free_gb", 10))
+        tdir = self.env.get("CARGO_TARGET_DIR", "")
+        where = Path(tdir) if tdir and Path(tdir).exists() else self.repo
+        if shutil.disk_usage(where).free >= floor * 1e9:
+            return True
+        self.prune_target()
+        free = shutil.disk_usage(where).free / 1e9
+        if free < floor:
+            self.log(f"disk: {free:.1f} GB free at {where}, floor {floor} GB; not starting a build")
+            return False
+        self.log(f"disk: pruning build artifacts brought {where} back to {free:.1f} GB free")
+        return True
+
     def past_deadline(self) -> bool:
         d = self.cfg.get("limits", {}).get("deadline")
         return bool(d) and dt.datetime.now(UTC) >= dt.datetime.fromisoformat(d.replace("Z", "+00:00"))
@@ -763,7 +782,7 @@ class Forge:
                 if self.lane == 1 and self.state.get("steward_cycle") != self.state["cycle"]:
                     self.steward()
                 return
-            if not self.quota_ok():
+            if not self.quota_ok() or not self.disk_ok():
                 time.sleep(900)
                 continue
             try:

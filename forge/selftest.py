@@ -604,6 +604,25 @@ with tempfile.TemporaryDirectory() as d:
     check("a cycle past the deadline claims nothing",
           turns == [] and "status: open" in (repo / "tickets/0001-t.md").read_text(), str(turns))
 
+# 14. A lane must not start a build it has no room for: out of space the gate fails like wrong code, and the
+# repair session, the attempt and the retry are all spent on ENOSPC. The loop's own prune runs first - this
+# box is at 92% (17 GB free) with 106 GB in the four lanes' cargo target dirs, 25.2 GB of it prunable.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir(parents=True)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[limits]\nmin_free_gb=0\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    logged: list[str] = []
+    pruned: list[int] = []
+    f.log = logged.append
+    f.prune_target = lambda: pruned.append(1)
+    check("a lane with room on disk starts its cycle without pruning", f.disk_ok() and not pruned, str(logged))
+    f.cfg["limits"]["min_free_gb"] = 10 ** 9  # no filesystem has an exabyte free
+    check("a lane with no room prunes, then waits instead of building",
+          not f.disk_ok() and pruned == [1] and "floor" in logged[-1], f"{pruned} {logged}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
