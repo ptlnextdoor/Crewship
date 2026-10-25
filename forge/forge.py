@@ -402,6 +402,15 @@ class Forge:
         url = self.gh(f"pr create --base main --head {branch} --title {title} --label forge", cwd=wt, body=body)
         if not url.startswith("http"):
             url = self.gh(f"pr create --base main --head {branch} --title {title}", cwd=wt, body=body)
+        if not url.startswith("http"):
+            # `pr create` fails when the branch already has a PR, usually one the builder opened itself
+            # (reflex1 0009 and 0010, 2026-10-23). Adopting it beats running blind: without a handle the
+            # gate result and the review are posted nowhere, a failed attempt leaves the PR open with no
+            # reason on it, and landing falls to the local merge path that never deletes the remote
+            # branch (reflex1 #5 is still open). No such PR means empty output and today's behaviour.
+            url = self.gh(f"pr view {branch} --json url --jq .url", cwd=wt)
+            if url.startswith("http"):
+                self.log(f"adopted the PR already open for {branch}")
         if url.startswith("http"):
             self.log(f"PR {url}")
         return url if url.startswith("http") else ""

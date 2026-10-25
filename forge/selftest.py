@@ -240,6 +240,30 @@ with tempfile.TemporaryDirectory() as d:
           ok and not sessions and (wt / "PROGRESS.md").read_text() == "base\nanother lane\n"
           and (wt / "src.rs").exists(), f"ok={ok} sessions={sessions}")
 
+# 4n. `pr create` fails when the branch already has a PR (the builder opened one itself: reflex1 0009
+# and 0010 on 2026-10-23, PR #5 still open). forge must adopt that PR instead of running without a handle.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "PROGRESS.md").write_text("base\n")
+    (repo / "tickets").mkdir(); t = repo / "tickets/0009-serve-http.md"; t.write_text("status: in_progress\n---\n# serve http\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    calls = []
+    def gh_existing(args, cwd=None, body=None):
+        calls.append(args.split()[1])
+        return "" if args.startswith("pr create") else "https://github.com/o/r/pull/5"
+    f.sh = lambda cmd, cwd=None, timeout=600, check=False: subprocess.CompletedProcess(cmd, 0, "", "")
+    f.gh = gh_existing
+    url = f.pr_open(repo, "forge/l2-00001-0009-serve-http", t, "builder")
+    check("a branch that already has a PR is adopted, not run blind",
+          url == "https://github.com/o/r/pull/5" and calls == ["create", "create", "view"], f"url={url!r} calls={calls}")
+    f.gh = lambda args, cwd=None, body=None: ""
+    check("no PR anywhere still returns no handle", f.pr_open(repo, "b", t, "builder") == "")
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
