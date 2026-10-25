@@ -567,8 +567,8 @@ class Forge:
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
-        self.state["steward_cycle"] = self.state["cycle"]
         self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
+        self.state["steward_cycle"] = self.state["cycle"]
         self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
         self.discard_strays("steward")
         self.push()
