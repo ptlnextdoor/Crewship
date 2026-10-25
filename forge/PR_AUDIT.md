@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #59 · 2026-10-25T20:50:29Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #59 forge: a lost claim race rewinds only this lane's status commit
+What it changes: when `claim()`'s push of the `in_progress` status commit fails, it now runs `git reset --hard <HEAD before the status commit>` instead of `git reset --hard origin/main`, so unpushed local main commits survive. Adds selftest 12 and a README row.
+Findings:
+- medium forge/forge.py:394 Regression: a commit the remote will never accept now wedges the lane for good. In base, `claim()`'s reset to origin/main was the only path that dropped such a commit. `push()` (:342-350) retries through `sync_main()`, which keeps local commits since #52, and `sync_main()` resets only on a merge conflict (:362-366). A refusable commit can reach local main through `land()`'s local-merge fallback (:502-503). That path ignores whether `push()` succeeded, and `cycle()` then commits `done` on top (:585-586). If GitHub refuses the content outright (GH001 file >100 MB, a repository rule, a hook), every later push carries the same commit and gets `[remote rejected]`. Reproduced with a throwaway fixture: a pre-receive hook refuses any push that adds `huge.bin`, an unpushable commit sits on local main, and another clone has advanced origin. Base: one rejected push, then the lane claims 0004. PR head: six rejected pushes, `claim()` returns None and `huge.bin` stays on local main. Every later cycle repeats this and logs the idle line "no open ticket to claim; sleeping" (:524), so nothing shows the lane is stuck. A restart does not clear it, because `recover()` only runs `sync_main()` and `push()` (:665, :701). On lane 1, the steward still runs every 4 cycles (:760-761), spending a 30-minute session whose output can never be pushed. Not seen in reflex1: the token has `workflow` scope, the repo is private with no branch protection or rulesets, and the largest blob is 5.8 MB (`bench/models/*.pt`). But builders do commit model files, so the 100 MB limit is reachable.
+- low forge/selftest.py:563-565 Test 12 does not test what its name says. A `pre-receive` hook that runs `exit 1` makes every push fail with `[remote rejected] (pre-receive hook declined)`. That is the refused-content case from the finding above, not a lost race, which git reports as `[rejected] (fetch first)`. So the test locks in the wedge as the intended behavior. The check does catch the bug: it passes at bb5afab3 and fails against base forge.py (`FAIL a lost claim race keeps this lane's unpushed main work`).
+- low forge/README.md:60, forge/forge.py:390-393 The evidence overstates the problem. The loss needs unpushed main commits at claim time. I traced every commit to local main: plan :337, land :502, done :585, fail :636, steward :646 and recover :696. Each is followed by `push()`, which logs "push failed after retries" when it gives up, and that log line has existed since 0166d006 introduced lanes. reflex1's forge.log covers the whole run (2026-10-23T02:56Z to 2026-10-24T18:43Z, 1030 lines) and has 0 such lines. "124 claims" is right (the reflex1 git log has 124 `starts` commits), but lost races are never logged, so "every one ... raced three other lanes" was never measured. The loss is real but was never observed.
+- nit forge/forge.py:394 `before or 'origin/main'` is a fallback that never runs: `git rev-parse HEAD` always prints a hash in a lane clone whose main has commits. If it ever did run, it would bring back the behavior this PR removes.
+- ok Pass 1 otherwise clean. Not touched: gate, `touched_protected()`, protected paths, reviewer, prompts, quota and GPU. `before` is a git SHA put into the shell command, so no ticket text reaches it. `claim()` works only in the lane's own clone, so nothing shared is written. `sh()` does not raise on a non-zero exit, and its `TimeoutExpired` on push existed before this PR. Commits kept after a lost race are this lane's planner, steward or status commits. They already went to origin with a winning claim push in base, so no new class of content reaches main.
+- sibling #48 (base `forge`; `push()`, `land()`, README, selftest) works on the same unpushed-main concern from the push and land side. It does not contradict or duplicate #59, and it does not fix the wedge: its `push()` merges origin and retries, and a refused push stays refused. Both append a row to the end of README's reliability table, so expect a textual conflict only. No change needed on either side for this pair.
+- siblings #47 #44 #42 #40 #39 #31 #28 #25 #23 #20 #19 #16 #9 #8 #7 #6 #5 #3 #1 (base `forge`): I grepped each diff for claim, reset --hard, rev-parse, unpushed, sync_main and push hunks. None touches `claim()`. #40 changes only an existing `f.sync_main = lambda: None` selftest stub. Only README and selftest adjacency conflicts are expected.
+Change needed (only for MERGE WITH CHANGE): a refused push resets as before, and only a lost race keeps local work. Applied in a throwaway tree: the full selftest passes, the rewritten test 12 still fails against base forge.py, and the poison fixture claims 0004 after one rejected push.
+1. forge/forge.py:388-389, replace
+   `            if self.sh("git push -q origin main", timeout=120).returncode == 0:`
+   with
+   `            r = self.sh("git push -q origin main", timeout=120)`
+   `            if r.returncode == 0:`
+2. forge/forge.py:393: replace the comment sentence "124 claims landed in reflex1, each racing three other lanes." with "A push the remote refuses outright (`[remote rejected]`: size limit, hook, rule) fails every retry the same way, so it still resets to origin/main, or the lane never claims again."
+3. forge/forge.py:394: replace it with
+   `            self.sh(f"git reset -q --hard {'origin/main' if '[remote rejected]' in r.stderr else before}")`
+4. forge/selftest.py:563-565: replace the comment and the two `pre-receive` hook lines with a real lost race:
+   `    # Another lane pushed first and this lane never fetches it: every push it makes is a non-fast-forward.`
+   `    other = Path(d) / "other"`
+   `    git(f"clone -q {origin} {other}", Path(d))`
+   `    (other / "PROGRESS.md").write_text("another lane\n")`
+   `    git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)`
+   and after `    f = forge.Forge(cfg)` (:571) add `    f.sync_main = lambda: None`.
+5. forge/README.md:60: make the rule cell "A lane that loses the claim race rewinds to the commit it started from, not to `origin/main`; a push the remote refuses outright (`[remote rejected]`) still resets to `origin/main`". Replace the trailing parenthetical with "(never hit in reflex1: its log has no `push failed after retries`, which is what leaves main commits unpushed)".
+Residual after the change: GitHub can report a server-side ref-lock race as `[remote rejected] (cannot lock ref ...)`. That case takes the origin/main reset, which is base behavior and not a wedge.
+
+
 ## PR #58 · 2026-10-25T19:47:31Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
