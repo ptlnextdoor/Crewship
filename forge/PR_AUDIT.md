@@ -2,6 +2,38 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #40 · 2026-10-25T01:44:05Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #40 forge: a timed-out command dies as a process group and returns rc 124
+What it changes: `Forge.sh()` changes from `subprocess.run(timeout=)` to `Popen(start_new_session=True)`. On timeout it sends SIGTERM to the process group, waits 5 s, sends SIGKILL, and returns rc 124 with a `TIMEOUT` line in front of stdout instead of raising `TimeoutExpired`. Every shell command in the loop goes through it (claim, push, gh, gate, worktree, recover). Also adds a README row and selftest 4l.
+Findings:
+- medium forge/forge.py:179 After the kill, the code calls `p.communicate()` with no timeout. It blocks until every process holding the stdout/stderr pipes exits. `killpg` only reaches the shell's own process group, so a child that moved to another group or session survives the kill and keeps the pipe open. I ran the PR's `sh()` in memory with timeout=2: `setsid sleep 20 & wait` came back after 20.0 s and `timeout 20 sleep 100` (coreutils `timeout` calls setpgid) after 20.0 s. The old `subprocess.run` raised at 2.0 s in both cases. The gate runs builder-written code: `cargo test --workspace` and `cargo run -p reflex-bench` in reflex1's gate.sh. A Rust child spawned with `process_group(0)` or setsid inherits stdout by default. So a test that leaks a long-lived helper and then hangs blocks the lane inside `sh()` forever. The ticket stays `in_progress lane=N`, the worktree stays, and `finally`/`recover()` never run. forge-watchdog@ watches the shared `base_home/forge.log`, which the other lanes keep writing, so it never restarts the service. The old code was bounded at the deadline. (`_agent_once`:225 already has the same pattern; that is not part of this diff.)
+- low forge/forge.py:180, 307, 516 The `TIMEOUT` line goes at the head of stdout, but callers keep only the tail: `gate()` returns `(stdout + stderr)[-5000:]`, the PR comment keeps `[-3500:]`, and the ticket note `gout[-2500:]`. Test: 6000 chars of output and then a hang; `TIMEOUT` was missing from what `gate()` returned. reflex1's passing gate output today is 1.7–2.4 KB (gate comments on reflex1 PRs #11, #13, #14, #29), so the ticket note keeps the cause only while the hung run printed less than about 2.5 KB. Once the line is cut, the repair builder sees only "The gate failed" with no timeout cause, and rc 124 is shown nowhere. That breaks the README's "failing the attempt with a reason".
+- low forge/forge.py:310, 366 `sh()` no longer raises on timeout, so callers that ignore the return code now carry on with partial output. Before, the exception aborted the cycle (fail closed).
+  - `touched_protected` splits stdout. On timeout its file list is the marker's words plus a partial list of names, so the protected-path check fails open. Triggering this needs `git diff --name-only` to run longer than 600 s, which is not realistic; listed for which way it fails.
+  - `claim()` sometimes times out on a push that origin had already accepted. The lane now runs `git reset --hard origin/main` and claims the next ticket. The first ticket stays `in_progress lane=N` until that lane's next `recover()` (a restart, a cycle error or quota). Before, `TimeoutExpired` sent `lane_loop` straight into `recover()`, which set it back to retry.
+- low forge/forge.py:166 `start_new_session=True` takes the command out of the terminal's foreground group, and the new Popen code does no cleanup when a non-timeout exception hits (`subprocess.run` killed the child on any exception). Ctrl-C during `forge.py once` leaves the gate tree running. The systemd path is unaffected: forge@.service sets no KillMode, and the default control-group mode kills new-session children too.
+- info What I traced as correct: a gate timeout now returns rc 124, goes to the repair builder, then `fail()`. That closes the PR and counts an attempt, so `max_attempts` bounds it. Before, `TimeoutExpired` went to `recover()`, whose `## forge-recover` note is not counted by `attempts()` (it counts `"## forge "`), so a ticket whose gate always times out would retry forever, and its PR stayed open. The log confirms the incident: `forge.log` lines 137 and 281 show `cycle error: TimeoutExpired ... './gate.sh'`, then `recovered 0012 -> retry`. The old path left the background child running (`sleep 300` survived `subprocess.run`'s timeout in my run). No change to gate.sh, protected paths, prompts, reviewer, quota or GPU caps. The selftest at the PR head (58295d1) passes in a throwaway copy, including the new 4l.
+- info sibling #39 (same base) adds its README row at the same table end and its own selftest section, also labelled `4l`, at the same insertion point after 4k (selftest.py:206). Both edits conflict as text but not in behavior. Whichever PR lands second rebases and renumbers its section to 4m. No change to this PR's text is needed for this.
+- nit forge/forge.py:161-165, 173-178 The SIGTERM → 5 s → SIGKILL block repeats `_agent_once`:218-225, and the 5-line comment restates the README row. Not required.
+Change needed: in forge/forge.py, replace lines 179-180 (`so, se = p.communicate()` / `so, rc = f"TIMEOUT after ...` ) with:
+```python
+            try:
+                so, se = p.communicate(timeout=30)
+            except subprocess.TimeoutExpired as e:  # a descendant that left the group still holds the pipe
+                p.stdout.close(); p.stderr.close(); p.wait()
+                so, se = (e.stdout or b"").decode(errors="replace"), (e.stderr or b"").decode(errors="replace")
+            se, rc = f"{se or ''}\nTIMEOUT after {timeout}s (process group killed)", 124
+```
+and in forge/selftest.py:218 change `"TIMEOUT" in r.stdout` to `"TIMEOUT" in r.stderr`. I checked this edit in memory:
+- The `setsid sleep 90` escapee case returns at 37.1 s with rc 124 and keeps the partial stdout (`before\n`) and stderr.
+- The 6000-char case keeps `TIMEOUT` within the `[-5000:][-2500:]` tail.
+- The plain background-child case returns rc 124 in 6.0 s with the child killed.
+
+
 ## PR #39 · 2026-10-25T00:35:21Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
