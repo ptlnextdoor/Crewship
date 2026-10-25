@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #62 · 2026-10-25T23:18:19Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #62 forge: a prune that cannot read the workspace says so
+What it changes: `prune_target()` (forge.py:648-656) now checks the `cargo metadata` result. On a nonzero rc or empty stdout it logs `prune: cargo metadata failed (rc=N), nothing pruned: <last 200 chars of stderr>` and returns. Before, it fell back to `{"packages": []}`, so nothing matched and nothing was logged. The PR also adds README row 63 and selftest 15.
+Findings:
+- low forge/README.md:63 The failure column reports an incident that did not happen. It says "the prune matched files against an empty package list ... while 869 prunable files (25.2 GB) sat in that same target dir". Production metadata does not fail:
+  - forge.py:93 puts `~/.cargo/bin` on the lanes' PATH.
+  - `cargo metadata --format-version 1 --no-deps` in ~/Dev/reflex1 returns rc 0 with 5 packages.
+  - The PR head's `prune_target()`, run against the live config with `Path.unlink` stubbed, selects 869 files and logs nothing. Those 869 files (25.2 GB) are exactly what a working prune deletes, so they cannot be evidence that the package list was empty.
+  The PR body's only evidence is forge.log:1031 at 22:08:24Z, and that line came from a script, not a lane:
+  - It shows `floor 50.0 GB`, but ~/.config/forge/reflex1.toml sets no `min_free_gb` (the default is 10).
+  - It comes before `lane 1 start`, and `lane_loop` logs that line before any `disk_ok()` call.
+  - The live loop ended at forge.log:1030 (2026-10-24T18:43:52Z).
+  - The mtime of `reflex1-target/debug/deps` is still 2026-10-24 18:31:28. [INFERENCE] That prune was stubbed, not failing.
+  The code change is still worth it as a guard for a broken manifest or toolchain. The README just must not present it as an observed failure, because scouts and auditors read this table as provenance.
+- info forge/forge.py:648-656 Traced every input case. The healthy path selects the same files as before (869 files, no new log line, see above).
+  - rc≠0 with empty stdout: before, nothing was deleted and nothing logged; now nothing is deleted and one line is logged.
+  - rc 0 with whitespace-only stdout: before, it raised `JSONDecodeError`; now it logs and returns.
+  - rc 0 with non-JSON stdout: still raises, same as base.
+  - `TimeoutExpired` from `sh()` still propagates, same as base.
+  The only addition is an early return, so the change can never delete more. No ticket text reaches a command: the f-string feeds `self.log` only. forge.log does not feed any prompt (the steward's STATE is `state.json`, :674). The only reader is `status`, which tails 8 lines (:825).
+- info forge/forge.py:629,732,289 All three callers (`cycle()`'s `finally`, the end of `recover()`, `disk_ok()`) now log one line per call on failure. That is bounded: once per cycle, once per lane start, once per 15-minute disk wait. stderr is capped at 200 chars. No new state, so no lane writes anything shared. The PR does not touch the gate, `touched_protected()`, the protected paths, the reviewer, prompts, quota or `gpu.py`.
+- info forge/selftest.py:626-644 I ran it via `git archive` of the head (39630953): `py_compile` passes and "forge selftest: all checks passed". With base forge.py (2f1cea87) plus the PR's selftest, exactly the new check fails (`[]`), so the test tells the two versions apart. It runs with real `unlink`, but only on a temp `CARGO_TARGET_DIR` from the config, which overrides the runner's env (forge.py:93-94). It passes whether cargo is missing (rc 127) or present (rc 101, no Cargo.toml).
+- nit forge/forge.py:654 A multi-line cargo error goes into forge.log with newlines inside one entry. Smoke with a broken Cargo.toml logged a 5-line entry (`error: ...`, ` --> Cargo.toml:3:11`, ...). The existing `stderr.strip()[:200]` calls at :369, :454 and :503 do the same, so this is not a new class of problem. The tail (`[-200:]`) differs from their head slice. Not blocking.
+- nit forge/forge.py:650-653 The 4-line comment tells the same story as the README row and the selftest comment, including "the 25.2 GB ... stay where they are", which the evidence above contradicts. This matches house style. Not required.
+- sibling I grepped all 20 other open PRs on base `forge` for `prune`, `cargo metadata`, `disk_ok`, `min_free`, `CARGO_TARGET_DIR`, `def sh` and selftest headers `# 1x.`. None touches `prune_target`, and none adds a section 15.
+  - #40 makes `sh()` return rc 124 with `TIMEOUT ...` on stdout instead of raising. The two are complementary: with #40 alone, `json.loads("TIMEOUT ...")` would raise out of `disk_ok()`, which runs outside `lane_loop`'s try. With #62, that case is logged and returns.
+  - The README row goes at the same table end as other siblings' rows. That is a text conflict only. Neither side needs to change.
+Change needed (only for MERGE WITH CHANGE): in forge/README.md, replace line 63 with:
+`| A prune that cannot read the workspace (`cargo metadata` fails) logs the failure instead of deleting nothing in silence | a lane blocked by the disk floor with no way to tell a prune that never ran from one that found nothing to delete: with no package list nothing matches, and `disk_ok()` logs only "not starting a build" (not seen in reflex1: forge.py puts `~/.cargo/bin` on PATH and `cargo metadata` there selects all 869 prunable files) |`
+
+
 ## PR #61 · 2026-10-25T22:18:54Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
