@@ -37,6 +37,11 @@ from pathlib import Path
 
 OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 UTC = dt.timezone.utc
+# Provider-side failures that end a session with nothing done and are not about quota: the session is
+# worth retrying on another model right away. Kept to strings a provider emits, not bare status codes,
+# so a diff or test output the session quotes cannot trigger a failover.
+PROVIDER_ERROR = (r"overloaded_error|api_error|server_error|internal server error|service unavailable"
+                  r"|bad gateway|upstream connect error|connection reset by peer")
 
 
 class QuotaExhausted(Exception):
@@ -169,13 +174,20 @@ class Forge:
         `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
-        for model in chain:
+        for i, model in enumerate(chain):
             if model.split("/")[0] in self.exhausted:
                 continue
             rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
             if re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", text[-3000:], re.I) and rc != 0:
                 self.exhausted[model.split("/")[0]] = time.time()
                 self.log(f"quota: {model} exhausted; trying the next model for {role}")
+                continue
+            # A provider 5xx/overload ends the session having done nothing, and the vendor still has
+            # quota, so it is not marked exhausted: move down the chain instead of charging the ticket
+            # an attempt. Only while a usable model is left, so a chain of one returns the error as before.
+            if rc != 0 and re.search(PROVIDER_ERROR, text[-3000:], re.I) \
+                    and any(m.split("/")[0] not in self.exhausted for m in chain[i + 1:]):
+                self.log(f"provider error on {model}; trying the next model for {role}")
                 continue
             self.last_model[role] = model
             return rc, text
