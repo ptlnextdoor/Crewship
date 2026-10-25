@@ -2,6 +2,39 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #61 · 2026-10-25T22:18:54Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #61 forge: a lane prunes and waits instead of building on a full disk
+What it changes: `lane_loop` now checks `quota_ok() and disk_ok()` before it starts a cycle. The new `disk_ok()` (forge.py:278-295) compares free space with `limits.min_free_gb` (default 10, in decimal GB). It measures the lane's `CARGO_TARGET_DIR` if that exists, otherwise `self.repo`. When free space is under the floor it runs `prune_target()` once and measures again. If space is still short, it logs `disk: ... floor ...` and the lane sleeps 900 s. The PR also adds README row 62 and selftest 14.
+Findings:
+- info forge/forge.py:785 Traced end to end. The check runs at the top of `lane_loop`, after the mtime check and the deadline check and before `cycle()`. A lane that is short of disk has not started anything:
+  - no `claim()`, so no ticket is set to `in_progress`
+  - no `git worktree add`, branch or PR
+  - no agent session, so no quota is spent
+  The wait cannot outlive the deadline: the next iteration checks `past_deadline()` first, at most 900 s late, the same as the existing quota pause. It also cannot block a code reload, because the mtime check runs first. The change does not touch the gate, `touched_protected()`, the reviewer, the prompts, the protected paths or `gpu.py`. Nothing from ticket text reaches a shell. The only addition is an f-string log line built from config values and `shutil.disk_usage`.
+- info forge/forge.py:289 `prune_target()` stays inside the lane's own target dir. Lanes 2-4 get the suffix `-laneK` (forge.py:95-96), and `Path(tdir).glob("*/deps/*")` for lane 1 (`reflex1-target`) does not match `reflex1-target-laneK`. A lane runs one cycle at a time, so no build of its own is running while it prunes. A planner turn run by another lane builds in that lane's repo and target dir, not this one.
+- info forge/forge.py:289 Pruning first does reclaim space. `prune_target()` already runs in `cycle()`'s `finally` and in `recover()`, but steward and planner turns build in the main checkout and nothing prunes after them. Evidence from lane 1 after its last cycle ended (MERGED 0128 at 18:31:05Z):
+  - 96 files and 2.55 GB with mtime after 18:31:06Z were left in lane 1's target dir. That is output of the steward turns at 18:31 and 18:38.
+  - Dry-running `prune_target`'s selection logic against today's metadata finds 869 files and 25.2 GB in lane 1, which matches the PR's figure. The other lanes have 20.1, 17.8 and 17.3 GB.
+- info forge/forge.py:278-295 An exception from `prune_target()` here is outside `lane_loop`'s `try`. Possible causes are a `cargo metadata` timeout (600 s) or an unlink error. The lane process would exit, and `run()` restarts it after 30 s. `recover()` already calls `prune_target()` outside that `try` on every lane start, so this adds no new failure class, and no ticket or worktree is held at this point.
+- low README.md:62, forge/forge.py:279-283 The failure column and the docstring present the ENOSPC cascade ("on all four lanes in the same minute, so three cycles turn the queue to `blocked`") as if it had happened. It never happened in reflex1:
+  - none of the 271 session logs under `~/.local/state/forge/reflex1/{,lane*/}sessions` contain `No space left on device` or `ENOSPC`
+  - `forge.log` has no such line
+  Row 60 (the claim race) marks its unobserved failure as "never hit in reflex1"; this row does not. The disk figures are real: `df` shows 17.9 GB available, 92% used, and `du` of the four target dirs gives 33+26+24+23 = 106 GB. Those numbers are GiB from `df -h`/`du -h`, while the floor is decimal GB. Not merge-blocking.
+- low forge/forge.py:285 The floor is checked per lane at the start of a cycle. Nothing reserves space for builds that run at the same time. Four lanes can each start at a little over 10 GB free and together still run out mid-build. Lane 1 wrote 3.06 GB between 18:00 and 18:31Z of one cycle. So the row's claim that it prevents "a full disk failing the gate" holds only when space is already below the floor at cycle start. This is still strictly better than the base, which never checks.
+- low forge/forge.py:279 The 10 GB default applies to every project config, with no opt-in. This box has 17.9 GB free, so lanes would start now. A target dir on a filesystem smaller than 10 GB would make the lanes idle until the deadline. That fails safe: no spend, one log line per lane every 15 min, visible in `forge.py status`. The live-status board is not updated during the wait and keeps saying "between cycles".
+- info forge/selftest.py:607-624 I exported the PR head 11e03e5e with `git archive` and ran `python3 selftest.py`: "all checks passed", including both new checks. With the base 0b021639 forge.py in its place, the new checks fail with `AttributeError: 'Forge' object has no attribute 'disk_ok'`. The test stubs `prune_target`, so it cannot delete real artifacts even when `CARGO_TARGET_DIR` is set in the runner's environment. It covers `disk_ok()` directly but not the `lane_loop` wiring, which is one line.
+- info Siblings: 20 other open PRs target base `forge`, and all touch README.md, forge.py or selftest.py. I grepped their diffs for `disk`, `prune`, `ENOSPC`, `min_free`, `quota_ok()`, `sleep(900)` and numbered selftest headers:
+  - No sibling touches `disk_ok`, `prune_target` or the `lane_loop` quota line.
+  - #39 (refreshes the `exhausted` timestamp) and #20 (adds the `xai` vendor) edit the inside of `quota_ok()`. Both are orthogonal.
+  - No sibling adds selftest section 14.
+  - Several add rows to the same README table (#23's row included). That is a text conflict for whichever PR lands second, not a contradiction or a duplicate.
+Change needed: none
+
+
 ## PR #60 · 2026-10-25T21:14:02Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
