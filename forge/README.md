@@ -51,6 +51,7 @@ Reliability rules, each mapped to a failure it prevents:
 | A branch landed by the local-merge fallback is deleted from the remote once its tip is in `origin/main` | landed branches piling up on the remote because only `gh pr merge --delete-branch` removes them and 75 of reflex1's merges fell back to the local path (64 of its 106 remote `forge/` branches are already in main) |
 | A cycle that ends in an exception closes its PR with the error on it | abandoned PRs with no evidence of what happened: reflex1 PRs #12 and #27 are the two cycles whose gate hit the 30-minute timeout, both still open with no gate comment, while the ticket went back to the queue without a link to them |
 | Any lane refills the ticket queue when it runs dry, one planner turn at a time (`plan.lock` in the shared state dir) | three lanes idling while lane 1 is mid-build, because only lane 1 checked the queue and only between its own cycles: 44 "no open ticket to claim" lines on lanes 2-4 in reflex1's log, lane 4 idle 19:26-19:44 on 2026-10-23 |
+| A PR GitHub reports as `CONFLICTING` goes straight to the local landing path, whose `git merge` decides | 30 s of polling and a merge call that cannot succeed on every conflicted PR (25 conflict failures in reflex1's log, 11 API calls each; 14 of them merged cleanly on the local path seconds later) |
 
 Sources: Anthropic, "Effective harnesses for long-running agents" (2025) and "Harness design for long-running application development" (2026); loop-engineering practice (external gate the agent cannot edit, durable notes, budget caps).
 
