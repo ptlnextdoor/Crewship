@@ -2,6 +2,52 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #45 · 2026-10-25T06:18:52Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #45 forge: delete the remote branch when the local merge lands it
+What it changes: on `land()`'s local-merge fallback (taken when there is no PR or `gh pr merge` fails), after `self.push()` forge now runs `git merge-base --is-ancestor {branch} origin/main` and, if the branch is in main, `git push -q origin --delete {branch}` (forge.py:454-458 at PR head). It also adds README row :51 and selftest 4o.
+Findings:
+- low forge/forge.py:422-424 (pr_merge, unchanged by the diff) The comment still says the local path "never deletes the remote branch". After this PR that is false, and it sits next to code that now does exactly that. These comments are what later scout agents cite as fact: #44 already repeats the claim. The edit below removes the clause.
+- low forge/forge.py:458 The new delete is a network call that runs after the merge has reached origin/main. On the base code `sh` (:160-162) calls `subprocess.run(timeout=)` and does not catch `TimeoutExpired`. Trace if the delete hangs for 120 s:
+  - the exception leaves `land()` and runs `cycle()`'s finally block;
+  - `lane_loop` catches it at :688 and calls `recover()`;
+  - the ticket still reads `in_progress lane=N` (the done status at :532 was never reached), so `recover()` sets it to `retry` with "not counted as an attempt";
+  - a lane then rebuilds a ticket whose code is already on main.
+  The same window already exists from `self.push()` at :453 and `sync_main()` at :531. Open sibling #40 makes `sh` return rc 124 instead of raising, which closes the whole class. Not blocking.
+- info forge/forge.py:457 The guard checks the local branch tip, not the remote ref it deletes. The two differ only when the remote head diverged, for example a restart that reuses a cycle number and so a branch name (the #44 audit traced this for reflex1 PR #5). In that case a head that never landed is deleted and its orphan PR closes. GitHub keeps the commits under `refs/pull/N/head`, so nothing is lost.
+- info forge/forge.py:453-457 If the first push is rejected, `push()` calls `sync_main()`, whose `git rebase origin/main` drops the `--no-ff` merge and replays the branch commits under new SHAs. The tip is then not in origin/main and the branch is kept. Throwaway repro printed `TIP_NOT_IN_MAIN`. So on a contended push a landed branch is still left behind, but the guard always errs toward keeping it.
+- info gate, reviewer, protected paths: not touched. The delete runs only after the re-gate (:444) and after the merge reached origin/main. No prompt text changed.
+  - Injection: `{branch}` is `forge/l{lane}-{n:05d}-{tid}`, interpolated unquoted exactly as it already is in `worktree add`, `git merge` and `push --force-with-lease`. No new surface.
+  - Concurrency: branch names carry the lane number, so a lane only ever deletes its own branch.
+  - Cost: no quota, GPU or log growth.
+  - `pull_requests=false`: the existing finally-block delete (:542-543) repeats the call and fails silently (`|| true`). Harmless.
+- info verification:
+  - selftest on the PR head (diff applied to a /tmp copy of HEAD): all checks pass.
+  - On base forge.py the first 4o check fails (`refs/heads/landed` still on the remote).
+  - With the guard replaced by `if True:` the second 4o check fails. Both checks discriminate.
+  - README numbers checked: the reflex1 forge.log has 75 `gh pr merge failed` lines; the reflex1 remote has 106 `forge/` branches, 64 of them ancestors of origin/main; origin/main has 64 `forge: land` merges.
+- info siblings: I read all 18 other open PRs on `forge`; 15 share a file with this one.
+  - #44 contradicts this PR. Its forge.py comment ("landing falls to the local merge path that never deletes the remote branch") and its README row ("...the local merge that leaves the remote branch behind") become false once #45 lands. #44 should drop that clause; #45's own text is correct.
+  - #40 changes `sh` to return rc 124 on timeout, which resolves the low finding at :458. The two are compatible.
+  - No other sibling touches `land()` or `pr_merge()`.
+  - #44 and #45 both insert a README row after :50 and a selftest block before `# 5.`. That is a textual merge conflict, not a contradiction.
+- nit forge/forge.py:454-456 (slop) The 3-line comment repeats the README row's 64/106 figures. This matches the house style (`rebase_onto_main` does the same), so no change.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `pr_merge`, replace the comment lines 422-424
+```
+        # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
+        # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`, and that
+        # path never deletes the remote branch.
+```
+with
+```
+        # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
+        # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`.
+```
+
+
 ## PR #44 · 2026-10-25T05:18:24Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
