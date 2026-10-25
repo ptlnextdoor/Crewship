@@ -58,11 +58,19 @@ def open_prs() -> list[dict]:
     return json.loads(r.stdout or "[]")
 
 
-def audited(pr: int, head: str) -> bool:
-    """Already audited at this commit? Keyed by head sha so a new push re-audits."""
+def previous(pr: int) -> dict | None:
+    """The last verdict recorded for this PR's current head commit, if any. Keyed by head sha so a new push re-audits."""
     sha = sh(f"gh pr view {pr} -R {GH_REPO} --json headRefOid --jq .headRefOid").stdout.strip()
-    mark = STATE / f"pr{pr}.{sha[:12]}.json"
-    return mark.exists()
+    f = STATE / f"pr{pr}.{sha[:12]}.json"
+    return json.loads(f.read_text()) if f.exists() else None
+
+
+def needs_pass(prev: dict | None, base: str) -> bool:
+    """A gate failure is usually the base's doing - the branch no longer merges cleanly, or base's selftest
+    changed - so it is not final for this head sha. PR #28 failed the gate on 2026-10-24 and merges cleanly
+    into `forge` today, unseen for 29 h because the mark was keyed by the head sha alone. Every other
+    outcome (merged, closed, left to the owner) stays decided until the branch moves."""
+    return prev is None or (prev.get("gate") == "fail" and prev.get("base") != base)
 
 
 def mark(pr: int, verdict: dict) -> None:
@@ -182,11 +190,20 @@ def run() -> None:
     sh(f"git checkout -q {BASE} && git pull -q --rebase")
     prs = open_prs()
     log(f"{len(prs)} open PR(s) against {BASE}")
+    base = sh(f"git rev-parse origin/{BASE}").stdout.strip()
     for pr in prs:
         n = pr["number"]
-        if audited(n, pr["headRefName"]):
+        prev = previous(n)
+        if not needs_pass(prev, base):
             continue
+        if prev:  # re-check: the cheap gate decides whether the expensive audit is worth a turn
+            ok, gout = gate(pr)
+            if not ok:
+                mark(n, {**prev, "base": base, "at": now()})
+                log(f"PR #{n}: still fails the gate on {base[:8]}; not re-audited")
+                continue
         v = audit(pr)
+        v["base"] = base
         bad = touches_protected(pr)
         ok, gout = gate(pr)
         v["gate"] = "pass" if ok else "fail"
