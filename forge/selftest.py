@@ -452,6 +452,36 @@ with tempfile.TemporaryDirectory() as d:
     check("a quota recovery is not counted toward the interruption cap",
           "status: retry" in quota.read_text(), quota.read_text()[:200])
 
+# 9. reviewctl: a PR whose last pass failed the gate must be looked at again once the base branch moves - the
+# failure is usually a conflict with base, not the PR. Crewship PR #28 failed the gate on 2026-10-24, merged
+# cleanly into `forge` 29 h later, and was never re-checked because the mark is keyed by the head sha alone.
+# The re-check runs the cheap gate first: a PR that still conflicts costs no 40-minute audit session.
+with tempfile.TemporaryDirectory() as d:
+    rc = load("reviewctl_mod", ROOT / "reviewctl.py")
+    rc.STATE = Path(d)
+    rc.log = lambda m: None
+    rc.record = lambda v: None  # the real one writes PR_AUDIT.md in the checkout and pushes it
+    rc.sh = lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "newbase", "")
+    rc.open_prs = lambda: [{"number": 28, "headRefName": "b", "files": [{"path": "forge/forge.py"}]}]
+    old = {"pr": 28, "sha": "deadbeefcafe", "gate": "fail", "base": "oldbase", "verdict": "MERGE",
+           "risk": "low", "audit": "a", "at": "t"}
+    rc.previous = lambda n: old
+    calls: list[str] = []
+    rc.audit = lambda pr: (calls.append("audit"), dict(old))[1]
+    rc.mark = lambda n, v: calls.append(f"mark base={v.get('base')}")
+    rc.gate = lambda pr: (calls.append("gate"), (False, "conflicts with base"))[1]
+    rc.run()
+    check("a PR that still fails the gate on the new base is re-gated, not re-audited",
+          calls == ["gate", "mark base=newbase"], str(calls))
+    calls.clear()
+    rc.gate = lambda pr: (calls.append("gate"), (True, "ok"))[1]
+    rc.run()
+    check("a PR that merges cleanly after the base moved gets its audit", "audit" in calls, str(calls))
+    check("a decided PR is not re-run while its branch stands still",
+          not rc.needs_pass({"gate": "pass", "base": "oldbase"}, "newbase")
+          and not rc.needs_pass({"gate": "fail", "base": "newbase"}, "newbase")
+          and rc.needs_pass(None, "newbase"))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
