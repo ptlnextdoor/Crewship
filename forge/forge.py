@@ -644,7 +644,8 @@ class Forge:
             self.sh("git reset -q --hard HEAD && git clean -qfd")
 
     def recover(self, all_lanes: bool = False) -> None:
-        """After a crash or restart: this lane's in_progress tickets go back to retry, stale worktrees go.
+        """After a crash or restart: this lane's in_progress tickets go back to retry (blocked once the
+        interruptions reach max_attempts), stale worktrees go.
         `all_lanes` (the supervisor at startup, when every lane is restarting) recovers every lane's tickets."""
         self.sync_main()
         self.sh("git worktree prune")
@@ -656,10 +657,24 @@ class Forge:
             pat = rf"^status:\s*in_progress\s+lane={self.lane}\s*$"
         for p in sorted(self.tickets.glob("[!.]*.md")) if self.tickets.exists() else []:
             if re.search(pat, p.read_text(errors="replace")[:600], re.M):
-                self.set_status(p, "retry")
-                p.write_text(p.read_text() + f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n")
+                # A recovery is free because a restart between cycles is the loop's own doing. A ticket whose
+                # cycle keeps dying collects free builder sessions that way: reflex1's 0012 took 6 cycles for
+                # 3 counted attempts (two of its three recoveries followed `./gate.sh timed out after 1800
+                # seconds`), about 4.6 lane-hours never charged. Past max_attempts interruptions the cause is
+                # the ticket, not the restart, so it stops here instead of being claimed again.
+                # shortcut: one counter for every interruption, so an owner restart or a quota pause mid-cycle
+                # also spends one; resume with `status: open`. Split it per cause if that ever blocks real work.
+                hits = p.read_text().count("## forge-recover ") + 1
+                if hits >= self.cfg.get("max_attempts", 3):
+                    self.set_status(p, "blocked", f"interrupted {hits} times mid-cycle without finishing an attempt "
+                                    "(loop restart, crash or gate timeout), so the interruption is not incidental. "
+                                    "Set `status: open` to queue it again, after a look at why its cycle does not finish.")
+                    self.log(f"recovered {p.stem} -> blocked after {hits} interruptions")
+                else:
+                    self.set_status(p, "retry")
+                    p.write_text(p.read_text() + f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n")
+                    self.log(f"recovered {p.stem} -> retry")
                 self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
-                self.log(f"recovered {p.stem} -> retry")
         for wt in (self.home / "wt").glob("*") if (self.home / "wt").exists() else []:
             self.sh(f"git worktree remove --force {wt}; rm -rf {wt}")
         for b in self.sh("git branch --list 'forge/*'").stdout.split():
