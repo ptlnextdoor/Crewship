@@ -2,6 +2,34 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #48 · 2026-10-25T09:26:06Z · MERGE WITH CHANGE · risk medium · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #48 forge: a landing counts only when it reaches origin/main
+What it changes: `push()` now handles a rejected push with `git fetch` + `git merge --no-edit origin/main` instead of `sync_main()`'s rebase-or-reset. If that merge conflicts it aborts and stops retrying. `land()`'s local-merge fallback returns "" only when `merge-base --is-ancestor <branch> origin/main` holds; otherwise it `continue`s, at most 3 tries, then returns "could not land … after 3 tries". The README gains one row, and selftest 4o's assertion is flipped and 4q is added.
+
+Findings:
+- medium forge/forge.py:467-468 When `land()` gives up on a landing, it leaves the unpushed `forge: land` merge on local main. The `continue` then runs while that merge is still there: `rebase_onto_main` → gate (8–25 min) → maybe a builder session. If that iteration fails (`gate failed after updating from main`, builder could not resolve, 3rd try exhausted) or raises (gate `TimeoutExpired` → `cycle()` except → `lane_loop` → `recover()`), the next `sync_main()` rebases local main onto origin/main. When that rebase is clean it keeps the builder's commits, and the `push()` in `fail()` or `recover()` then publishes them to main. The ticket is marked retry/blocked and the PR is closed "not merged". In the gate-failure case, the published tree is the same combination the re-gate just rejected. The trigger is a landing push that fails without a merge conflict (a GitHub error lasting longer than about 26 s of retries, or 4 lost races in a row), followed by any failing later iteration. The old code had no such window: `land()` returned right after `push()`. I reproduced it on the PR head in a scratch repo. Case 1: one landing push fails without a conflict, then the re-gate fails, then `fail()` runs. Result on origin/main: `status: retry`, and the builder's `src.rs` is present. Case 2: all 3 landing pushes fail, then `fail()` runs. Same result. Case 3: the 2nd gate raises `TimeoutExpired`, then `recover()` runs. Same result. With the change below, all three leave `src.rs` off origin/main, and `python3 forge/selftest.py` still passes, including 4d, 4o and 4q. PR #40 (open) turns a gate timeout into rc 124, which routes case 3 through `fail()` too, so the window stays open either way.
+- ok forge/forge.py:312-327 I traced `push()` in all six callers: `plan`, the `land` fallback, the `cycle` done path, `fail`, `steward` and `recover`. Every caller runs `sync_main()` (`checkout main`) earlier, so the merge lands on main. Each lane has its own clone, so two lanes never write the same repo state. A conflict leaves local main diverged until the next `sync_main()` resets it. That loses the same commit the old immediate reset lost, just later. No change to `claim()`, protected paths, the gate, the reviewer or the prompts. The new `sh` strings are constants. Ticket text reaches only `self.log`.
+- ok forge/forge.py:464-466 The ancestor check is sound. A successful `git push origin main` updates the local `origin/main` tracking ref, so a merge that reached origin passes. The `pr_merge` path is unchanged. Extra spend is bounded by the existing 3-try loop: at most 2 more gate runs and builder conflict sessions per landing.
+- nit forge/forge.py:324-327 After a conflict-break, the code logs "leaving it for the caller to redo" and then "push failed after retries", but it made one attempt. Only `land()` redoes anything. For `plan`, `steward`, `fail`, the done commit and `recover`, the commit is reset away at the next `sync_main()`, the same as before this PR.
+- nit forge/forge.py:313-316 The 4-line docstring repeats the reflex1 #82/#109 story that the README row and the 4q comment already tell.
+- nit forge/selftest.py:271 Sibling PR #47 also adds a case labelled `# 4q.`. The labels collide but the cases do not contradict. Whichever PR lands second renumbers its own label. This does not affect the verdict.
+- nit forge/README.md:53 PRs #40, #44 and #47 append rows at the same place in the reliability table. That is a textual conflict only, not a contradiction. No other open PR on `forge` touches `push()`, `land()` or `sync_main()`. I grepped all 15 sibling diffs on forge.py/README/selftest.
+
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `land()`, on the not-in-origin/main path, drop the local landing merge before going round again. Replace line 467:
+```
+                self.log(f"landing {tid} did not reach origin/main; merging it again")
+```
+with:
+```
+                self.sh("git reset -q --hard origin/main")  # else a later sync_main()+push() publishes it under a failed ticket
+                self.log(f"landing {tid} did not reach origin/main; merging it again")
+```
+
+
 ## PR #47 · 2026-10-25T08:23:42Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
