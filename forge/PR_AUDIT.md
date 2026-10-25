@@ -2,6 +2,56 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #49 · 2026-10-25T10:29:49Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #49 forge: any lane refills the ticket queue when it runs dry
+What it changes: `cycle()` now calls `plan()` on every lane, not only lane 1, whenever `startable() < min_queue`. `plan()` takes a non-blocking `flock` on `<state_dir>/plan.lock`, re-syncs, re-counts, and runs the planner turn and its push while holding the lock. The PR also adds a README row and selftest 4q.
+Findings:
+- medium forge/forge.py:482 The trigger is still `startable < min_queue`, not "runs dry", and every lane now checks it at the start of every cycle. On reflex1, `min_queue = 6` and `lanes = 4` (projects/reflex1.toml), so the planner runs at almost every lane's cycle start.
+  - Planner frequency is now capped only by the lock: one Fable xhigh session (40 min timeout) can run back to back on the shared Claude plan, and while it runs that lane builds nothing.
+  - Base behaviour: at most one planner turn per lane-1 cycle. README :34 lists cutting planner turns as a reliability rule ("10 in 13 h … about 25 min each").
+  - Log evidence: in forge.log, lane 1 went into the planner at 17 of its 26 cycle starts after 05:31Z on 10-23, so the queue sat below 6 most of the time. Lanes 2-4 had 99 cycle starts, and under this PR each one is a planner trigger whenever the lock is free.
+  - Throwaway repro on a /tmp copy of the PR head (2 open tickets, min_queue=6, stub planner that adds one ticket): lanes 2, 3 and 4 each ran a planner turn in turn (`[2, 3, 4]`). The base code runs none in that case.
+  - The PR's evidence (45 sleeps, lane 4 idle 19:26-19:44) is all about an empty queue, and its README row promises "when it runs dry". The edit below makes the code match that promise.
+- low forge/forge.py:299-322 vs :600-606 `plan.lock` serializes planner turns but not `steward()`. Before this PR both ran sequentially on lane 1. Now a planner on lanes 2-4 can overlap lane 1's steward.
+  - Both write ROADMAP.md and PROGRESS.md (planner.md:37; steward.md:8-9). Whichever pushes second goes `push()` -> `sync_main()` (:334-338), which on a rebase conflict runs `git reset --hard origin/main`. That drops the whole turn, and the retry then "succeeds" with nothing left to push.
+  - The same loss already happens with other writers. forge.log shows lane-1 planner turns 14:44:44 -> 15:15:31Z and 19:43:52 -> 20:03:18Z on 10-23 each ending in "sync: local main conflicted with origin; reset to origin/main". reflex1 origin/main has no planner commit between 14:40 and 15:20; lane 3 landed 0031 at 15:09.
+  - Not blocking: the change below makes overlap rare. Follow-up: hold the same lock around `steward()`.
+- info siblings (base `forge`):
+  - #31 (`touches:` holds) makes `ready()` false for tickets that overlap in-progress work. That lowers `startable()` exactly while lanes are busy and compounds the medium finding. This PR is the side that changes, through the same edit below, which bounds lanes 2-4 to an empty queue regardless of #31.
+  - #48 rewrites `push()` to merge instead of rebase and leave a conflicting commit local. That is compatible with `plan()` pushing inside the lock. The only conflict is textual: #48's hunk context is `plan()`'s last line.
+  - #47 and #48 also add a selftest block labelled `# 4q.` at the same spot, and every open sibling appends a README row at the table end. Both are textual conflicts only; whichever lands second renumbers.
+  - No other open PR touches `plan()`, the planner trigger in `cycle()`, `claim()` or `steward()`. I read all 20 sibling diffs.
+- info checked, no issue:
+  - Gate, reviewer, protected paths and all prompts are untouched. `discard_strays("planner")` still runs after the turn, in whichever clone ran it. No ticket text reaches a new shell command.
+  - Exception path: `plan()` runs before `claim()` and before `cycle()`'s worktree/try. If `QuotaExhausted` or an error happens in the turn, it leaves the `with` (closing the file releases the flock) and goes to `lane_loop` -> `recover()`. Nothing is left `in_progress` and no worktree is left behind.
+  - The lock fd is not inherited by omp or the shell (`Popen`/`run` default `close_fds=True` at :215 and :162), so a timed-out or killed planner cannot hold it. A dead lane releases it through the kernel. The push happens inside the lock, so the next lane's re-sync sees the new tickets.
+  - `board()` returns early on lanes other than 1.
+  - `python3 forge/selftest.py` on the PR head (e572d633): all checks pass, including both 4q checks.
+- nit forge/forge.py:314 The comment "another lane filled it while we waited for the lock" is wrong: with `LOCK_NB` nothing waits. The re-check covers a planner that finished between `cycle()`'s count and taking the lock.
+- nit forge/forge.py:479-481, selftest.py:300-302 and README.md:53 These repeat the same evidence a third and fourth time, and :479 narrates the change ("not only lane 1"). The evidence is also slightly off:
+  - lanes 2-4 have 45 "no open ticket to claim" lines (12/12/21), not 44;
+  - from 19:31Z lane 1 was in gate and review of 0047, not a builder session.
+  - Also, `import fcntl` sits inside the selftest block.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `cycle()`, replace lines 479-482
+```
+        # Any lane, not only lane 1: the queue runs dry while lane 1 is mid-cycle, and lanes 2-4 then sleep
+        # 2 min at a time until it reaches this check (44 such lines in reflex1's log; lane 4 idled 18 min
+        # on 2026-10-23 while lane 1 was in a builder session). plan() itself keeps it to one turn at a time.
+        if len(self.startable()) < self.cfg.get("min_queue", 3):
+```
+with
+```
+        # Lane 1 tops the queue up to min_queue; lanes 2-4 refill only an empty queue, so the planner does
+        # not run at every lane's cycle start. plan() keeps it to one turn at a time.
+        if len(self.startable()) < (self.cfg.get("min_queue", 3) if self.lane == 1 else 1):
+```
+Verified on a /tmp copy: selftest passes, both 4q checks included, and the same repro gives one planner turn, on lane 4 once lanes 2 and 3 had claimed the two open tickets.
+
+
 ## PR #48 · 2026-10-25T09:26:06Z · MERGE WITH CHANGE · risk medium · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
