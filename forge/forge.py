@@ -382,11 +382,19 @@ class Forge:
             if not tickets:
                 return None
             t = tickets[0]
+            before = self.sh("git rev-parse HEAD").stdout.strip()
             self.set_status(t, f"in_progress lane={self.lane}")
             self.sh(f"git add {t} && git commit -qm 'forge: lane {self.lane} starts {t.stem}'")
-            if self.sh("git push -q origin main", timeout=120).returncode == 0:
+            r = self.sh("git push -q origin main", timeout=120)
+            if r.returncode == 0:
                 return t
-            self.sh("git reset -q --hard origin/main")
+            # Losing the race undoes this lane's status commit and nothing else. `git reset --hard
+            # origin/main` also dropped main commits that were not pushed yet - a planner turn's tickets,
+            # the steward's doc edits - the loss sync_main() stopped taking in #52; the next iteration's
+            # sync_main() brings origin in. A push the remote refuses outright (`[remote rejected]`: size limit,
+            # hook, rule) fails every retry the same way, so it still resets to origin/main, or the lane never
+            # claims again.
+            self.sh(f"git reset -q --hard {'origin/main' if '[remote rejected]' in r.stderr else before}")
             time.sleep(3 + self.lane * 2)
         return None
 

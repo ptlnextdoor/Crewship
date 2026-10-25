@@ -550,6 +550,38 @@ with tempfile.TemporaryDirectory() as d:
     check("a branch merged into main is left for land() to decide",
           "forge/l1-" in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
 
+# 12. Losing the claim race must cost this lane its status commit only. The reset was to origin/main, so a
+# planner turn's tickets or a steward doc edit that had not been pushed yet went with it - silently, with no
+# log line (claim() races three other lanes on every cycle; 124 claims landed in reflex1).
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0004-r.md").write_text("status: open\n\n# r\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    # Another lane pushed first and this lane never fetches it: every push it makes is a non-fast-forward.
+    other = Path(d) / "other"
+    git(f"clone -q {origin} {other}", Path(d))
+    (other / "PROGRESS.md").write_text("another lane\n")
+    git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
+    # Unpushed work on main, as after a planner turn whose push did not get through.
+    (repo / "tickets/0005-planned.md").write_text("status: open\n\n# planned by this lane\n")
+    git("add -A", repo); git("commit -qm 'forge: planner refills the ticket queue'", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.sync_main = lambda: None
+    real_sleep = forge.time.sleep
+    forge.time.sleep = lambda s: None
+    got = f.claim()
+    forge.time.sleep = real_sleep
+    check("a lost claim race keeps this lane's unpushed main work",
+          got is None and (repo / "tickets/0005-planned.md").exists(), git("log --oneline -3", repo))
+    check("a lost claim race undoes its own status change",
+          "status: open" in (repo / "tickets/0004-r.md").read_text()
+          and "starts" not in git("log --oneline -3", repo), git("log --oneline -3", repo))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
