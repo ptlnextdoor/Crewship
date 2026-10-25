@@ -310,12 +310,19 @@ class Forge:
         self.push()
 
     def push(self) -> None:
-        """Push main; other lanes push too, so on rejection rebase onto origin and try again."""
+        """Push main; other lanes push too, so on rejection merge origin/main in and try again. Merge, not
+        rebase: rebasing local main replays a landing merge's commits under new hashes, so GitHub never sees
+        the PR's head land and the PR stays open on work that is in main (reflex1 #82 and #109, both recorded
+        MERGED), and sync_main()'s conflict path resets local main, throwing the landing away entirely."""
         for i in range(4):
             r = self.sh("git push -q origin main", timeout=120)
             if r.returncode == 0:
                 return
-            self.sync_main()
+            self.sh("git fetch -q origin", timeout=120)
+            if self.sh("git merge -q --no-edit origin/main").returncode:
+                self.sh("git merge --abort")
+                self.log("push: local main conflicts with origin/main; leaving it for the caller to redo")
+                break
             time.sleep(2 + 3 * i)
         self.log(f"push failed after retries: {r.stderr.strip()[:300]}")
 
@@ -450,15 +457,18 @@ class Forge:
             self.sync_main()
             if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}").returncode == 0:
                 self.push()
-                # `gh pr merge --delete-branch` cleans the remote branch; this fallback path never did, and 64 of
-                # reflex1's 106 remote forge branches are landed leftovers. Only once the tip is in origin/main,
-                # so a push that did not reach the remote keeps the branch.
+                # Landed only when the branch is in origin/main. `push()` can return with the merge gone
+                # (a lane pushed first and reconciling dropped it) and cycle() then records MERGED for work
+                # that is nowhere; the same proof releases the remote branch, which this fallback path once
+                # never deleted (64 of reflex1's 106 remote forge branches are landed leftovers).
                 if self.sh(f"git merge-base --is-ancestor {branch} origin/main").returncode == 0:
                     self.sh(f"git push -q origin --delete {branch}", timeout=120)
-                return ""
+                    return ""
+                self.log(f"landing {tid} did not reach origin/main; merging it again")
+                continue
             self.sh("git merge --abort")
             self.log(f"main moved during the gate; landing {tid} again")
-        return f"merge conflict landing {branch}"
+        return f"could not land {branch} on origin/main after 3 tries"
 
     def cycle(self) -> None:
         self.state["cycle"] += 1
