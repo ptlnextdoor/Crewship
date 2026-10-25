@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory() as d:
     (bindir / "gh").write_text('#!/bin/sh\necho "$@" >> "$0.log"\ncase "$1 $2" in "pr view") n=$(grep -c "pr view" "$0.log"); [ "$n" -ge 3 ] && echo MERGEABLE || echo UNKNOWN;; esac\n')
     (bindir / "gh").chmod(0o755)
     f.env["PATH"] = f"{bindir}:{f.env.get('PATH', os.environ['PATH'])}"
-    f.sync_main = lambda: None; forge.time.sleep = lambda s: None
+    f.sync_main = lambda: None; real_sleep, forge.time.sleep = forge.time.sleep, lambda s: None
     merged = f.pr_merge("https://github.com/x/y/pull/1", "land")
     calls = (bindir / "gh.log").read_text().splitlines()
     check("pr_merge polls mergeability, then merges once", merged and calls.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable") == 3 and calls[-1].startswith("pr merge https://github.com/x/y/pull/1"), "\n".join(calls))
@@ -203,6 +203,20 @@ with tempfile.TemporaryDirectory() as d:
           kept == ["00007-builder-2.log", "00007-builder-2.prompt", "00007-builder.log", "00007-builder.prompt"]
           and "first session" in (f.home / "sessions/00007-builder.log").read_text()
           and "second session" in (f.home / "sessions/00007-builder-2.log").read_text(), str(kept))
+
+    # 4l. A command that outruns its timeout takes its children with it and comes back as rc 124; a gate
+    # timeout used to raise TimeoutExpired out of the cycle and leave cargo holding the worktree.
+    forge.time.sleep = real_sleep  # the kill path waits between SIGTERM and SIGKILL
+    pidf = Path(d) / "child.pid"
+    r = f.sh(f"sleep 300 & echo $! > {shlex.quote(str(pidf))}; wait", cwd=repo, timeout=1)
+    child = int(pidf.read_text())
+    try:
+        os.kill(child, 0); alive = True; os.kill(child, 9)
+    except ProcessLookupError:
+        alive = False
+    check("a timed-out command returns 124 and kills its children",
+          r.returncode == 124 and "TIMEOUT" in r.stdout and not alive,
+          f"rc={r.returncode} child_alive={alive}")
 
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
