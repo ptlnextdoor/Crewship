@@ -520,7 +520,7 @@ with tempfile.TemporaryDirectory() as d:
 
 # 11. A cycle that does not land must take its attempt branch off the remote; a branch already merged into
 # local main must stay (land() keeps it as the only copy when the merge commit did not reach origin/main).
-# 42 of reflex1's 106 remote forge/ refs are failed attempts: only the merge paths ever deleted a branch.
+# 42 of reflex1's 106 remote forge/ refs are not in origin/main: only the merge paths ever deleted a branch.
 with tempfile.TemporaryDirectory() as d:
     origin, repo = Path(d) / "origin.git", Path(d) / "repo"
     git(f"init -q --bare -b main {origin}", Path(d))
@@ -545,7 +545,6 @@ with tempfile.TemporaryDirectory() as d:
           "forge/l1-" not in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
 
     verdict[0] = "VERDICT: APPROVE"
-    f.claim = lambda: repo / "tickets/0004-r.md"
     f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
     f.cycle()
     check("a branch merged into main is left for land() to decide",

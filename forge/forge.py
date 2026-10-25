@@ -592,10 +592,10 @@ class Forge:
         finally:
             self.sh(f"git worktree remove --force {wt}")
             self.prune_target()
-            # An abandoned attempt leaves its branch on origin forever: 42 of reflex1's 106 remote forge/
-            # refs are failed attempts (the closed PR keeps the diff, and a retry opens a new branch).
-            # Checked before the local branch goes, and a branch already merged into local main is kept:
-            # land() leaves it on origin as the only copy when the merge commit did not reach origin/main.
+            # A failed attempt's branch stayed on origin forever: 42 of reflex1's 106 remote forge/ refs are not in
+            # origin/main (the closed PR keeps the diff, and a retry opens a new branch). Checked before the local
+            # branch goes. With PRs on, a branch already merged into local main is kept: land() leaves it on origin
+            # when the merge commit did not reach origin/main.
             if not self.cfg.get("pull_requests", True) or self.sh(f"git merge-base --is-ancestor {branch} main").returncode != 0:
                 self.sh(f"git push -q origin --delete {branch} 2>/dev/null || true", timeout=120)
             self.sh(f"git branch -D {branch}")
