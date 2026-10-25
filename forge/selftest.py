@@ -623,6 +623,26 @@ with tempfile.TemporaryDirectory() as d:
     check("a lane with no room prunes, then waits instead of building",
           not f.disk_ok() and pruned == [1] and "floor" in logged[-1], f"{pruned} {logged}")
 
+# 15. The prune disk_ok() leans on must say when it cannot run. `cargo metadata` failing (no Cargo.toml in
+# the configured repo, a broken toolchain) left `packages: []`, so nothing matched and nothing was deleted,
+# with no line in the log: the lane then sleeps 15 min at a time behind "not starting a build" while its own
+# dead test binaries hold the space.
+with tempfile.TemporaryDirectory() as d:
+    repo, tdir = Path(d) / "repo", Path(d) / "target"
+    repo.mkdir(parents=True)
+    (tdir / "debug/deps").mkdir(parents=True)
+    artifact = tdir / "debug/deps/libreflex_core-dead0001.rlib"
+    artifact.write_text("x")
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[env]\nCARGO_TARGET_DIR="{tdir}"\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    logged = []
+    f.log = logged.append
+    f.prune_target()
+    check("a prune that cannot read the workspace says so instead of deleting nothing in silence",
+          artifact.exists() and any("cargo metadata failed" in m for m in logged), str(logged))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
