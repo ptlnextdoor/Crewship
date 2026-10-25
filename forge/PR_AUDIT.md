@@ -2,6 +2,24 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #51 · 2026-10-25T12:29:50Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #51 forge: STEERING.md and the gate stay protected whatever the project config lists
+What it changes: `Forge.__init__` (forge/forge.py:76-84) builds `self.protected` as the configured `protected_paths` (or the default without STEERING.md) unioned with `STEERING.md` and the configured gate path (`./` stripped, skipped when it contains a space). Adds selftest 4s and one README reliability row.
+Findings:
+- info forge/forge.py:82-84 Traced end to end. `self.protected` is read in one place only: `touched_protected()` (base forge.py:291-293). That function runs in `cycle()` before the gate (512, which calls `fail()`, so the PR is closed and the ticket gets RETRY or blocked) and after repair (523/526). The change can only add entries: a configured path is never dropped, the set removes duplicates, and sorting has no effect because only `any()` reads the list. Per-process state is computed at init, so nothing is shared between lanes. Live `~/.config/forge/reflex1.toml` resolves to `['.forge/', 'STEERING.md', 'gate.sh', 'tickets/']`. STEERING.md is the only new entry for reflex1. Odd gate values (`/abs/gate.sh`, `../x/gate.sh`, a tab-separated command) add entries that cannot match a relative `git diff --name-only` path, so they are harmless. Running the full `forge/selftest.py` from a `git archive` of the PR head passes. The same 4s against `origin/forge`'s forge.py fails with `[]`, which confirms the PR's before/after claim.
+- low forge/prompts/builder.md:10, forge/README.md:28 These lines still name only `gate.sh`, `tickets/` and `.forge/` (the PR leaves them unchanged). The builder is not told that STEERING.md or a non-default gate path is blocked. Such an edit fails closed and costs one attempt, and the reason reaches the retry note through `fail()`. Not required. The runtime check is the control.
+- low forge/forge.py:291-293 (unchanged) `touched_protected` diffs `main...HEAD` against the lane-local `main`. Suppose the owner commits to STEERING.md while a builder is running, and the builder then rebases or merges `origin/main` itself inside its session. The owner's commit then shows up as a protected edit and the attempt is charged (RETRY). This is the same mechanism as the existing `tickets/` false positive, and sibling #28 fixes it by moving to `origin/main`. Owner edits to STEERING.md are rare.
+- info scope Only builder diffs get the new protection. Planner and steward are unchanged: `commit_docs` path lists (forge.py:319, 609) leave out STEERING.md and `discard_strays` (621-626) resets it. A planner or steward agent that runs `git commit` itself is still not covered. That gap predates this PR and is outside its diff. The README row is accurate for the builder path it describes.
+- low sibling #28 (forge/forge.py, forge/selftest.py) #28 changes `touched_protected` to `git diff --name-only origin/main...HEAD`. 4s builds a repo with no `origin` remote. In a scratch repo, `git diff --name-only origin/main...HEAD` exits 128 with empty stdout, so `touched_protected` would return `[]` and 4s would fail once both PRs land. There is no textual conflict in that hunk. #28 is the side that should change: it changes the function's contract and already moved test 2 onto an origin-backed fixture, so on rebase it must do the same for 4s. This PR's text is correct against its base.
+- info siblings #8 and #23 Both complement this PR. #8 adds `base: str = "main"` and an `origin/main` re-check in `land()`. 4s calls the default and is unaffected, and #8's re-check will also cover STEERING.md. #23 has the reviewer read added lines in AGENTS/LEARNINGS/PROGRESS as instructions, with no STEERING/protected overlap. I grepped the +/- lines of #48, 47, 44, 42, 40, 39, 31, 25, 20, 19, 16, 7, 6 and 5 for protected/STEERING/gate config and found no hits. Their README rows conflict with this one only textually at the end of the table (merge order). None of them duplicates this change.
+- nit forge/forge.py:76-81, forge/selftest.py:351-355, forge/README.md:55 The arXiv 2610.06274 figures (25/72, 0/167) appear three times. The citation is real and the numbers match its abstract (checked on arXiv). The 6-line code comment could shrink to the one-line why, but it follows the house style of incident-citing comments, so this does not block.
+Change needed (only for MERGE WITH CHANGE):
+
+
 ## PR #50 · 2026-10-25T11:31:18Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
