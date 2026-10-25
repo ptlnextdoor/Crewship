@@ -2,6 +2,40 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #56 · 2026-10-25T17:40:07Z · REJECT · risk low · gate pass · closed: rejected
+
+Verdict: REJECT
+Risk: low
+
+## PR #56 forge: a doc edit the role's commit missed is committed, not discarded
+What it changes: the planner and steward doc path lists move into the module constants `PLANNER_DOCS` and `STEWARD_DOCS` (forge.py:42-43). `discard_strays(role, paths)` (forge.py:642-653) now parses `git status --porcelain` and runs a second `commit_docs` on any file still dirty under the role's paths before the hard reset. The PR also adds README row 58 and selftest 4t.
+Findings:
+- medium forge/README.md:58, forge/forge.py:643-646, forge/selftest.py:196-197 The incident this PR is built on already had its root cause found and fixed in merged #29 (9eb42ba4, 2026-10-24T12:35Z). The cause was that `SCORE.md` was missing from the steward's `git add -A` list. Both discards the PR cites (reflex1 forge.log:710 at 05:20:50Z and :834 at 10:11:33Z, `M SCORE.md` unstaged) happened before #29, and #29's commit body cites the same two lines. forge.log has no other `left edits outside its paths` line. The first pass neither "missed a file" nor lost the turn: reflex1 ced13f9 (05:20:50Z: LEARNINGS, PROGRESS, README, ROADMAP) and 3beb8f0 (10:11:33Z: PROGRESS, README, ROADMAP) are those same turns' `forge: steward update` commits. So "a whole doc turn destroyed", "13 minutes of model time each" and "the reset took both" are all false. The README row describes a guard against a failure that has no current cause.
+- low forge/forge.py:649-653 The second pass did not save any work in any case I could reproduce. I ran the PR head's `commit_docs` + `discard_strays` on scratch repos with a bare origin:
+  - Plain `SCORE.md` edit, empty `docs/assets` dir, or gitignored `docs/`: nothing is dirty after the first pass, so the second pass never runs.
+  - Failing pre-commit hook: `M  SCORE.md` stays staged, the second commit fails the same way, and the reset still takes the edit.
+  The PR's own scout entry (forge/SCOUT.md:705 on base) says the losses "have no reproduced staging cause". It also names the cheaper next step: log `git add`'s stderr in `commit_docs`.
+- low forge/forge.py:649-653 -> :640 Filenames chosen by the agent now reach `sh()` with `shell=True`.
+  - Before this PR, `here` held only literal path names, filtered by `exists()`. Now it holds names read from `git status --porcelain`.
+  - Porcelain quotes space, control characters, non-ASCII, `"` and `\`, and quoted names are skipped. It does not quote `; $ { } | & ' ( ) < >`.
+  - PoC with a failing pre-commit hook and a planner-written `tickets/0002-x;touch${IFS}PWNED;.md`: the second pass ran `touch PWNED`. The discard log listed `?? PWNED` before `git clean` removed it.
+  - Sessions run as the same user with the same env (forge.py:224 `env={**self.env, ...}`), so there is no privilege gain. But the command runs from forge itself, outside the session's process group and session log.
+  - A ticket slug with an apostrophe turns the whole second-pass line into a shell syntax error. The `shortcut:` comment's "every doc path forge stages is plain ASCII" is wrong for this pass: the names under `tickets/` are slugs the planner chooses.
+- ok Protected paths, gate and reviewer are not weakened.
+  - `mine` matches only the role list the first pass already stages, with a `/` boundary, so `docs/assets-x` does not match. `STEERING.md`, `gate.sh` and `.forge/` are in neither list and are still reset.
+  - Rename lines (`old -> new`) are split and filtered by `exists()`, so `->` never reaches the shell as a redirect.
+  - No new state shared between lanes: each lane uses its own clone, the planner runs under `plan.lock`, and only lane 1 runs the steward.
+  - No new exception path (`sh()` without `check`). The new log line is capped at `mine[:5]`. No quota or GPU use.
+  - Selftest on a patched scratch copy: 53 ok, "forge selftest: all checks passed".
+- nit (slop) The same incident is told three times (docstring forge.py:643-646, selftest.py:196-197, README.md:58), plus once more in SCOUT.md. No caller uses the `paths: str = ""` default. 4t's second check ("an edit outside the role's paths is still discarded") repeats 4h (selftest.py:158-172 already asserts that the steward's `main.rs` edit is dropped). The 4t label sits between 4j and 4k.
+- info siblings Open PRs on base `forge` that touch forge.py, README.md or selftest.py: #48, 47, 44, 42, 40, 39, 31, 28, 25, 23, 20, 19, 16, 8, 7, 6, 5. None of them changes `commit_docs`, `discard_strays` or the role path lists.
+  - #48 rewrites `push()`, which `plan()`/`steward()` call right after `discard_strays`. It complements this PR.
+  - #40 turns `sh()` into a process-group `Popen` and does not interact with this change.
+  - All of them add README rows and selftest blocks at the same table tail, so the conflicts are textual only.
+  - Merged #29 already fixed the same incident under its real cause. This PR's README row, docstring and test comment give it a different cause, so this PR is the side that should change.
+Change needed: none (REJECT). If a doc turn is lost again, the narrow next step is to log the stderr of `commit_docs`' `git add`/`git commit`. A resubmitted second pass would need `shlex.quote` on every name plus a reproduced case where it saves work.
+
+
 ## PR #55 · 2026-10-25T16:38:55Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
