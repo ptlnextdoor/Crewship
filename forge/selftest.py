@@ -385,6 +385,42 @@ check("builder is told not to edit the gate", "gate.sh" in b and "never" in b.lo
 check("reviewer must end with a verdict line", "VERDICT: APPROVE" in r and "VERDICT: REJECT" in r)
 check("reviewer is not told to be lenient", "benefit of the doubt" not in r.lower())
 
+# 7. A sync of main must not destroy this lane's unpushed commits (planner tickets, status, doc edits).
+with tempfile.TemporaryDirectory() as d:
+    origin = Path(d) / "origin.git"
+    subprocess.run(f"git init -q --bare -b main {origin}", shell=True, check=True)
+    repo = Path(d) / "repo"
+    (repo / "tickets").mkdir(parents=True)
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "PROGRESS.md").write_text("base\n")
+    git("init -q -b main", repo); git("add -A", repo); git("commit -qm i", repo)
+    git(f"remote add origin {origin}", repo); git("push -q -u origin main", repo)
+    other = Path(d) / "other"
+    subprocess.run(f"git clone -q {origin} {other}", shell=True, check=True)
+    (other / "PROGRESS.md").write_text("upstream\n")
+    git("add -A", other); git("commit -qm up", other); git("push -q origin main", other)
+    # This lane wrote a line and rewrote it (planner, then steward) and added a ticket: the final tree agrees
+    # with the merge base, so a rebase conflicts replaying the first commit while a merge is clean.
+    (repo / "PROGRESS.md").write_text("mid\n")
+    git("add -A", repo); git("commit -qm local-a", repo)
+    (repo / "PROGRESS.md").write_text("base\n")
+    (repo / "tickets/0007-new.md").write_text("status: open\n---\n# new ticket\n")
+    git("add -A", repo); git("commit -qm local-b", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.sync_main()
+    check("sync keeps this lane's unpushed ticket", (repo / "tickets/0007-new.md").exists(), git("log --oneline -3", repo))
+    check("sync takes the upstream change", "upstream" in (repo / "PROGRESS.md").read_text())
+    # A divergence that really conflicts still resets to origin, but the commits must stay reachable.
+    (repo / "PROGRESS.md").write_text("ours\n"); git("add -A", repo); git("commit -qm local-c", repo)
+    (other / "PROGRESS.md").write_text("theirs\n"); git("add -A", other)
+    git("commit -qm up2", other); git("push -q origin main", other)
+    f.sync_main()
+    check("a conflicting sync keeps the dropped commits on a branch",
+          "local-c" in git("log --oneline --all", repo) and "ours" not in (repo / "PROGRESS.md").read_text(),
+          git("log --oneline --all", repo))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
