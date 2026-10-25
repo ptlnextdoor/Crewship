@@ -483,10 +483,10 @@ with tempfile.TemporaryDirectory() as d:
           and not rc.needs_pass({"gate": "fail", "base": "newbase"}, "newbase")
           and rc.needs_pass(None, "newbase"))
 
-# 10. A vendor is taken out of every role's chain only on the provider's own refusal, which arrives on stderr
-# ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the work
-# is about quota - reflex1 lane 2 cycle 28 wrote `usage_limit_reached` into LEARNINGS.md and its reviewer
-# quoted it back; 5 of 268 sessions match the pattern in stdout and none of them was a provider error.
+# 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
+# stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the
+# work is about quota - reflex1 lane 2 cycle 28's builder and reviewer quoted the steward's `usage_limit_reached`
+# bullet in LEARNINGS.md; 5 of 264 sessions match the pattern in stdout and none of them was a provider error.
 with tempfile.TemporaryDirectory() as d:
     repo = Path(d) / "repo"
     repo.mkdir(parents=True)
@@ -510,7 +510,7 @@ with tempfile.TemporaryDirectory() as d:
 
     f._agent_once = once
     rc, text = f.agent("builder", "p", repo)
-    check("a failed session that writes about quota keeps its vendor", 
+    check("a failed session that writes about quota keeps its vendor",
           (rc, ran, f.exhausted, f.last_model["builder"]) == (124, ["a/b"], {}, "a/b"), f"{ran} {f.exhausted}")
     ran.clear()
     outs["a/b"] = (1, refusal)

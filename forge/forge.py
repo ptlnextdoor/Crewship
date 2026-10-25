@@ -183,11 +183,12 @@ class Forge:
                 continue
             rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
             # The provider writes its quota refusal to stderr ("Codex error event: The usage limit has been
-            # reached", all 3 real cases in reflex1's logs); stdout is the agent's own report, and it quotes
-            # those words when the work is about quota - lane 2 cycle 28 wrote `usage_limit_reached` into
-            # LEARNINGS.md, its reviewer quoted it back, 5 of 268 sessions match in stdout and none of those
-            # was a provider error. Matching the whole output takes the vendor out of every role's chain for
-            # the rest of the cycle on the first such session that also exits non-zero (a timeout is rc=124).
+            # reached", omp -p writes a failed turn's error there, as in the 3 surviving refusal logs); stdout
+            # is the agent's own report, and it quotes those words when the work is about quota - lane 2
+            # cycle 28's builder and reviewer quoted the steward's `usage_limit_reached` bullet in LEARNINGS.md,
+            # 5 of 264 sessions match in stdout and none of those was a provider error. Matching the whole
+            # output takes the vendor out of every role's chain for the rest of the cycle on the first such
+            # session that also exits non-zero (a timeout is rc=124).
             # shortcut: _agent_once keeps the last 6 KB, so a refusal behind 6 KB of stderr noise loses the
             # marker and reads as a plain failure; widen that tail if a provider ever gets chatty on stderr.
             err = text.partition("\n[stderr]\n")[2]
