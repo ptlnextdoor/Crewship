@@ -2,6 +2,35 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #50 · 2026-10-25T11:31:18Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #50 forge: a PR GitHub calls CONFLICTING is landed locally instead of polled and merged
+What it changes: `pr_merge()` returns False on the first `mergeable == CONFLICTING`, so `land()` goes to its existing local `git merge` fallback without polling 10× and firing a doomed `gh pr merge`. It also doubles the poll budget for every other non-MERGEABLE answer from 10 to 20 polls (30 s to 60 s). Adds selftest 4r and a README row.
+
+Findings:
+- info forge/forge.py:443-445 The CONFLICTING early return is safe. It does not touch the gate, the reviewer, protected paths, prompts, or anything a lane shares. `land()` (forge.py:467-477) calls `sync_main()` and the same local merge/push/branch-delete path that the old code reached after `gh pr merge` failed, so a CONFLICTING PR ends in the same place, just ~30 s and 10 API calls sooner. A clean local merge still needs the gate run at :462 before it, and a conflicting one still aborts and goes round the 3-try loop. Nothing new reaches a shell: `pr` is the `http` URL that `pr_open` validated, and the new line only goes to the log. No new exception path. Checked: PR-head selftest passes in full. Copying base `forge.py` into the PR tree makes 4r FAIL (10 `pr view` calls + `pr merge`), so the test pins real behaviour. Locally landed PRs still end MERGED on GitHub (reflex1 #124, #72, #46 show `MERGED`, merged by the local merge commits 65313ab0, 530620f7, ceb911cd).
+- low forge/forge.py:436 The new comment "CONFLICTING is GitHub's answer, not a stale one" is false for this pipeline, and it contradicts the comment two lines above it. reflex1's forge.log has 25 GitHub-side conflict failures (17 `has merge conflicts`, plus 8 `merge commit cannot be cleanly created`, which is gh's client message for DIRTY and which the PR does not count). In 14 of them the local `git merge` of the same head succeeded and the next log line is `MERGED`, 3-5 s later. Example: #124 head 8e908c5e. Its PushEvent was recorded at 18:31:01Z, the same second `gh pr merge` failed DIRTY, and it landed locally at 18:31:04. GitHub's verdict described the previous head 9e3a86dc. The code is still right, because the local merge is the real check either way. The risk is that the rationale invites a later edit that treats CONFLICTING as a ticket failure (`fail()`/`pr_close`), which would throw away 14/25 landable attempts.
+- low forge/forge.py:439, forge/README.md:54 `range(10)` → `range(20)` is an unmeasured behaviour change bundled in. The PR body supports it with the 44 `GraphQL: Pull Request is not mergeable` lines, but they do not show UNKNOWN clearing between 30 and 60 s. 42 of the 44 are followed by a clean local `MERGED` within ~5 s. For all 44, GitHub's PR timeline puts `head_ref_force_pushed` 0-2 s before the failed merge, so they are not shown to be exhausted 30 s UNKNOWN waits. Cost: up to +30 s and +10 API calls per land attempt for any PR that stays UNKNOWN. With sibling #40 merged, `sh()` returns rc 124 instead of raising, so a hung `gh pr view` makes the worst case ~20 × 123 s ≈ 41 min of lane time per attempt instead of ~20 min. The README row's "only `UNKNOWN` is waited out, for 60 s ... got only half the wait" rests on this unmeasured premise. The loop also waits on `""` (gh error), not only UNKNOWN.
+- low forge/selftest.py:331,341,344 The 4r comment repeats the "polling cannot change that" premise. `sleeps` is collected and never asserted. The ":344 old code" comment describes pre-merge code that will not exist after merge.
+- info siblings. #48 (same three files) changes `land()`'s local fallback and `push()` so a landing counts only once it is in origin/main. Today `push()`'s `sync_main()` rebase (forge.py:330,336) can replay the landing merge under new hashes and leave the PR open. #50 sends CONFLICTING PRs to that path sooner but not more often, apart from a stale first-poll CONFLICTING that GitHub would have cleared. The two are complementary, not contradictory, and textually conflict only on the appended README row. #40 is an interaction, not a contradiction (see above). #19 (union driver) makes local merges succeed where GitHub reports CONFLICTING, which matches #50's fallback. No other open PR touches `pr_merge()`; #40 has it only in unchanged 4f context, which still passes (UNKNOWN, UNKNOWN, MERGEABLE). Selftest label 4r is unique among open PRs.
+
+Change needed: keep the CONFLICTING early return; drop the UNKNOWN extension and the false rationale.
+- forge/forge.py:436-439, replace the three comment lines and the loop header with:
+```
+        # CONFLICTING, stale or real, fails `gh pr merge` (25 such failures in reflex1's log); the local `git merge`
+        # in land() is the real check: 14 of those 25 merged cleanly there within 5 s.
+        for _ in range(10):
+```
+- forge/README.md:54, replace the row with:
+```
+| A PR GitHub reports as `CONFLICTING` goes straight to the local landing path, whose `git merge` decides | 30 s of polling and a merge call that cannot succeed on every conflicted PR (25 conflict failures in reflex1's log, 11 API calls each; 14 of them merged cleanly on the local path seconds later) |
+```
+- forge/selftest.py:331, change "cannot be merged by `gh pr merge`, and polling cannot change that:" to "cannot be merged by `gh pr merge`; the local merge decides, so polling only delays it:". Line 341: `real_sleep = forge.time.sleep`. Line 342: `forge.time.sleep = lambda s: None`. Delete the comment at line 344.
+
+
 ## PR #49 · 2026-10-25T10:29:49Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
