@@ -2,6 +2,36 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #54 · 2026-10-25T15:38:06Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #54 forge: a ticket interrupted max_attempts times blocks instead of retrying free
+What it changes: `recover()` now counts the `## forge-recover` notes already on a ticket. The first `max_attempts - 1` interruptions still go back to `retry` without being charged. The next one sets `blocked` with an explanatory note. The PR also adds one README row and selftest check 8: a ticket with 2 prior notes ends up `blocked`, a ticket with 1 ends up `retry`.
+Findings:
+- medium forge/forge.py:667-668 with :743-745. The counter also runs on the quota path, and there it blocks tickets that did no work. Trace: `agent()` (:181-191) skips every model whose vendor is in `self.exhausted` and raises `QuotaExhausted` before any session starts. `quota_ok()` (:257-266) marks any vendor over the floor as exhausted, but it only pauses the loop when every role's primary vendor is over. So a role whose fallback chain stays on one vendor fails on every cycle while the loop keeps running. `lane_loop` catches that and calls `recover()` (:745), which now writes a counted note, and the next `claim()` picks the same lowest-numbered retry ticket again. Smoke run of the patched forge.py: bare origin, builder `x/m` only, `x` marked exhausted, 6 iterations of `cycle(); except QuotaExhausted: recover()`. Result: 0 sessions started, and tickets 0001 and 0002 were each `blocked` after 3 cycles. In production that is one ticket blocked per lane about every 45 min (three 900 s sleeps) for as long as the outage lasts, while the planner keeps refilling the queue. The path reflex1 can actually hit is `[roles.reviewer]`, which is opus + fable, both Anthropic. With Anthropic over the 80% floor, the builder falls back to codex-sol, and the codex-built diff goes to `reviewer` (:548-552), which raises. The lane spends one builder session per cycle exactly as base does, but every third cycle it blocks the ticket and moves to the next one. So the cap does not limit quota spend. It turns a quota outage into blocked tickets, makes lane_loop's "ticket back to the queue" log line false, and tells the planner that sound tickets failed: planner.md:33 says "A blocked ticket means the approach failed … write a smaller or different ticket". Base never blocked anything for quota. The `shortcut:` comment (:665) says "a quota pause mid-cycle also spends one", which understates this: a sustained outage uses up every free retry back to back without running a session. reflex1's forge.log has no `quota: no model left` line yet, so this has not happened in production.
+- low forge/forge.py:670. The blocked note gives the causes as "(loop restart, crash or gate timeout)". It leaves out QuotaExhausted, which reaches it through :745 until the change below lands. If sibling #40 merges, gate timeouts return rc 124 into `fail()` and never reach `recover()`, so "gate timeout" becomes stale. This PR's text is the side to update then.
+- low forge/forge.py:667. `str.count` runs over the whole ticket, so it also counts `## forge-recover ` lines quoted inside a `## forge` failure note. `fail()` stores the tail of the reviewer or builder output, and the reviewer prompt includes the ticket text. An inflated count only blocks earlier and spends nothing, and `attempts()` (:291) uses the same pattern. Acceptable.
+- low forge/forge.py:677. On the blocked branch the commit message still says "recover … after restart". Unlike `fail()` (:619-620), the block is not recorded in `state["history"]` or `failed`, so `forge.py status` and the board issue never show it; only the log line does. This affects visibility only.
+- info sibling #40 (forge: a timed-out command dies as a process group and returns rc 124) cites the same reflex1 0012 gate timeouts (08:53Z, 14:45Z) and fixes how they are handled: a gate timeout becomes rc 124, goes to `fail()` and counts as an attempt. The two overlap in motivation but do not contradict: #54 still caps restarts, crashes and other exceptions after a claim, such as `git worktree add … check=True` at :518. Apart from the stale cause text above, neither side needs to change. The other open PRs on base `forge` that touch these files (48, 47, 44, 42, 39, 31, 28, 25, 23, 20, 19, 16, 8, 7, 6, 5) do not touch `recover()`, `attempts()` or the ticket status notes.
+- verified clean:
+  - The diff does not touch the gate, `touched_protected`, the protected paths, any prompt, the reviewer flow or its verdict parsing, PR create/merge, or `gpu.py`.
+  - Both branches move the ticket out of `in_progress`. Worktree and branch cleanup are unchanged. `recover()`'s per-lane match patterns are unchanged, so no ticket gains a second writer.
+  - Base blobs match the diff index (aef644cd, e06a3443, 950c1fe6). On a patched copy, `python3 forge/selftest.py` passes every check.
+  - The README evidence matches forge.log. 0012 was recovered at 07:07:16Z (supervisor restart) and at 08:53:21Z and 14:45:45Z (after gate `TimeoutExpired`). The three uncharged sessions ran 70 + 105 + 98 min, about 4.6 h.
+  - Threshold arithmetic: the ticket blocks once it already has `max_attempts - 1` notes, which gives `max_attempts - 1` free retries, as the README says.
+- slop forge/forge.py:660-666. The 8-line comment repeats the README row and the PR body (reflex1 0012 numbers). The docstring already states the rule. Not blocking.
+Change needed (only for MERGE WITH CHANGE): keep the quota path out of the counter, in forge/forge.py:
+1. `def recover(self, all_lanes: bool = False) -> None:` → `def recover(self, all_lanes: bool = False, quota: bool = False) -> None:`
+2. `if hits >= self.cfg.get("max_attempts", 3):` → `if not quota and hits >= self.cfg.get("max_attempts", 3):`
+3. In the `else:` branch, write quota recoveries under a header the count ignores:
+   `p.write_text(p.read_text() + (f"\n\n## forge-quota {now()}\nno model had quota; not counted as an attempt\n" if quota else f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n"))`
+4. In `lane_loop`'s `except QuotaExhausted` handler: `self.recover()` → `self.recover(quota=True)`. In the `shortcut:` comment, delete "or a quota pause mid-cycle".
+5. In selftest check 8, add a third `in_progress lane=1` ticket that already has two `## forge-recover` notes, recover it with a separate `f.recover(quota=True)` call, and check that it is `status: retry`.
+Steps 1-4 were applied to a scratch copy: the quota smoke run then leaves both tickets `retry`/`open` with 0 sessions, and selftest still passes. The reflex1 reviewer-quota loop, which spends a builder session per cycle, stays unbounded as it is on base; this PR's counter does not bound it either, because the lane just moves on to the next ticket.
+
+
 ## PR #53 · 2026-10-25T14:38:39Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
