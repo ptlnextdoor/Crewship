@@ -297,6 +297,31 @@ with tempfile.TemporaryDirectory() as d:
           any(a.startswith("pr close") for a, _ in calls)
           and any("TimeoutExpired" in b for _, b in calls), str(calls)[:300])
 
+# 4q. A session killed by a provider 5xx/overload is retried on the role's next model, and the vendor
+# is not marked out of quota; a role with nowhere left to go still returns the error to the caller.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    (repo / "tickets").mkdir(parents=True)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   '[roles.builder]\nmodel="x/first"\nfallback=["y/second"]\n'
+                   '[roles.reviewer]\nmodel="z/only"\n')
+    f = forge.Forge(cfg)
+    tried: list[str] = []
+    def flaky(role, model, thinking, prompt, cwd, timeout_min):
+        tried.append(model)
+        if model.endswith("first") or model.endswith("only"):
+            return 1, "API error (500 internal server error): overloaded_error\n"
+        return 0, "done"
+    f._agent_once = flaky
+    rc, text = f.agent("builder", "p", repo)
+    check("a provider error falls over to the next model without marking the vendor out",
+          (rc, tried, dict(f.exhausted)) == (0, ["x/first", "y/second"], {}), f"rc={rc} tried={tried} exhausted={f.exhausted}")
+    tried.clear()
+    rc, text = f.agent("reviewer", "p", repo)
+    check("a role with no model left returns the provider error instead of looping",
+          rc == 1 and tried == ["z/only"], f"rc={rc} tried={tried}")
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
