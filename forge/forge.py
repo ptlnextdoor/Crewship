@@ -356,7 +356,13 @@ class Forge:
         if self.sh("git rebase -q origin/main", cwd=wt).returncode == 0:
             return True
         self.sh("git rebase --abort", cwd=wt)
-        self.log("rebase conflicts with main; builder resolves via merge")
+        # A rebase replays every builder commit onto main and conflicts once per commit, so a line the
+        # builder wrote and later rewrote still stops it; a merge resolves the same divergence once over
+        # the final trees. 29 of reflex1's cycles paid a 30-minute builder session for this step.
+        if self.sh("git merge -q --no-edit origin/main", cwd=wt).returncode == 0:
+            return True
+        self.sh("git merge --abort", cwd=wt)
+        self.log("rebase and merge both conflict with main; builder resolves")
         self.agent(builder, "Another lane landed changes on main that conflict with this branch. Run `git merge origin/main`, "
                    "resolve every conflict keeping the intent of both sides, run the gate, and commit the merge. "
                    "Do not edit gate.sh, tickets/ or .forge/.", wt, timeout_min=30)

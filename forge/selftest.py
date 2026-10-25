@@ -216,6 +216,30 @@ with tempfile.TemporaryDirectory() as d:
     f.lane_loop()
     check("the deadline still gets a steward turn when the last one is older", turns == [32], str(turns))
 
+# 4m. A branch whose rebase conflicts but whose merge is clean (the builder wrote a line and rewrote it
+# later, another lane changed the same line on main) is brought up to date by git, not by a 30-min session.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, wt = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "wt"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "PROGRESS.md").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    git(f"worktree add -q -b feat {wt} main", repo)
+    (wt / "PROGRESS.md").write_text("base\nscratch\n"); git("commit -qam scratch", wt)
+    (wt / "PROGRESS.md").write_text("base\n"); git("commit -qam 'drop scratch'", wt)
+    (wt / "src.rs").write_text("fn main() {}\n"); git("add -A", wt); git("commit -qm work", wt)
+    (repo / "PROGRESS.md").write_text("base\nanother lane\n")
+    git("commit -qam other", repo); git("push -q origin main", repo)
+    sessions = []
+    f.agent = lambda role, prompt, cwd, timeout_min=0: (sessions.append(role), (0, ""))[1]
+    ok = f.rebase_onto_main(wt, "builder")
+    check("a conflicting rebase that merges cleanly costs no builder session",
+          ok and not sessions and (wt / "PROGRESS.md").read_text() == "base\nanother lane\n"
+          and (wt / "src.rs").exists(), f"ok={ok} sessions={sessions}")
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
