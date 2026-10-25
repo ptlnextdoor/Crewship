@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #60 · 2026-10-25T21:14:02Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #60 forge: no new ticket is claimed after the deadline
+What it changes: `cycle()` now calls `past_deadline()` after `sync_main()`/`plan()` and before `claim()`. If the deadline has passed, it logs "deadline reached while this cycle was starting; claiming nothing" and returns. The PR also adds README reliability row 61 and selftest 13. Work that was already claimed still runs to the end.
+Findings:
+- info forge/forge.py:530-532 Traced end to end. The new `return` comes before `git worktree add`, the branch, the `try` and `pr_open`. So no ticket is set to `in_progress`, no worktree or branch is created and no PR is opened. It leaves the same state as the existing "no open ticket" return, minus the sleep.
+  - `lane_loop` sets errors=0 and calls `save()`. On the next iteration `past_deadline()` returns "deadline reached", the lane exits with rc 0, and `run()` drops it (`rc == 0 and past_deadline()`). Then `gpu.py reap --all` runs.
+  - Lane 1: the cycle counter was already incremented. When `cycle % steward_every == 0`, the scheduled steward runs right after the early return. It sets `steward_cycle == cycle`, so the deadline branch skips the closing steward. Lane 1 still gets exactly one steward turn, as before.
+  - The incident replayed: reflex1 cycle 32 (32 % 4 == 0) would have returned at 17:05:32Z, run the steward and exited. None of these would have run: builder_hard at 17:05:36Z, reviewer_alt at 18:13:32Z, the merge-resolve builder_hard at 18:20:16Z.
+- info The PR's evidence matches `~/.local/state/forge/reflex1/forge.log:996-1030`:
+  - The l1 planner started at 16:49:06Z and the claim of 0128 came at 17:05:32Z. The deadline is 17:00:00Z (`projects/reflex1.toml:14`).
+  - 0128 was MERGED at 18:31:05Z.
+  - l4 and l2 merged at 18:00:36Z and 18:01:52Z.
+  - "all lanes finished at the deadline" was logged at 18:43:52Z.
+- low forge/forge.py:523-532 The check comes after `plan()`. A planner turn (timeout_min 40) can therefore still start after the deadline if the deadline passes during this cycle's `sync_main()`, whose fetch timeout is 120 s. That spend is bounded by one turn and is never more than the base, which would also claim and build. The placement is correct for the incident: there the planner started before the deadline. No change required.
+- low forge/forge.py:11,808 `forge.py once` ("one cycle, for testing") now obeys the deadline. With a past deadline, such as reflex1.toml's current `2026-10-24T17:00:00Z`, it may run a planner turn and then claims nothing. Before this PR it built a ticket. The log line says why, and `run`/`lane` already refuse to work past the deadline, so this is consistent with the deadline being a hard limit. It is not mentioned in the README.
+- info forge/selftest.py:585-605 I ran the PR head tarball 16dcb216 with `python3 forge/selftest.py`: rc 0, "all checks passed", including "ok a cycle past the deadline claims nothing". I also ran the base a2b17963 forge.py with the PR's selftest: rc 1, `FAIL a cycle past the deadline claims nothing: ['builder']`.
+  - The base differs from the current origin/forge 737d31e6 only outside forge.py, selftest.py, README.md and prompts/.
+  - The test uses min_queue=1 with one open ticket, so `plan()` is skipped. It covers the new line, but not the incident order (deadline passes during the planner turn). The check is unconditional after `plan()`, so the result is the same.
+- nit forge/forge.py:525-529, forge/README.md:61 The comment says "86 more minutes of Opus xhigh (builder, reviewer, a merge-resolve builder)", and the README row says roughly the same. The review was actually `reviewer_alt` on `anthropic/claude-fable-5-1:high` (forge.log:1019), not Opus xhigh. The same incident story also appears three times: the code comment, the README row and the selftest comment. That matches house style. Not blocking.
+- Checked clean:
+  - No ticket text reaches a command or f-string. The log message is a constant.
+  - There is no new state, so there is nothing two lanes could write at once.
+  - None of these are touched: `gate()`, `touched_protected()`, protected paths, reviewer, prompts, `recover()`, `discard_strays()`, claim race, PR create/merge, quota and GPU paths.
+  - The change can only remove spend.
+- info Siblings on base `forge` that touch these files: #48 #47 #44 #42 #40 #39 #31 #28 #25 #23 #20 #19 #16 #8 #7 #6 #5. I read every diff.
+  - None of them touch `past_deadline`, the deadline branch of `lane_loop`, the start of `cycle()` before `claim()`, `claim()` or `plan()`.
+  - #31 changes `ready()` and #48 changes `push()`. Both are orthogonal to this change.
+  - No sibling adds a selftest section 13.
+  - Several add rows to the same README reliability table. That is at most a text conflict for whichever PR lands second. It is not a contradiction or a duplicate.
+
+
 ## PR #59 · 2026-10-25T20:50:29Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
