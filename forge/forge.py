@@ -645,7 +645,15 @@ class Forge:
         tdir = self.env.get("CARGO_TARGET_DIR")
         if not tdir:
             return
-        meta = json.loads(self.sh("cargo metadata --format-version 1 --no-deps").stdout or '{"packages": []}')
+        r = self.sh("cargo metadata --format-version 1 --no-deps")
+        if r.returncode or not r.stdout.strip():
+            # Without the package list nothing matches and the prune deletes nothing. That was invisible
+            # until disk_ok() started pruning to get a lane back over its floor: the lane then sleeps 15
+            # minutes at a time with only "not starting a build" in the log, and the 25.2 GB of its own
+            # dead test binaries stay where they are.
+            self.log(f"prune: cargo metadata failed (rc={r.returncode}), nothing pruned: {r.stderr.strip()[-200:]}")
+            return
+        meta = json.loads(r.stdout)
         pkgs = {p["name"].replace("-", "_") for p in meta["packages"]}
         targets = {t["name"].replace("-", "_") for p in meta["packages"] for t in p["targets"]}
         for f in [*Path(tdir).glob("*/deps/*"), *Path(tdir).glob("*/examples/*")]:
