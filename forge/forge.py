@@ -534,6 +534,13 @@ class Forge:
             self.state["merged"] += 1
             self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now(), "version": self.version}])[-200:]
             self.log(f"cycle {n}: MERGED {tid}")
+        except Exception as e:
+            # fail() closes the PR on a rejected attempt; a cycle that dies anywhere else (gate timeout,
+            # gh or git error, quota) left it open with no evidence on it. reflex1 PRs #12 and #27 are the
+            # two `./gate.sh timed out after 1800 seconds` cycles, still open with no gate comment.
+            if self.pr and self.gh(f"pr view {self.pr} --json state --jq .state") == "OPEN":
+                self.pr_close(self.pr, f"cycle error: {type(e).__name__}: {e}")
+            raise
         finally:
             self.sh(f"git worktree remove --force {wt}")
             self.prune_target()

@@ -268,6 +268,35 @@ with tempfile.TemporaryDirectory() as d:
     check("a branch whose merge did not reach the remote is kept",
           why == "" and "unpushed" in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
 
+# 4p. A cycle that dies outside fail() (reflex1: './gate.sh' timed out, twice) must close its PR with the
+# error on it; the ticket goes back to retry through recover() and the next attempt opens a new PR.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0003-t.md").write_text("status: open\n\n# t\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    calls = []
+    f.plan, f.board = (lambda: None), (lambda doing: None)
+    f.claim = lambda: repo / "tickets/0003-t.md"
+    f.pr_open = lambda wt, branch, ticket, builder: "https://example.invalid/pull/12"
+    f.gh = lambda args, cwd=None, body=None: (calls.append((args, body or "")), "OPEN" if args.startswith("pr view") else "")[1]
+    f.agent = lambda role, prompt, cwd, timeout_min=None: ((cwd / "src.rs").write_text("fn main() {}\n"), (0, ""))[1]
+    def gate_times_out(cwd):
+        raise subprocess.TimeoutExpired("./gate.sh", 1800)
+    f.gate = gate_times_out
+    try:
+        f.cycle()
+    except subprocess.TimeoutExpired:
+        pass
+    check("a cycle that dies with an exception closes its PR with the error",
+          any(a.startswith("pr close") for a, _ in calls)
+          and any("TimeoutExpired" in b for _, b in calls), str(calls)[:300])
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
