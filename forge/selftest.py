@@ -483,6 +483,41 @@ with tempfile.TemporaryDirectory() as d:
           and not rc.needs_pass({"gate": "fail", "base": "newbase"}, "newbase")
           and rc.needs_pass(None, "newbase"))
 
+# 10. A vendor is taken out of every role's chain only on the provider's own refusal, which arrives on stderr
+# ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the work
+# is about quota - reflex1 lane 2 cycle 28 wrote `usage_limit_reached` into LEARNINGS.md and its reviewer
+# quoted it back; 5 of 268 sessions match the pattern in stdout and none of them was a provider error.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir(parents=True)
+    git("init -q -b main", repo)
+    (repo / "PROGRESS.md").write_text("x\n")
+    git("add -A", repo); git("commit -qm i", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\nfallback=["c/d"]\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.log = lambda m: None
+    ran: list[str] = []
+    prose = ("I added the retry and the `usage_limit_reached` bullet to LEARNINGS.md, then the gate timed out."
+             "\n[stderr]\nWorking...\n")
+    refusal = "\n[stderr]\nWorking...\nCodex error event: The usage limit has been reached (code=usage_limit_reached)\n"
+    outs = {"a/b": (124, prose), "c/d": (0, "done\n[stderr]\n")}
+
+    def once(role, model, thinking, prompt, cwd, timeout_min):
+        ran.append(model)
+        return outs[model]
+
+    f._agent_once = once
+    rc, text = f.agent("builder", "p", repo)
+    check("a failed session that writes about quota keeps its vendor", 
+          (rc, ran, f.exhausted, f.last_model["builder"]) == (124, ["a/b"], {}, "a/b"), f"{ran} {f.exhausted}")
+    ran.clear()
+    outs["a/b"] = (1, refusal)
+    rc, text = f.agent("builder", "p", repo)
+    check("the provider's own refusal on stderr falls back to the other vendor",
+          ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
