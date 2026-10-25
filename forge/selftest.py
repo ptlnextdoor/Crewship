@@ -204,6 +204,18 @@ with tempfile.TemporaryDirectory() as d:
           and "first session" in (f.home / "sessions/00007-builder.log").read_text()
           and "second session" in (f.home / "sessions/00007-builder-2.log").read_text(), str(kept))
 
+    # 4l. The closing steward turn is skipped when the scheduled one already ran on this cycle
+    # (10-24: lane 1 ran one at 18:31:06Z on cycle 32 and another at 18:38:36Z at the deadline).
+    turns = []
+    f.recover, f.steward = (lambda: None), (lambda: turns.append(f.state["cycle"]))
+    f.past_deadline, f.lane = (lambda: True), 1
+    f.state["cycle"] = 32; f.state["steward_cycle"] = 32
+    f.lane_loop()
+    check("no second steward turn at the deadline when one ran on this cycle", turns == [], str(turns))
+    f.state["steward_cycle"] = 31
+    f.lane_loop()
+    check("the deadline still gets a steward turn when the last one is older", turns == [32], str(turns))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)

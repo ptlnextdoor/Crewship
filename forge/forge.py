@@ -567,6 +567,7 @@ class Forge:
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
+        self.state["steward_cycle"] = self.state["cycle"]
         self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
         self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
         self.discard_strays("steward")
@@ -657,7 +658,9 @@ class Forge:
                 sys.exit(75)
             if self.past_deadline():
                 self.log("deadline reached")
-                if self.lane == 1:
+                # Skip the closing turn when the scheduled one already ran on this cycle: no ticket
+                # landed in between, so it would re-read the same tree for a second Fable session.
+                if self.lane == 1 and self.state.get("steward_cycle") != self.state["cycle"]:
                     self.steward()
                 return
             if not self.quota_ok():
