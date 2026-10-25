@@ -328,7 +328,7 @@ with tempfile.TemporaryDirectory() as d:
     held.close()
     forge.time.sleep = real_sleep
 
-# 4r. A PR GitHub reports as CONFLICTING cannot be merged by `gh pr merge`, and polling cannot change that:
+# 4r. A PR GitHub reports as CONFLICTING cannot be merged by `gh pr merge`; the local merge decides, so polling only delays it:
 # reflex1 paid ten `pr view` calls and 30 s per case (17 "Pull Request has merge conflicts" lines) before
 # firing the doomed merge. It must go straight to the local landing path instead.
 calls: list[str] = []
@@ -338,10 +338,9 @@ with tempfile.TemporaryDirectory() as d:
     git("init -q -b main", Path(d) / "repo")
     cfg.write_text(f'name="t"\nrepo="{d}/repo"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg)
-    sleeps, real_sleep = [], forge.time.sleep
-    forge.time.sleep = lambda s: sleeps.append(s)
+    real_sleep = forge.time.sleep
+    forge.time.sleep = lambda s: None
     f.gh = lambda args, cwd=None, body=None: (calls.append(args), "CONFLICTING")[1]
-    # rc 1 so the old code reports "not merged" and the check fails on the wasted calls, not on an exception
     f.sh = lambda cmd, cwd=None, timeout=600, check=False: (calls.append(cmd),
                                                             subprocess.CompletedProcess(cmd, 1, "", "conflicts"))[1]
     merged = f.pr_merge("https://example.invalid/pull/7", "forge/l1-b")

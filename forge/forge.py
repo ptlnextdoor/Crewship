@@ -433,10 +433,9 @@ class Forge:
             return False
         # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
         # stale state. Of reflex1's first 37 merges, 24 fell to the local path after a failed `gh pr merge`.
-        # CONFLICTING is GitHub's answer, not a stale one: the old loop still polled it ten times and then fired a
-        # merge that cannot work (17 `Pull Request has merge conflicts` lines, ~40 s and 11 API calls each), while
-        # UNKNOWN only means the computation is not finished, so it gets 60 s instead of 30 before trying anyway.
-        for _ in range(20):
+        # CONFLICTING, stale or real, fails `gh pr merge` (25 such failures in reflex1's log); the local `git merge`
+        # in land() is the real check: 14 of those 25 merged cleanly there within 5 s.
+        for _ in range(10):
             m = self.gh(f"pr view {pr} --json mergeable --jq .mergeable")
             if m == "MERGEABLE":
                 break
