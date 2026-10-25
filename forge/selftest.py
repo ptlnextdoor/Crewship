@@ -421,6 +421,37 @@ with tempfile.TemporaryDirectory() as d:
           "local-c" in git("log --oneline --all", repo) and "ours" not in (repo / "PROGRESS.md").read_text(),
           git("log --oneline --all", repo))
 
+# 8. A free recovery (restart mid-cycle, not counted as an attempt) must not repeat forever. reflex1's ticket
+# 0012 was recovered three times - twice after `./gate.sh timed out after 1800 seconds` - and so spent 6 cycles
+# on 3 counted attempts; 0009 was recovered twice and then merged, so the first two stay free.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    (repo / "tickets").mkdir(parents=True)
+    twice = repo / "tickets/0012-poison.md"
+    twice.write_text("status: in_progress lane=1\n---\n# poison\n"
+                     "\n\n## forge-recover t1\ninterrupted\n\n\n## forge-recover t2\ninterrupted\n")
+    once = repo / "tickets/0009-slow.md"
+    once.write_text("status: in_progress lane=1\n---\n# slow\n\n\n## forge-recover t1\ninterrupted\n")
+    git("init -q -b main", repo); git("add -A", repo); git("commit -qm i", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmax_attempts=3\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.sync_main = lambda: None  # no remote in this fixture
+    f.push = lambda: None
+    f.recover()
+    check("a ticket interrupted max_attempts times stops instead of retrying free",
+          "status: blocked" in twice.read_text(), twice.read_text()[:200])
+    check("the first interruptions of a ticket are still free retries",
+          "status: retry" in once.read_text() and once.read_text().count("## forge-recover ") == 2,
+          once.read_text()[:200])
+    quota = repo / "tickets/0013-quota.md"
+    quota.write_text("status: in_progress lane=1\n---\n# quota\n"
+                     "\n\n## forge-recover t1\ninterrupted\n\n\n## forge-recover t2\ninterrupted\n")
+    f.recover(quota=True)
+    check("a quota recovery is not counted toward the interruption cap",
+          "status: retry" in quota.read_text(), quota.read_text()[:200])
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
