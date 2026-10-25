@@ -73,7 +73,15 @@ class Forge:
         self.state = json.loads(self.state_file.read_text()) if self.state_file.exists() else {
             "cycle": 0, "merged": 0, "failed": 0, "started": now(), "history": []}
         self.tickets = self.repo / c.get("tickets_dir", "tickets")
-        self.protected = c.get("protected_paths", ["gate.sh", "tickets/", ".forge/", "STEERING.md"])
+        # A project config names the paths it wants protected, but it may not drop the two the loop itself
+        # rests on: its gate (the acceptance oracle) and STEERING.md, which _agent_once prepends to every
+        # session as the owner's standing instructions. reflex1.toml overrides the default list without
+        # STEERING.md, so a builder diff rewriting the owner's overrides passed touched_protected(). Telling
+        # the agent not to is not the same control: with no runtime floor a frontier model wrote a protected
+        # config value on 25 of 72 ordinary requests, with one on 0 of 167 (arXiv 2610.06274).
+        gate = c.get("gate", "./gate.sh").removeprefix("./")
+        self.protected = sorted({*c.get("protected_paths", ["gate.sh", "tickets/", ".forge/"]), "STEERING.md",
+                                 *([gate] if gate and " " not in gate else [])})
         self.exhausted: dict[str, float] = {}  # vendor -> when its quota ran out (cleared after an hour)
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.

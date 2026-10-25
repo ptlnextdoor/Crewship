@@ -348,6 +348,29 @@ with tempfile.TemporaryDirectory() as d:
 check("a PR GitHub calls CONFLICTING is landed locally, not polled and merged",
       merged is False and len(calls) == 1 and not any("pr merge" in c for c in calls), str(calls)[:300])
 
+# 4s. The gate and STEERING.md stay protected whatever a project config lists. reflex1.toml overrides
+# protected_paths without STEERING.md, so the owner's standing instructions - prepended to every session
+# by _agent_once - were editable by a builder diff; a rule in the prompt is not the same control (arXiv
+# 2610.06274: a protected config value was written on 25 of 72 ordinary requests with no runtime floor,
+# on 0 of 167 with one).
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    (repo / "ci").mkdir(parents=True)
+    (repo / "ci/check.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "STEERING.md").write_text("owner: never submit to the leaderboard\n")
+    git("init -q -b main", repo); git("add -A", repo); git("commit -qm i", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\ngate="./ci/check.sh"\nprotected_paths=["tickets/"]\n'
+                   f'pull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    git("checkout -q -b work main", repo)
+    (repo / "STEERING.md").write_text("owner: submit to the leaderboard\n")
+    (repo / "ci/check.sh").write_text("#!/bin/sh\nexit 0\n# always passes now\n")
+    git("add -A", repo); git("commit -qm t", repo)
+    bad = f.touched_protected(repo)
+    check("a config that lists neither still protects STEERING.md and the gate",
+          set(bad) == {"STEERING.md", "ci/check.sh"}, str(bad))
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
