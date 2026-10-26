@@ -2,6 +2,43 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #63 · 2026-10-26T00:21:04Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #63 forge: re-check protected paths after the merge-resolve builder session
+What it changes: `land()` calls `touched_protected(wt, "origin/main")` right after `rebase_onto_main()` and before the re-gate, on every pass of its 3-try loop (forge.py:521-523). A hit returns a reason, which `cycle()` passes to `fail()`. `touched_protected` gains `base: str = "main"`, so the two existing callers (:583, :594) are unchanged. Also adds a README row and selftest 16.
+Findings:
+- ok forge/forge.py:521-523 Traced end to end. The gap is real.
+  - `rebase_onto_main()` runs a yolo builder session (:433-435), then commits whatever it touched with `git add -A` (:438). That happens after the pre-gate check (:583/:594) and after the review. Before this PR, nothing after :438 checked paths. The session's prompt does not even name STEERING.md, but the new check covers it (`self.protected`, :83).
+  - Three-dot diff against origin/main: after a clean rebase, a clean merge, or a merge the agent resolved, origin/main is an ancestor of HEAD (enforced at :439 on the agent path). The diff is therefore the branch's net work only.
+  - origin/main always exists at this point, because `rebase_onto_main` just rebased or merged it. So the fail-open case (git exits 128, empty list) cannot happen.
+  - The check runs before the force-push at :527-528, so a rejected resolution never reaches the PR head on GitHub.
+  - On a hit, `fail()` closes the PR and sets retry/blocked (counted, bounded by `max_attempts`). `cycle()`'s `finally` removes the worktree and deletes the remote branch, because the branch is not in main. Nothing is left `in_progress`.
+  - `base` is a literal, so no ticket text reaches the shell. `bad` only reaches the ticket note and the PR body via `--body-file`.
+  - It touches the lane's own refs only, writes no shared state, and spends no quota or GPU. A hit actually saves a gate run.
+  - No prompt or reviewer text changed.
+- ok forge/selftest.py:646-680 Ran it from a `git archive` of the head (11c3b0bd): "forge selftest: all checks passed". With base forge.py (c9134e66) plus the PR's selftest, only the new check fails (`''`), and the edited gate reaches origin/main. The test exercises the real git conflict path with only the agent and gate stubbed.
+- ok forge/forge.py:521 Throwaway smoke against the head, run from /tmp and since removed. Another lane pushed `tickets/0001-t.md` -> `done` and a new in_progress ticket to origin.
+  - Clean rebase: `land=''`, no agent call.
+  - Legit conflict resolve: `land=''`, one agent call.
+  - In both cases origin keeps the other lane's ticket state. No false positive from the move to origin/main.
+  - reflex1's gate.sh writes nothing under a protected path, so a gate run inside the resolve session cannot trip the check.
+  - The "29" holds: `~/.local/state/forge/reflex1/forge.log` has 29 `builder resolves` lines. `git log origin/main -- gate.sh .forge STEERING.md` in ~/Dev/reflex1 shows only owner commits, so the gap has not been hit yet. The PR says "landing unchecked", not "tampered", which is accurate.
+- info forge/forge.py:521 The check trusts `refs/remotes/origin/main`, which the yolo session can rewrite. Reproduced: the resolve session edits gate.sh, commits, then runs `git update-ref refs/remotes/origin/main HEAD`. Result: `land=''`, and the edited gate is on origin.
+  - Not a regression, and it does not block this PR. The same session has the lane's push credentials (agent env = `self.env`, :234; lanes push main with it, :407), so it could `git push origin HEAD:main` directly. The pre-gate check trusts local `main` the same way.
+  - This PR closes the case it targets: an accidental edit committed by `git add -A`.
+- nit forge/forge.py:523 The message says "resolving the conflict with main", but the check also runs after a clean rebase or merge. It can only fire after a resolve session, because the pre-gate check already rejects the branch's own protected edits. So the message is accurate whenever it fires. README:33 ("after the conflict with main is resolved") is narrower than the code, but not false.
+- nit forge/forge.py:516-520 (slop) In the 5-line comment, only the last sentence (why origin/main) is a why the code cannot show. "29 reflex1 cycles" now appears four times (forge.py:428, :516, README:33, selftest:646). This matches house style. Not required.
+- sibling #8 (base `forge`; forge.py, README.md) duplicates this PR's core: the same `touched_protected(self, cwd, base="main")` signature and the same `touched_protected(wt, "origin/main")` re-check after `rebase_onto_main`. #8 is written against the old inline landing code in `cycle()`, which `land()` has since replaced. #8 is the side that should change: drop its re-check and `base` parameter, and keep only its `rev()` PR-comment part. This does not lower this PR.
+- sibling #28 (forge.py:328-329, README, selftest 2) switches `touched_protected` to `origin/main...HEAD` for every caller. It agrees with this PR's reasoning, but it is a textual conflict on the same line. If #28 lands second, it should change the `base` default instead of the hard-coded string, and this PR's explicit argument becomes redundant. #28 is the side to rebase.
+- sibling #48 adds a `continue` in `land()` when the local merge did not reach origin/main. The loop then re-enters at :514, so this check runs again on that retry. #19 (union merge) reduces how often the resolve session runs. Both are complementary.
+- sibling #5 #6 #7 #16 #20 #23 #25 #31 #39 #40 #42 #44 #47: I grepped every diff for protected, `touched_protected`, `rebase_onto_main` and `land` hunks.
+  - Only README-table and selftest adjacency overlaps, plus #6's extra `touched_protected(wt)` call in the old `cycle()`. None contradicts this PR.
+  - With #40, a `git diff` running past 600 s would return a TIMEOUT stdout instead of raising. That is not realistic for `--name-only`.
+
+
 ## PR #62 · 2026-10-25T23:18:19Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
