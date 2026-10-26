@@ -326,7 +326,9 @@ class Forge:
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
     def touched_protected(self, cwd: Path) -> list[str]:
-        files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
+        # origin/main, not main: a builder that rebased onto a newer origin/main would otherwise be charged with
+        # every ticket other lanes claimed on main since the worktree was cut (reflex1 PRs #30, #55, #93).
+        files = self.sh("git diff --name-only origin/main...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
     def startable(self) -> list[Path]:
@@ -569,7 +571,7 @@ class Forge:
             prompt = self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)))
             rc, out = self.agent(builder, prompt, wt)
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
-            if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
+            if not self.sh("git diff --stat origin/main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
             self.pr = self.pr_open(wt, branch, ticket, builder)
             bad = self.touched_protected(wt)
@@ -588,7 +590,7 @@ class Forge:
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if bad or not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
-            diff = self.sh("git diff main...HEAD", cwd=wt).stdout
+            diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
