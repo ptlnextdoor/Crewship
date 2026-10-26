@@ -82,7 +82,9 @@ class Forge:
         gate = c.get("gate", "./gate.sh").removeprefix("./")
         self.protected = sorted({*c.get("protected_paths", ["gate.sh", "tickets/", ".forge/"]), "STEERING.md",
                                  *([gate] if gate and " " not in gate else [])})
-        self.exhausted: dict[str, float] = {}  # vendor -> when its quota ran out (cleared after an hour)
+        # "vendor" or "vendor:<window label token>" -> when that quota ran out; see spent(). Cleared by the
+        # next quota_ok() pass that sees the window back under the floor, not on a timer.
+        self.exhausted: dict[str, float] = {}
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
@@ -179,7 +181,7 @@ class Forge:
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
         for model in chain:
-            if model.split("/")[0] in self.exhausted:
+            if self.spent(model):
                 continue
             rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
             # The provider writes its quota refusal to stderr ("Codex error event: The usage limit has been
@@ -256,24 +258,44 @@ class Forge:
         floor = self.cfg.get("limits", {}).get("max_window_used_pct", 85)
         r = subprocess.run([OMP, "usage"], capture_output=True, text=True, timeout=120)
         # Pause only when every vendor the roles use is over the floor; one vendor out is handled
-        # by per-role fallback. A vendor is over when any of its windows passes the floor.
-        over = {}
+        # by per-role fallback. A vendor is over when any of its vendor-wide windows passes the floor.
+        # A window label may name one model - right now `omp usage` shows "Claude 7 Day (Fable)" at
+        # 100.0% while "Claude 5 Hour" is at 57.0% - and that window is the model's, not the vendor's.
+        # The old max() over the block marked the vendor, which takes claude-opus-5-5 out of every
+        # role's chain together with Fable: every builder goes to Codex, and `reviewer` (fallback
+        # claude-fable-5-1, same vendor) then has no model at all - QuotaExhausted after the build
+        # session, ticket back to the queue, 15 minutes of sleep, once per lane.
+        over: dict[str, bool] = {}
         for block in re.split(r"\n(?=\S)", r.stdout):
             name = block.split("\n", 1)[0].lower()
             vendor = "anthropic" if "anthropic" in name else "openai-codex" if "codex" in name else None
-            used = [float(x) for x in re.findall(r"([\d.]+)% used", block)]
-            if vendor and used:
-                over[vendor] = max(used) >= floor
-        for v, is_over in over.items():
+            if not vendor:
+                continue
+            for line in block.splitlines():
+                m = re.search(r"([\d.]+)% used", line)
+                if not m:
+                    continue  # the block's header and its `capacity:` summary carry no "% used"
+                q = re.search(r"\(([^)]+)\)", line.split("%")[0])  # the label's qualifier, e.g. "(Fable)"
+                key = f"{vendor}:{q.group(1).strip().lower()}" if q else vendor
+                over[key] = over.get(key, False) or float(m.group(1)) >= floor
+        for k, is_over in over.items():
             if is_over:
-                self.exhausted.setdefault(v, time.time())
+                self.exhausted.setdefault(k, time.time())
             else:
-                self.exhausted.pop(v, None)
+                self.exhausted.pop(k, None)
         vendors = {x["model"].split("/")[0] for x in self.cfg["roles"].values()}
         if vendors and all(over.get(v, False) for v in vendors):
             self.log(f"quota: every vendor over {floor}% ({over}), pausing")
             return False
         return True
+
+    def spent(self, model: str) -> bool:
+        """Is this model out of quota? A vendor key (a vendor-wide window over the floor, or a provider
+        refusal in a session's stderr) covers every model from it; a `vendor:<token>` key comes from a
+        window labelled for one model and covers only the models whose name carries that token."""
+        vendor = model.split("/")[0]
+        return vendor in self.exhausted or any(
+            k.startswith(f"{vendor}:") and k.split(":", 1)[1] in model.lower() for k in self.exhausted)
 
     def disk_ok(self) -> bool:
         """A build needs room on disk. Out of space, cargo fails the gate exactly like wrong code does, so the

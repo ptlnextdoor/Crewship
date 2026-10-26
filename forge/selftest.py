@@ -679,6 +679,49 @@ with tempfile.TemporaryDirectory() as d:
     check("a conflict resolved by editing the gate does not land",
           "gate.sh" in why and "not to touch" not in git("show origin/main:gate.sh", repo), f"{why!r}")
 
+# 17. A usage window whose label names one model ("Claude 7 Day (Fable)", 100.0% used right now while
+# "Claude 5 Hour" is at 57.0%) belongs to that model. Taking the block's max marked the whole vendor, so
+# claude-opus-5-5 left every role's chain with Fable: builders fall to the other vendor and `reviewer`,
+# whose only fallback is the same vendor, is left with no model at all (QuotaExhausted after the build).
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir(parents=True)
+    git("init -q -b main", repo)
+    (repo / "PROGRESS.md").write_text("x\n")
+    git("add -A", repo); git("commit -qm i", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   f'[limits]\nmax_window_used_pct=80\n'
+                   f'[roles.builder]\nmodel="anthropic/claude-opus-5-5"\nfallback=["openai-codex/gpt-6.1-sol"]\n'
+                   f'[roles.planner]\nmodel="anthropic/claude-fable-5-1"\nfallback=["openai-codex/gpt-6.1-sol"]\n'
+                   f'[roles.reviewer]\nmodel="openai-codex/gpt-6-astra"\n')
+    usage = ("Usage · fetched 1ms ago\n\n"
+             "Anthropic — 1 account\n"
+             "  ● someone@example.com\n"
+             "      ● Claude 5 Hour         ████░░ 57.0% used · resets in 1h54m\n"
+             "      ● Claude 7 Day          ████░░ 60.0% used · resets in 2d22h\n"
+             "      ● Claude 7 Day (Fable)  ██████ 100.0% used · resets in 2d22h\n"
+             "  capacity: 7d (Fable) → 1.00/1 account used (0.00× quota left)\n\n"
+             "Openai Codex — 1 account\n"
+             "  ● someone@example.com · plan: plus\n"
+             "      ● 5 hours  ░░░░░░ 0.0% used · resets in 4h59m\n")
+    f = forge.Forge(cfg)
+    f.log = lambda m: None
+    ran: list[str] = []
+    f._agent_once = lambda role, model, thinking, prompt, cwd, timeout_min: (ran.append(model), (0, "done"))[1]
+    real_run = forge.subprocess.run
+    forge.subprocess.run = lambda cmd, **kw: (subprocess.CompletedProcess(cmd, 0, usage, "")
+                                              if list(cmd)[-1:] == ["usage"] else real_run(cmd, **kw))
+    try:
+        keeps_going = f.quota_ok()
+        f.agent("builder", "p", repo)
+        f.agent("planner", "p", repo)
+    finally:
+        forge.subprocess.run = real_run
+    check("a window labelled for one model does not take the rest of the vendor with it",
+          keeps_going and ran == ["anthropic/claude-opus-5-5", "openai-codex/gpt-6.1-sol"],
+          f"{ran} {sorted(f.exhausted)}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
