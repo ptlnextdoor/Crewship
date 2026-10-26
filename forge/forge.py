@@ -629,7 +629,13 @@ class Forge:
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
             reviewer = "reviewer_alt" if same and "reviewer_alt" in self.cfg["roles"] else "reviewer"
-            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=diff[:120000])
+            # A diff cut at 120 KB was handed over with nothing saying so, and a reviewer that cannot see the
+            # cut reads a half-diff as the whole change (arXiv 2610.32110: tool output hiding its own limit
+            # made verifiers accept wrong answers 90 of 90 times; stating the limit flipped all 90).
+            shown = diff[:120000] + ("" if len(diff) <= 120000 else
+                                     f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
+                                     "Read the rest with `git diff origin/main...HEAD` before you decide.]")
+            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             if rc == 124 and not verdict:

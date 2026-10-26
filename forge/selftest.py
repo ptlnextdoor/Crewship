@@ -804,6 +804,39 @@ with tempfile.TemporaryDirectory() as d:
           "protected" not in note and "reviewer" in turns and "status: done" in note,
           f"{turns}: {note[-300:]!r}")
 
+# 20. The reviewer's diff is cut at 120 KB. Nothing in the prompt said so, so a reviewer handed half a change
+# judged it as the whole one - the failure arXiv 2610.32110 measures (tool output that hides its own limit
+# made verifiers accept wrong answers 90 of 90 times; stating the limit flipped every one to a rejection).
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "gate.sh").chmod(0o755)
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan = lambda: None
+    seen: list[str] = []
+
+    def build_big_then_review(role, prompt, cwd, timeout_min=None):
+        if role == "reviewer":
+            seen.append(prompt)
+            return 0, "VERDICT: APPROVE"
+        (cwd / "big.txt").write_text("x" * 200000 + "\n")    # one file, well past the 120 KB cut
+        git("add -A", cwd); git("commit -qm work", cwd)
+        return 0, ""
+
+    f.agent = build_big_then_review
+    f.cycle()
+    check("a diff cut at 120 KB tells the reviewer it was cut and how to read the rest",
+          len(seen) == 1 and "cut here:" in seen[0] and "git diff origin/main...HEAD" in seen[0],
+          f"{len(seen)} review(s), tail: {seen[0][-200:]!r}" if seen else "no review ran")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
