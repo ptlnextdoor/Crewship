@@ -2,6 +2,67 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #64 · 2026-10-26T01:25:56Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #64 forge: a model-labelled usage window marks that model, not its vendor
+What it changes: `quota_ok()` now parses each vendor block line by line. A `% used` line whose label has a parenthesised qualifier, such as `Claude 7 Day (Fable)`, is keyed `vendor:<token>`; any other line is keyed by the vendor. The new `spent(model)` replaces `agent()`'s vendor-membership skip test: a vendor key covers every model of that vendor, and a `vendor:<token>` key covers only model ids that contain the token. The PR also adds README row 65 and selftest 17. Line numbers below are at head 74c773f6.
+Findings:
+- medium forge/forge.py:287 (with :261 and the PR body's claim "The pause decision is unchanged"): the pause decision did change, and the new version spends quota on builds that can never be reviewed.
+  - On base, `over[vendor]` was the max of all the vendor's windows. Now `over[vendor]` counts only unqualified windows, and `all(over.get(v, False) …)` reads only that key. A vendor whose only window over the floor is model-labelled no longer counts toward the pause.
+  - Trace with the reflex1 roles. State: Fable window 100%, generic Claude windows at 57/60%, Codex 5h window at 90%.
+    - Base: `quota_ok()` returns False and the lane sleeps 900 s.
+    - Head: it returns True. `cycle()` claims a ticket and the builder runs on Opus (`spent` is False). The gate and a possible repair run. `built_by` is anthropic, so the reviewer is `reviewer_alt` with chain [astra, fable]: astra is spent through the vendor key, fable through `anthropic:fable`, so `QuotaExhausted` is raised at :605 after the build.
+    - Then the PR is closed, the branch deleted, `recover(quota=True)` sets the ticket to `retry` with an uncounted `## forge-quota` note, and the lane sleeps 900 s. The next `quota_ok()` returns True again, so the whole sequence repeats on every lane that has a startable ticket.
+    - It stops only when Codex's 5h window resets or the generic Claude windows climb to the floor, the latter paid for with discarded Opus builds.
+  - Smoke run of a throwaway script against exported base and head trees with that usage text: base gives `(False, ['anthropic','openai-codex'])`; head gives `(True, ['anthropic:fable','openai-codex'], builder=opus, reviewer_alt=QuotaExhausted)`.
+  - The PR's own routing walks into this state. In its motivating state (Codex under the floor), every Opus build is now reviewed by Astra, and SCOUT.md:233 measured the Codex Plus 5h window at 1 to 3 Astra reviews.
+- low forge/forge.py:262-263, forge/README.md:65: the "today"/"right now" motivation is false for this box.
+  - Live `omp usage` (read during the audit) shows `Claude 7 Day 95.0%`. That window is vendor-wide and above the floor of 80, so `anthropic` is marked whatever the Fable window says.
+  - Head `quota_ok()` against real `omp usage` with the live reflex1 roles gives `exhausted=['anthropic','anthropic:fable']` and `spent(opus)=True`, the same routing as base today. The PR body itself shows the 95% line, and its smoke run had to assume the generic 7-day window was under the floor.
+  - The three copies of the claim disagree: README says 58.0%, the code comment and the selftest header say 57.0%. The 7-line incident narrative in the code comment (:262-267) repeats the README row and the selftest header (slop).
+- low forge/forge.py:278-279, :297-298: treating the parenthesised qualifier as a model name fails open when the token is not a substring of the model id.
+  - In the omp 18.12.6 source, `g7a` builds `Claude 7 Day (${r.displayName})` from a server-provided displayName, and Codex's `E1i` builds `${label} (${displayName})`.
+  - On this box omp already prints `Grok Build (Weekly)`, where the qualifier names a period, not a model.
+  - Smoke run of head plus sibling #20's one-line xai vendor parse: `Grok Build (Weekly)` at 95% with `SuperGrok Weekly Credits` at 50% gives key `xai-oauth:weekly`, and `xai-oauth/grok-build` still runs.
+  - Not reachable today: forge does not parse the xai block, and omp's hard-coded Anthropic tiers (Fable, Opus, Sonnet) match the configured model ids.
+  - The exposure is the band between the floor and the provider's own limit. Above the limit, a refusal on stderr still marks the whole vendor at :196. With the change below, the pause counts these windows again. Accepted as is.
+- low forge/forge.py:281-285: a `vendor:<token>` key is only ever popped by a pass that lists that window again. omp's `A9` drops a window whose bucket is missing, so if the Fable window stops being listed, `anthropic:fable` stays until the lane restarts (forge.py mtime check, exit 75). This fails closed: Fable roles fall back to Codex. Accepted.
+- ok (checked, no issue):
+  - No change to the gate, `touched_protected`, protected paths, prompts, reviewer selection (:601-603), PR or merge plumbing, or GPU.
+  - `omp usage` is still an argv call. The label tokens are used only in Python `in` checks, never in a shell, and ticket text cannot reach them.
+  - `self.exhausted` belongs to one lane process, so this adds no shared state. The parsing adds no exception path that base lacked: `float()` is applied to the same regex match.
+  - In the motivating state the PR makes cross-vendor review more likely, not less: an Opus build is reviewed by Astra instead of failing at `reviewer`.
+  - Selftest at head: all checks pass. Run against base forge.py, check 17 fails with `['openai-codex/gpt-6.1-sol', 'openai-codex/gpt-6.1-sol'] ['anthropic']`, as the PR states.
+- sibling #39 (base `forge`): both PRs replace `agent()`'s `model.split("/")[0] in self.exhausted` (#39 with `vendor_out(model)`, #64 with `spent(model)`), and both edit the `setdefault` line in `quota_ok()`.
+  - They contradict on how long a quota mark lasts: #39 expires marks after an hour and refreshes them, while #64:85-86 says "not on a timer", which matches base.
+  - #39 should change: rebase onto `spent()` and decide whether `vendor:<token>` keys expire. As written, `vendor_out()` would drop the scoped keys entirely.
+- sibling #47 (base `forge`): its failover guard `any(m.split("/")[0] not in self.exhausted for m in chain[i+1:])` ignores `vendor:<token>` keys.
+  - With both merged, a 5xx on Opus whose only remaining fallback is a scoped-spent Fable passes the guard and continues. `spent()` then skips Fable and `QuotaExhausted` is raised, instead of the error being returned as #47 promises.
+  - #47 should change to `not self.spent(m)`.
+- info other siblings: #48, #44, #42, #40, #31, #28, #25, #19, #16, #8, #7, #6 and #5 touch forge.py, README.md or selftest.py.
+  - Grepping their diffs for `exhausted`, `quota_ok`, `% used` and the vendor test finds 0 hits. #20 is covered in the third finding and is already CONFLICTING.
+  - The README table rows are text conflicts only, and no sibling adds selftest section 17.
+- nit forge/selftest.py:682-685: the header repeats the "100.0% used right now while 'Claude 5 Hour' is at 57.0%" claim.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:287: replace `if vendors and all(over.get(v, False) for v in vendors):` with `if vendors and all(any(o for k, o in over.items() if k.split(":")[0] == v) for v in vendors):`. The pause then counts every window, as base did, while routing stays per model.
+2. forge/forge.py:260-267: replace the eight comment lines with:
+   `        # Pause only when every vendor the roles use has a window over the floor; one vendor out is handled`
+   `        # by per-role fallback. A window labelled for one model ("Claude 7 Day (Fable)") is keyed`
+   `        # "vendor:<token>" and takes only that model out of the chains (spent()).`
+3. forge/selftest.py check 17: right after `f.agent("planner", "p", repo)`, add `usage = usage.replace("0.0% used · resets in 4h59m", "90.0% used · resets in 4h59m")` and `pauses = not f.quota_ok()`. Change the condition to `keeps_going and pauses and ran == [...]`.
+4. forge/README.md:65:
+   - Replace "`omp usage` today shows Fable's 7-day window at 100.0% while `Claude 5 Hour` is at 58.0%, so the block maximum put" with "with `Claude 7 Day (Fable)` at 100.0% and the vendor-wide `Claude 5 Hour` and `Claude 7 Day` windows under the floor, the block maximum put".
+   - Append "; the pause still counts every window" to the rule cell.
+Edits 1 and 3 were applied to a scratch copy of the head:
+- The full selftest passes.
+- The new assertion fails on the unfixed head, where check 17 shows `['anthropic:fable', 'openai-codex']`.
+- The smoke state above pauses as it does on base.
+- The motivating state still routes builder to Opus and reviewer_alt to Astra.
+
+
 ## PR #63 · 2026-10-26T00:21:04Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
