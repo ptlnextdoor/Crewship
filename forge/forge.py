@@ -608,10 +608,7 @@ class Forge:
                 rc, out = self.agent(builder, f"The gate failed. Fix the code (never the gate or tests' expectations unless the ticket says so) until `{self.cfg.get('gate', './gate.sh')}` passes, then commit.\n\nTicket ({ticket.relative_to(self.repo)}):\n{ticket.read_text()}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
-                # The protected check before the first gate run stopped a builder that edited gate.sh; the
-                # repair session's edits were read only after the gate had already been run again - i.e. the
-                # rewritten gate.sh decided its own case, and its PASS went on the PR. Decide first, and say
-                # which it was: `bad or not ok` reported every protected edit as "gate still failing".
+                # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
                 bad = self.touched_protected(wt)
                 if bad:
                     return self.fail(ticket, f"the repair edited protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")

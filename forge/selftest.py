@@ -725,8 +725,8 @@ with tempfile.TemporaryDirectory() as d:
           f"{ran} {sorted(f.exhausted)}")
 
 # 18. The repair session after a failed gate is the one place where a gate.sh the agent just rewrote was
-# executed: its edits were read only after the second gate run, so the rewritten oracle decided its own
-# case and posted its PASS to the PR. Evaluator tampering happens in about half of natural agent episodes
+# executed: its edits were read only after the second gate run, so the rewritten oracle ran and posted its
+# PASS to the PR. Evaluator tampering happens in about half of natural agent episodes
 # and locking the evaluator is what stops it (arXiv/ICDEW 2026, RewardHackingAgents).
 with tempfile.TemporaryDirectory() as d:
     origin, repo = Path(d) / "origin.git", Path(d) / "repo"
