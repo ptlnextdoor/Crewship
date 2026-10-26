@@ -2,6 +2,40 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #65 · 2026-10-26T02:24:52Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #65 forge: a repair that edits the gate is caught before that gate runs again
+What it changes: in the gate-repair branch of `cycle()`, a non-empty `touched_protected(wt)` now fails the attempt with "the repair edited protected gate/ticket paths …" *before* `self.gate(wt)` runs. Before, the check ran first but its result was only read after the gate (`if bad or not ok`). The PR also adds README row 66 and selftest 18. Line numbers below are at head 57bee42e.
+Findings:
+- none forge/forge.py:615-621: the change is correct and only tightens the check.
+  - The order now matches the first gate run (:600-602) and `land()` (:538-540).
+  - Base already failed this attempt through `bad or not ok`, so no path that used to fail now passes. The reviewer is never reached on either base or head.
+  - Verified by running the PR's selftest 18 against base forge.py: FAIL, turns `['builder','builder']`, 2 gate runs, ticket note "gate still failing after repair.".
+  - On head: ok, 1 gate run, RETRY note naming `gate.sh`. The full `forge/selftest.py` passes on head.
+- none forge/forge.py:617: what the change actually fixes.
+  - A `gate.sh` written by the agent no longer runs. That run was bounded by `gate_timeout_min` and used the same `self.env` as the agent (:236), so it gave no extra privilege, but it could cost up to 30 lane-minutes.
+  - No false "gate after repair: PASS" comment is posted to a PR that `fail()` then closes.
+  - The ticket note now names the protected edit instead of "gate still failing" plus the rewritten gate's output. This matters because the next attempt's builder reads that note: :594 passes `TICKET=ticket.read_text()`.
+- none forge/forge.py:617: exception and cleanup paths are fine.
+  - The new `return self.fail(...)` sits inside `try`, so `finally` (:656-666) still removes the worktree and deletes the branch. `fail()` sets `retry`/`blocked` and pushes, so no ticket is left `in_progress`.
+  - `bad` (agent-controlled file names) goes only into the ticket note, the log, and `gh --body-file`, never into a shell string. This is the same pattern as :602.
+  - No new concurrency, quota or GPU spend. The change removes one gate run.
+- low forge/README.md:66, forge/forge.py:613, forge/selftest.py:728-729: the claim "a `gate.sh` edited by the repair decided its own case" is false.
+  - Base :614 `if bad or not ok` failed the attempt whatever the rewritten gate returned (confirmed by the base run above).
+  - The real defects were three: the rewritten gate ran, its PASS was posted, and the ticket was told the wrong cause.
+  - The security README should not record a gate bypass that never existed.
+- low forge/forge.py:611-614: the 4-line comment narrates code that no longer exists (`bad or not ok`) and repeats README row 66. One line saying why is enough.
+- low sibling #6 (forge: one repair round after a reviewer REJECT) contradicts this PR. Its new review-repair round runs `self.gate(wt)`, then `if self.touched_protected(wt) or not ok:` and reports "gate failing after review repair". That is the same ordering and misreport this PR removes. #6 should change (check protected paths before its gate run); this PR's side is correct.
+- low sibling #8 (protected-path check and gate evidence on the exact revision that merges) edits the same "gate after repair" `pr_comment` line and keeps `bad = …; gate; if bad or not ok`. The two will conflict textually. #8 is on a stale base (4ee81ee3; its `touched_protected(base=)` and land-time check are already on `forge`) and should rebase onto this PR's ordering. #28's hunk context covers the same lines (textual conflict only, no contradiction). Every sibling appends a row to the same README table (mechanical conflicts only).
+Change needed (only for MERGE WITH CHANGE):
+- In forge/README.md:66, replace `so a \`gate.sh\` edited by the repair decided its own case and its PASS went on the PR` with `so a \`gate.sh\` edited by the repair was executed and its PASS went on the PR before the attempt was failed`.
+- In forge/forge.py:611-614, replace the 4-line comment with one line: `# Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.`
+- In forge/selftest.py:728-729, replace `so the rewritten oracle decided its own case and posted its PASS to the PR` with `so the rewritten oracle ran and posted its PASS to the PR`.
+
+
 ## PR #64 · 2026-10-26T01:25:56Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
