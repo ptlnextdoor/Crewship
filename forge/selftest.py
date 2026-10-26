@@ -643,6 +643,42 @@ with tempfile.TemporaryDirectory() as d:
     check("a prune that cannot read the workspace says so instead of deleting nothing in silence",
           artifact.exists() and any("cargo metadata failed" in m for m in logged), str(logged))
 
+# 16. The builder session that resolves a conflict with main (29 reflex1 cycles ran one) commits through
+# `git add -A`, and it starts after the pre-gate protected check and after the review. Until land() checks
+# again, the only thing keeping that session off gate.sh and tickets/ was a sentence in its prompt.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "a.txt").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    wt = Path(d) / "wt"
+    git(f"worktree add -q -b b {wt} main", repo)
+    (wt / "a.txt").write_text("branch\n")
+    git("add -A", wt); git("commit -qm 'builder work'", wt)
+    # Another lane lands a conflicting change, so rebase and merge both stop and the builder is called in.
+    (repo / "a.txt").write_text("other lane\n")
+    git("add -A", repo); git("commit -qm other", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+
+    def resolve(role, prompt, cwd, timeout_min=None):
+        git("merge origin/main", cwd)          # conflicts, as it did for the real session
+        (cwd / "a.txt").write_text("both\n")   # the work it was asked to do
+        (cwd / "gate.sh").write_text("#!/bin/sh\nexit 0  # and the oracle it was told not to touch\n")
+        git("add -A", cwd); git("commit -qm 'forge: merge main'", cwd)
+        return 0, ""
+
+    f.agent = resolve
+    f.pr = ""
+    f.gate = lambda cwd: (True, "")  # the gate is not the check under test; it also cannot check itself
+    why = f.land(wt, "b", "0001-t", "builder")
+    check("a conflict resolved by editing the gate does not land",
+          "gate.sh" in why and "not to touch" not in git("show origin/main:gate.sh", repo), f"{why!r}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")

@@ -325,8 +325,8 @@ class Forge:
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
-    def touched_protected(self, cwd: Path) -> list[str]:
-        files = self.sh("git diff --name-only main...HEAD", cwd=cwd).stdout.split()
+    def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
+        files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
     def startable(self) -> list[Path]:
@@ -513,6 +513,14 @@ class Forge:
         for _ in range(3):
             if not self.rebase_onto_main(wt, builder):
                 return "could not bring the branch up to date with main (conflicts the builder could not resolve)"
+            # rebase_onto_main may run a builder session to resolve the conflict (29 reflex1 cycles did), and its
+            # `git add -A` commits whatever that session touched. The protected check before the gate ran two
+            # agent turns earlier, so until here the only thing stopping that session from editing gate.sh or
+            # tickets/ was the sentence in its prompt. Base is origin/main, which the branch now contains, so
+            # the diff is the branch's own work and not another lane's landed ticket updates.
+            bad = self.touched_protected(wt, "origin/main")
+            if bad:
+                return f"resolving the conflict with main edited protected gate/ticket paths {bad}; not allowed."
             ok, gout = self.gate(wt)
             if not ok:
                 return f"gate failed after updating from main.\n{gout[-2000:]}"
