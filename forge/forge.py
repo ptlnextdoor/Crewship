@@ -608,10 +608,13 @@ class Forge:
                 rc, out = self.agent(builder, f"The gate failed. Fix the code (never the gate or tests' expectations unless the ticket says so) until `{self.cfg.get('gate', './gate.sh')}` passes, then commit.\n\nTicket ({ticket.relative_to(self.repo)}):\n{ticket.read_text()}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
+                # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
                 bad = self.touched_protected(wt)
+                if bad:
+                    return self.fail(ticket, f"the repair edited protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
-                if bad or not ok:
+                if not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
             diff = self.sh("git diff main...HEAD", cwd=wt).stdout
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
