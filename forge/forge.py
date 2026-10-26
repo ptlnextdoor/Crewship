@@ -257,14 +257,9 @@ class Forge:
         """Stop spending when the shared Claude/Codex windows are nearly used (the owner works too)."""
         floor = self.cfg.get("limits", {}).get("max_window_used_pct", 85)
         r = subprocess.run([OMP, "usage"], capture_output=True, text=True, timeout=120)
-        # Pause only when every vendor the roles use is over the floor; one vendor out is handled
-        # by per-role fallback. A vendor is over when any of its vendor-wide windows passes the floor.
-        # A window label may name one model - right now `omp usage` shows "Claude 7 Day (Fable)" at
-        # 100.0% while "Claude 5 Hour" is at 57.0% - and that window is the model's, not the vendor's.
-        # The old max() over the block marked the vendor, which takes claude-opus-5-5 out of every
-        # role's chain together with Fable: every builder goes to Codex, and `reviewer` (fallback
-        # claude-fable-5-1, same vendor) then has no model at all - QuotaExhausted after the build
-        # session, ticket back to the queue, 15 minutes of sleep, once per lane.
+        # Pause only when every vendor the roles use has a window over the floor; one vendor out is handled
+        # by per-role fallback. A window labelled for one model ("Claude 7 Day (Fable)") is keyed
+        # "vendor:<token>" and takes only that model out of the chains (spent()).
         over: dict[str, bool] = {}
         for block in re.split(r"\n(?=\S)", r.stdout):
             name = block.split("\n", 1)[0].lower()
@@ -284,7 +279,7 @@ class Forge:
             else:
                 self.exhausted.pop(k, None)
         vendors = {x["model"].split("/")[0] for x in self.cfg["roles"].values()}
-        if vendors and all(over.get(v, False) for v in vendors):
+        if vendors and all(any(o for k, o in over.items() if k.split(":")[0] == v) for v in vendors):
             self.log(f"quota: every vendor over {floor}% ({over}), pausing")
             return False
         return True

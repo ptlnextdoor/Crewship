@@ -716,10 +716,12 @@ with tempfile.TemporaryDirectory() as d:
         keeps_going = f.quota_ok()
         f.agent("builder", "p", repo)
         f.agent("planner", "p", repo)
+        usage = usage.replace("0.0% used · resets in 4h59m", "90.0% used · resets in 4h59m")
+        pauses = not f.quota_ok()
     finally:
         forge.subprocess.run = real_run
     check("a window labelled for one model does not take the rest of the vendor with it",
-          keeps_going and ran == ["anthropic/claude-opus-5-5", "openai-codex/gpt-6.1-sol"],
+          keeps_going and pauses and ran == ["anthropic/claude-opus-5-5", "openai-codex/gpt-6.1-sol"],
           f"{ran} {sorted(f.exhausted)}")
 
 print()
