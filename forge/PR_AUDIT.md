@@ -2,6 +2,51 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #66 · 2026-10-26T03:32:42Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #66 forge: measure a branch's own work against origin/main, not a stale local main
+What it changes: `cycle()` changes three diffs from the lane's local `main` (frozen at the claim commit) to `origin/main`: the pre-gate protected-path check (forge.py:608), the post-repair check (:620) and the reviewer's `{DIFF}` (:627). Before diffing against an `origin/` base, `touched_protected()` now runs `git fetch -q origin` (:346-348). That fetch also runs on `land()`'s existing call (:541). The "builder produced no diff" check (:600) still uses local `main`. Also adds README row 67 and selftest 19. Line numbers are at the head (base ef544f06 + diff).
+Findings:
+- ok forge/forge.py:608,620 The new base is correct and keeps protection intact.
+  - After the builder merges or rebases `origin/main`, the merge-base is the main commit it took in. A protected path is flagged exactly when HEAD's copy differs from main's, which is what landing would change.
+  - When the builder did not sync, the merge-base is still the branch point, so the result is the same as before.
+  - A branch with no merge-base (orphan history) still dies at the no-diff check, because :600 keeps `main`.
+  - The bug is real. Seven `diff edits protected gate/ticket paths` notes in reflex1's `origin/main` tickets list only other tickets and never `gate.sh`. 0012/PR #30 and 0062/PR #55 went straight to BLOCKED (forge.log). forge.log has 37 RETRY/BLOCKED lines.
+  - Replay on a temp `--shared` clone of ~/Dev/reflex1: branch at c4bd03c4 (the last main commit before 10-24 11:56), add a small file, merge 2c39a79c. The old base gives 36 protected hits and a 786 KB diff. The new base gives 0 hits and a 528 B diff. The PR claims 35 hits and 761 KB, which is consistent.
+- ok forge/forge.py:627 The new base makes the reviewer stronger. In that replay the old `{DIFF}` was 784,035 chars, and the branch's own file started at offset 608,470, past the `diff[:120000]` cut. The reviewer approved without ever seeing the builder's code. With `origin/main` it gets only the branch's own hunk.
+- ok forge/forge.py:346-348 I checked the fetch with throwaway `cycle()` runs on a real bare origin, with the agent stubbed. It is needed, and it tightens trust in the ref.
+  - Builder merges main by URL (`git pull <origin path> main`), so `refs/remotes/origin/main` stays stale. With the fetch, the ticket lands. With the fetch removed, it is refused for `['tickets/0002-u.md']`.
+  - Builder commits a `gate.sh` edit, commits work on top, then runs `update-ref` to move both `main` and `origin/main` onto the gate commit. On the base, the pre-gate check returned [], the tampered gate ran, and the reviewer saw only `a.txt`; only `land()` caught it later. On the head, the fetch resets `origin/main` and the attempt fails before the gate.
+  - If the fetch fails, its return code is ignored and the ref stays stale. A stale ref only adds files to the diff, so it fails closed.
+  - A fetch that hangs past 120 s raises TimeoutExpired, the same path as the existing pushes at :613/:477. The `except` closes the PR, the `finally` removes the worktree and branch, and `lane_loop` calls `recover()` to put the ticket back to retry. Nothing is left `in_progress`.
+  - The fetch only touches `refs/remotes/*` in the lane's own clone, which one lane process uses sequentially. `claim()`'s `before` reset, `recover()` and `discard_strays()` are unaffected.
+  - The base is a literal, so no ticket text reaches a shell.
+- low forge/forge.py:608 The check no longer reports a builder that pushes its own protected edit straight to `origin/main`.
+  - Throwaway run: the builder commits a `gate.sh` edit, runs `git push origin HEAD:main`, then commits `a.txt`.
+  - Base: the ticket gets RETRY with `['gate.sh']`.
+  - Head: the ticket is marked done, and the reviewer's diff shows only `a.txt`.
+  - In both runs the tampered gate is already on `origin/main`. The old message did not undo it, and every later cycle gates on it. So this loses a report, not a control. The real control is outside forge (branch protection, or no main-push credential in the agent env). No one-line edit restores the report, so this does not block.
+- nit forge/forge.py:600 A branch whose only change is a merge of main now reaches the gate and a reviewer with an empty `{DIFF}`. Throwaway run on the head: turns `['builder','reviewer']`, reviewer diff `'\n'`. The base failed it at the protected check, for a false reason. This costs one gate run and one review session in a rare case. Moving :600 to `origin/main` would stop it at the no-diff check. Not required.
+- low forge/prompts/reviewer.md:9 (not in this diff; follow-up) Step 6 still tells the reviewer to run `git diff main...HEAD -- Cargo.toml Cargo.lock ...` itself. `{DIFF}` is now against `origin/main`, so the reviewer's own dependency diff is the only place left with the stale base. On a branch that merged main, a crate another lane's ticket named and landed shows up as new, and the reviewer issues a false REJECT. This fails closed. It should become `origin/main...HEAD`.
+- nit forge/selftest.py:763-764,797 (slop) The comment says "the loop's own prompt tells it to keep up with main". prompts/builder.md says nothing about merging or rebasing main; its only mention is "If it already fails on main". The one prompt that says `git merge origin/main` is the merge-resolve session at forge.py:453, which runs in `land()` after these checks. Also, the stub builder runs `git fetch` itself (:797), so check 19 proves the base change but never exercises the new fetch.
+- nit forge/forge.py:603-607 (slop) The 5-line comment repeats README row 67 and the selftest comment. It says all seven PRs "rebased onto it", but reflex1's LEARNINGS.md:84 says "a `git merge origin/main`, or a rebase/cherry-pick". One line on why the base is origin/main is enough.
+- info (pre-existing, not counted against this PR) In the `update-ref` run above, the builder's gate commit reached `origin/main` on both base and head, through forge's own push. The sequence is `fail()`, then `sync_main()` (which keeps the moved local `main`), then `push()`. Origin log: `g` (the builder's gate edit) followed by `forge: retry 0001-t`. This is worth its own ticket: `sync_main()` should not push a local `main` that a session moved.
+- ok Verification:
+  - From a `git archive` of ef544f06 with the PR applied: `py_compile` passes, and `python3 forge/selftest.py` reports "all checks passed".
+  - Base forge.py with the PR's selftest fails only check 19, with the production line `diff edits protected gate/ticket paths ['tickets/0002-u.md']`.
+  - The temp dirs were removed.
+  - No prompt text changed. No GPU, quota or state-file change, and no unbounded growth: the reviewer diff only shrinks.
+- Siblings on base `forge`:
+  - #28 duplicates this PR. It moves `touched_protected`, the no-diff check and `{DIFF}` to `origin/main` with no fetch, on stale base ef6156b2 (before #63's `base` param and #65's ordering). #28 should be closed as superseded. This does not lower #66.
+  - #25 (`review_diff()`), #5 (diff/notes split) and #6 (review-repair round) each rebuild the reviewer diff with `git diff main...HEAD`. #6 also calls `touched_protected(wt)` with the default `main`. Any of them landing after #66 brings the stale base back. They should switch to `origin/main`. This PR's side is correct.
+  - #8 re-adds the `base` param that is already on `forge`. It conflicts textually at `touched_protected`, and #8 should rebase.
+  - #40 (`sh()` returns rc 124 on timeout instead of raising) is compatible: a timed-out fetch leaves a stale ref, which fails closed.
+  - #48 (`push()`/`land()` must reach origin/main) is complementary, with no overlapping lines.
+
+
 ## PR #65 · 2026-10-26T02:24:52Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
