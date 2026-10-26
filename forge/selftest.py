@@ -724,6 +724,42 @@ with tempfile.TemporaryDirectory() as d:
           keeps_going and pauses and ran == ["anthropic/claude-opus-5-5", "openai-codex/gpt-6.1-sol"],
           f"{ran} {sorted(f.exhausted)}")
 
+# 18. The repair session after a failed gate is the one place where a gate.sh the agent just rewrote was
+# executed: its edits were read only after the second gate run, so the rewritten oracle decided its own
+# case and posted its PASS to the PR. Evaluator tampering happens in about half of natural agent episodes
+# and locking the evaluator is what stops it (arXiv/ICDEW 2026, RewardHackingAgents).
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    runs = Path(d) / "runs"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    (repo / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\nexit 1\n")
+    (repo / "gate.sh").chmod(0o755)
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan = lambda: None
+    turns: list[str] = []
+
+    def build_then_rewrite_the_gate(role, prompt, cwd, timeout_min=None):
+        turns.append(role)
+        if len(turns) == 1:
+            (cwd / "a.txt").write_text("the work\n")    # a real diff, nothing protected
+        else:
+            (cwd / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\nexit 0\n")
+        return 0, ""
+
+    f.agent = build_then_rewrite_the_gate
+    f.cycle()
+    note = (repo / "tickets/0001-t.md").read_text()
+    check("a repair that edits the gate is rejected before that gate is run again",
+          "gate.sh" in note and runs.read_text().count("run") == 1 and "reviewer" not in turns,
+          f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
