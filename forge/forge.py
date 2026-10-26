@@ -343,6 +343,9 @@ class Forge:
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
+        if base.startswith("origin/"):
+            # A stale remote-tracking ref puts main's own commits on this branch's side of the diff.
+            self.sh("git fetch -q origin", cwd=cwd, timeout=120)
         files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
@@ -597,7 +600,12 @@ class Forge:
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
             self.pr = self.pr_open(wt, branch, ticket, builder)
-            bad = self.touched_protected(wt)
+            # Base is origin/main, not the lane's local main: the builder may bring main into its branch
+            # during the session (reflex1 PRs #30/#55/#93/#100/#101/#103/#105 rebased onto it), and against a
+            # local main still at the branch point every ticket another lane landed meanwhile reads as this
+            # diff editing tickets/ - 7 of reflex1's 37 failures, 2 straight to blocked, none naming gate.sh.
+            # The reviewer's diff below has the same base, so it is the branch's work and not another lane's.
+            bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return self.fail(ticket, f"diff edits protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
             ok, gout = self.gate(wt)
@@ -609,14 +617,14 @@ class Forge:
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
-                bad = self.touched_protected(wt)
+                bad = self.touched_protected(wt, "origin/main")
                 if bad:
                     return self.fail(ticket, f"the repair edited protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
-            diff = self.sh("git diff main...HEAD", cwd=wt).stdout
+            diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]

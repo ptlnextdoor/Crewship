@@ -760,6 +760,50 @@ with tempfile.TemporaryDirectory() as d:
           "gate.sh" in note and runs.read_text().count("run") == 1 and "reviewer" not in turns,
           f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
 
+# 19. A builder that brings main into its branch (merge or rebase - both are normal git hygiene, and the
+# loop's own prompt tells it to keep up with main) used to be refused as "edits protected gate/ticket paths":
+# the check diffed against the lane's local main, left at the branch point, so every ticket another lane
+# landed meanwhile sat on this branch's side of the diff. 7 of reflex1's 37 failures, 2 of them straight to
+# blocked, and reflex1's LEARNINGS.md carries the workaround the builders wrote for it ("they arrived through
+# `git merge origin/main` ... rebase instead, or keep the merge out until the owner fixes the check").
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    (repo / "tickets/0002-u.md").write_text("status: done\n\n# u\n")
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "gate.sh").chmod(0o755)
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    git(f"clone -q {origin} {other}", Path(d))
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan = lambda: None
+    turns: list[str] = []
+
+    def build_then_take_main(role, prompt, cwd, timeout_min=None):
+        turns.append(role)
+        if role == "reviewer":
+            return 0, "VERDICT: APPROVE"
+        (cwd / "a.txt").write_text("the work\n")
+        git("add -A", cwd); git("commit -qm work", cwd)
+        # another lane lands a ticket note on main while this session runs, and the builder takes main in
+        git("pull -q --rebase origin main", other)
+        (other / "tickets/0002-u.md").write_text("status: done\n\n# u\nlanded by another lane\n")
+        git("add -A", other); git("commit -qm 'forge: lane 3 done 0002'", other); git("push -q origin main", other)
+        git("fetch -q origin", cwd); git("merge -q --no-edit origin/main", cwd)
+        return 0, ""
+
+    f.agent = build_then_take_main
+    f.cycle()
+    note = (repo / "tickets/0001-t.md").read_text()
+    check("a branch that merged main is not refused for the tickets main carries",
+          "protected" not in note and "reviewer" in turns and "status: done" in note,
+          f"{turns}: {note[-300:]!r}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
