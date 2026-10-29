@@ -2,6 +2,53 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #74 · 2026-10-29T06:18:37Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #74 forge: builder follows the code over a stale LEARNINGS.md entry and retires it
+What it changes: adds one rule to `forge/prompts/builder.md` (new line 20). It says a `LEARNINGS.md` entry is "a past session's reading of the code, not a rule". When an entry disagrees with the code, "the code wins": the builder checks with `rg` and `git log -S`, corrects or deletes the entry in the same commit, notes it in `PROGRESS.md`, and "never write[s] the code the stale entry describes". Also adds one README safeguard row (`forge/README.md:73`). No change to forge.py, config or the reviewer.
+
+Findings:
+- medium forge/prompts/builder.md:20 The trigger is any disagreement with the code, which is broader than staleness, and the rule calls every entry "not a rule".
+  - Many reflex1 entries are prescriptive pitfalls about a library or a process, not descriptions of repo code. Examples from `~/Dev/reflex1` origin/main `LEARNINGS.md`:
+    - :58 "candle `from_slice` does not validate length; check it yourself" (SIGSEGV, exit 139 in 0011)
+    - :72 "use `shift_remove`" on `preserve_order` maps
+    - :52 "Do not edit crate sources while `./gate.sh` runs"
+    - :81 the data-URL check lives in reflex-serve
+  - Rough count: 46 of 128 entries contain never, do not, must, always or use.
+  - A pitfall "disagrees with the code" exactly when some code ignores it, which is when the lesson matters most. In that case this line tells a yolo builder to delete the lesson and never write the guard.
+  - Concrete case: `Cargo.toml:15` enables `preserve_order`, and `crates/reflex-serve/src/lib.rs:59,63` calls `obj.remove(...)`, which is `swap_remove`. A builder working there sees code that "disagrees" with :72, and this rule settles it toward deleting :72.
+  - Today the `from_slice` sites are guarded (`reflex-cpu/src/lib.rs:272-274,281`, `reflex-vision/src/vit.rs:112-118`). The gate does not test short input, so a later unguarded call is the case the lesson exists for.
+  - The steward already uses a narrower test (`steward.md:10`): wrong only when "the code it names no longer exists or no longer behaves that way". This line does not reuse it.
+  - "Never write the code the stale entry describes" also overrides "Do exactly this ticket" (builder.md:8) when the ticket asks to restore the behaviour the entry records, i.e. a regression fix. `git log -S` shows the regression commit as "the code moved on". The reviewer's Done-when check (reviewer.md:4) catches a refused ticket, but at the cost of a wasted attempt.
+  - Nothing in reviewer.md checks that a deleted `LEARNINGS.md` entry was actually stale. reviewer.md:7 only treats that prose as the builder's account of its work.
+- low forge/README.md:73 The row has the same broad wording ("When a `LEARNINGS.md` entry disagrees with the code ... follows the code"). It should follow whatever the prompt line becomes.
+  - The citations check out: arXiv 2608.16630 abstract contains the quoted sentence; 2610.32578 reports 48 of 118 failures as drift; 2602.11988 reports >20% cost, no success gain, and instructions followed.
+  - "128 entries, 82 naming a file" reproduces with `git show origin/main:LEARNINGS.md` in reflex1.
+- info sibling #1 (`forge/prompts/builder.md`, "existing code takes precedence over stale docs") overlaps and contradicts this PR on the same case. For a stale `LEARNINGS.md` entry, #1 says to follow the code and "list each such inconsistency in your `LEARNINGS.md` entry" (append beside the stale entry). #74 says to correct or delete the entry. `steward.md:10` says "delete it rather than keep it as history", which agrees with #74. #1 should change: drop `LEARNINGS.md` from its scope, or close it as superseded.
+- info sibling #19 (union merge driver for `LEARNINGS.md`/`PROGRESS.md`) assumes the notes files are "append-only". #74 adds builder edits in the middle of `LEARNINGS.md`. I checked with `git merge-file -p --union` on a scratch base [a,X]:
+  - A correction X→X2 against a concurrent append of Y after X gives `a X2 X Y`: the stale entry stays next to its correction.
+  - Deleting X against the same append gives `a X Y`: the deletion is undone.
+  - No model sees either result. #19 should change; its premise is already false for the steward's deletions.
+- info sibling #23 (instruction-file hunks) is compatible: its reviewer step 7 would review #74's corrected lines as instructions. Both edit around the "When done" bullet, so there is a textual merge conflict, nothing more. The 14 other open PRs touching `forge/README.md` add unrelated rows, and none of their added lines mention LEARNINGS or stale.
+- ok traced:
+  - No `{...}` in the new text. `prompt()` uses `str.replace` (forge.py:118-122).
+  - The rule reaches only the first builder or builder_hard session (forge.py:615). The repair and conflict prompts are inline and unchanged.
+  - No ticket text reaches a shell. Protected paths are not mentioned and `touched_protected` is unchanged.
+  - No GPU or quota spend added. The prompt does not grow over time. The `version` hash (forge.py:104) changes as it should for a prompt edit.
+  - More mid-file `LEARNINGS.md` edits mean somewhat more rebase conflicts. These go through the existing resolver plus `touched_protected(wt, "origin/main")` and re-gate (forge.py:551-564). This is the same class as today's EOF-append conflicts.
+  - The PR base blobs (`builder.md` d341043e, `README.md` 074b7176) match origin/forge, so the PR applies cleanly.
+- info worth: builders already correct entries in place without being told to (reflex1 a21500f, 8f4bf42, 2488c0e). The new parts are deletion and precedence over the entry. That is worth one line once scoped to staleness.
+
+Change needed (only for MERGE WITH CHANGE): replace the added line 20 of `forge/prompts/builder.md` with:
+```
+- A `LEARNINGS.md` entry about what this repo's code does is a past session's reading of that code, not a rule: when the code it names no longer exists or no longer behaves that way (check with `rg` and `git log -S`), follow the code unless the ticket asks otherwise, correct or delete the entry in the same commit as your work, and say so in your `PROGRESS.md` entry. A pitfall about a library, tool or process (a call that does not check its input, a step not to take while the gate runs) is not stale because some code here ignores it.
+```
+and in the added `forge/README.md` row, replace the first cell's opening "When a `LEARNINGS.md` entry disagrees with the code, the builder follows the code and corrects or deletes the entry" with "When the code a `LEARNINGS.md` entry names no longer exists or no longer behaves that way, the builder follows the code (unless the ticket asks otherwise) and corrects or deletes the entry; a library/tool/process pitfall is not retired because some code ignores it". Leave the rest of the row as it is.
+
+
 ## PR #73 · 2026-10-29T05:13:38Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
