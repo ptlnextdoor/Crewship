@@ -2,6 +2,31 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #72 · 2026-10-29T04:41:10Z · MERGE · risk none · gate pass · merged
+
+Verdict: MERGE
+Risk: none
+
+## PR #72 forge: PR body says merge commit + branch deleted, not squash-merge
+What it changes: `pr_open()` (forge/forge.py:503-505 at head 5a36b355) replaces the fixed PR-body sentence "the cross-vendor review ... forge squash-merges on approval" with "the review (its comment names the model) ... forge merges on approval with a merge commit and deletes the branch". It also adds a one-line comment explaining why. Nothing else changes: no logic, prompt, gate, or selftest edits.
+Findings:
+- none forge/forge.py:504-505 The new text matches what the code does.
+  - The GitHub path runs `gh pr merge {pr} --merge --delete-branch` (:537).
+  - The fallback runs `git merge --no-ff` (:568) and then `git push origin --delete {branch}` (:574), but only once the tip is in origin/main. A push that never reached origin keeps the branch. That is an edge case the old text did not cover either.
+  - The review comment names the model: `**review by \`{last_model...}\`**` (:668).
+  - Dropping "cross-vendor" is correct. Reviewer choice compares the builder's vendor with the reviewer's primary only (:646-647). `reviewer_alt` falls back to `anthropic/claude-fable-5-1` (reflex1.toml:58), which is the same vendor as the Opus builder, and `agent()` walks that chain on quota (:193-211). So "cross-vendor" was sometimes false.
+- none forge/forge.py:502-505 Security trace: nothing in the gate, reviewer or protected paths changes.
+  - The PR body is for humans only. The reviewer prompt is built from TICKET and DIFF alone (:658), and reviewer.md:7 tells it not to run `gh pr view`. No builder, planner or steward prompt reads the PR body.
+  - Ticket text still reaches gh only through `--body-file`, capped at 60000 chars (:480-483). Nothing new reaches a shell.
+  - No new state, exception path, quota use or GPU spend. The PR keeps adjacent f-string literals with a `#` comment between them inside the parentheses. That is valid Python: the head file compiles.
+- ok Tests: the full `forge/selftest.py` passes on a `git archive` of the PR head ("all checks passed"). No test pins the body text, so nothing needed updating.
+- nit forge/forge.py:503 (slop) The comment's "85 landings" is the count of `MERGED` lines in reflex1's forge.log (85, verified). On GitHub, 77 of reflex1's 79 merged PRs carry the "squash-merges" sentence (34 closed and 10 open PRs carry it too). The comment also records the old wrong text, which will mean nothing once this lands, and it backticks `--merge` but not --no-ff. Not blocking: the file follows the same convention elsewhere (:570-572).
+- info siblings: of the open PRs on `forge`, only #44 and #48 touch code near this. Neither contradicts or duplicates it.
+  - #44 adds a `pr view` adopt step after the two `pr create` calls in `pr_open()`. It is a different hunk and leaves the body alone.
+  - #48 changes `land()`'s fallback so a landing counts only once it is in origin/main. It still deletes the branch on that same condition, which matches this PR's "deletes the branch".
+  - No other open PR edits the body sentence. The other 14 that touch forge/forge.py change neither `pr_open()`'s body nor the merge flags.
+
+
 ## PR #71 · 2026-10-29T03:39:37Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
