@@ -384,6 +384,7 @@ r = (ROOT / "prompts/reviewer.md").read_text()
 check("builder is told not to edit the gate", "gate.sh" in b and "never" in b.lower())
 check("reviewer must end with a verdict line", "VERDICT: APPROVE" in r and "VERDICT: REJECT" in r)
 check("reviewer is not told to be lenient", "benefit of the doubt" not in r.lower())
+check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it for each file" in r and "quotes the entry" in r)
 
 # 7. A sync of main must not destroy this lane's unpushed commits (planner tickets, status, doc edits).
 with tempfile.TemporaryDirectory() as d:
