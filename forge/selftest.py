@@ -860,6 +860,42 @@ with tempfile.TemporaryDirectory() as d:
     check("an unreadable omp stamps '?' instead of failing the cycle", f.harness == "?", repr(f.harness))
     forge.OMP = real_omp
 
+# 22. The reviewer is told to run the diff's tests against the old code by restoring a source file from
+# origin/main. A reviewer that forgets `git checkout HEAD -- .` left a dirty worktree for land(): the rebase
+# refuses unstaged changes, the merge too when main touched the file, and the conflict session's `git add -A`
+# commits the restored file - the fix undone in the landing commit. Forge resets the worktree after the review.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    (repo / "src.txt").write_text("old\n")
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "gate.sh").chmod(0o755)
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan = lambda: None
+    at_land: list[str] = []
+
+    def build_then_messy_review(role, prompt, cwd, timeout_min=None):
+        if role == "reviewer":
+            git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
+            (cwd / "probe.log").write_text("scratch\n")
+            return 0, "VERDICT: APPROVE"
+        (cwd / "src.txt").write_text("new\n")
+        git("add -A", cwd); git("commit -qm work", cwd)
+        return 0, ""
+
+    f.agent = build_then_messy_review
+    f.land = lambda wt, branch, tid, builder: (at_land.append(git("status --porcelain", wt)), "")[1]
+    f.cycle()
+    check("a reviewer's restored file and scratch do not reach land()",
+          at_land == [""], repr(at_land))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
