@@ -2,6 +2,22 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #75 · 2026-10-29T07:19:34Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #75 forge: reviewer runs every error arm the diff adds that no test takes
+What it changes: one sentence appended to step 5 of `forge/prompts/reviewer.md`. For each error arm the diff adds that no test in the diff takes, the reviewer now runs it itself and checks it fails the way the code says. It also adds one README reliability row. No forge.py, gate, builder-prompt or protected-path change.
+Findings:
+- none forge/prompts/reviewer.md:8 Gate, protected paths and verdict path are unchanged. The reviewer still runs in `wt` with `timeout_min=30` and one rerun on a timeout with no verdict (forge.py:661-668). `VERDICT:` parsing (forge.py:662), `touched_protected` before the gate and in `land()` (forge.py:626, 638, 559), and the selftest prompt checks (selftest.py:383-386) are untouched. The new text grants no permission over `gate.sh`/`tickets/`/`.forge/`/`STEERING.md` and does not relax step 3 or step 4. It can only add REJECTs, and only for an arm that panics, returns a wrong value or swallows the error. The builder is not asked for new tests, so the two prompts do not disagree. Placeholders are the same before and after (`{DIFF}` 1, `{GATE}` 2, `{PROJECT}` 1, `{TICKET}` 1). The new text has no `{..}` token for `prompt()`'s replace and is a fixed ~430 chars, so prompt size does not grow over time.
+- low forge/prompts/reviewer.md:8 Taking an arm needs a constructed input ("the missing file", "the malformed row"), and line 1 still says "Do not edit files". If a reviewer edited the worktree instead, `land()` would gate a dirty tree. A rebase refused for unstaged changes falls through to merge (forge.py:454-461), and on the conflict path `git add -A` (forge.py:474) would commit the reviewer's leftovers. Logs show reviewers keep to line 1: they construct inputs under /tmp (`--vision-dir /nonexistent`, `/tmp/rvbad_nope.json`), use throwaway copies ("/tmp/rp, worktree untouched", lane2 00026), or skip a check outright ("would need editing the worktree", lane4 00030). Restating line 1 here would repeat it. No change.
+- low forge/prompts/reviewer.md:8 The step adds probe work with no stated bound beyond the 30-min cap. Reflex1 review wall times: median 10.5 min, p90 19 min, 6 of 125 at 25 min or more. Probe scratch is already left in /tmp on the root filesystem (1.4 GB of `/tmp/rv*`, `/tmp/rp` and `/tmp/boxprobe`, 947 MB of it in `/tmp/rv-probe-target`, dated 2026-10-23 and still there). That filesystem is shared with the lane target dirs: 17 GB free against `disk_ok`'s 10 GB floor. forge.py has no /tmp cleanup; `prune_target` only prunes `CARGO_TARGET_DIR`. Quota cost per review is still capped at 2×30 min, but the PR raises how often probes run. The growth mechanism predates this PR, so this does not block.
+- nit forge/README.md:74 Reproduced on reflex1 `origin/main` (first-parent merges, last 80, non-test `.rs/.py/.mjs/.js`, the PR's named patterns): exactly 27 merges add an error arm. Using the PR's named assertion patterns, plus exit-code asserts, I get 2-3 of those 27 that add an arm-taking assertion, not 8. The "..." in the PR body hides the rest of its patterns. If anything the gap is wider than stated. arXiv 2607.18057 checked: 4,882 PRs, error-handling miss rates 86.0% Java / 81.0% Python. No change.
+- nit forge/prompts/reviewer.md:8 The example list covers Rust and Python (`Err`, `map_err`/`ok_or`, `bail!`, `except`/`raise`) but not JS `throw`/`process.exit`. Reflex1's `tools/sim/*.mjs` uses those: counting `throw` adds 4 merges (31 vs 27) whose only new arm is a `throw`. The rule says "every error arm", so the parenthetical reads as examples. No change.
+- none siblings Four other open PRs edit `forge/prompts/reviewer.md`, all on older bases: #5 (notes read last), #9 (perturbed rerun of numbers), #23 (instruction-file step 7, "steps 1 to 7"), #25 (review_exclude diff header). None touches the error-arm sentence or duplicates it; #23's renumbering is a text conflict only. The 15 README-touching siblings each append their own row. A scan of all 16 sibling diffs' added lines finds no error-arm/error-path rule. No contradiction or duplicate.
+
+
 ## PR #74 · 2026-10-29T06:18:37Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
