@@ -16,5 +16,5 @@ End your reply with exactly one line: `VERDICT: APPROVE` or `VERDICT: REJECT`.
 Ticket:
 {TICKET}
 
-Diff (`git diff origin/main...HEAD`, this branch's own work). Use that base for any diff you run yourself: the worktree's local `main` sits at the branch point, so `main...HEAD` also shows what other lanes landed meanwhile.
+Diff (`git diff --stat origin/main...HEAD`, then the diff itself; this branch's own work). Use that base for any diff you run yourself: the worktree's local `main` sits at the branch point, so `main...HEAD` also shows what other lanes landed meanwhile. Over about 150 changed lines, one read of the whole diff misses most of what is wrong; past that, take the files from the stat one at a time with `git diff origin/main...HEAD -- <path>`, and ask steps 2 to 5 of each file before you write anything about the whole.
 {DIFF}

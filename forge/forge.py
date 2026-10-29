@@ -632,9 +632,13 @@ class Forge:
             # A diff cut at 120 KB was handed over with nothing saying so, and a reviewer that cannot see the
             # cut reads a half-diff as the whole change (arXiv 2610.32110: tool output hiding its own limit
             # made verifiers accept wrong answers 90 of 90 times; stating the limit flipped all 90).
-            shown = diff[:120000] + ("" if len(diff) <= 120000 else
-                                     f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
-                                     "Read the rest with `git diff origin/main...HEAD` before you decide.]")
+            # The --stat first: a reviewer handed one long diff reads it once and rates it as a whole, and that
+            # read's quality collapses with size (arXiv 2606.15689: F1 0.66 on diffs under 10 lines, 0.04 over
+            # 150; 47 of reflex1's 79 merged PRs are over 150). The prompt tells it to go file by file past that.
+            stat = self.sh("git diff --stat=1000 --stat-graph-width=40 origin/main...HEAD", cwd=wt).stdout
+            shown = stat + "\n" + diff[:120000] + ("" if len(diff) <= 120000 else
+                                                   f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
+                                                   "Read the rest with `git diff origin/main...HEAD` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
