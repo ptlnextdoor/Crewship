@@ -461,9 +461,14 @@ class Forge:
             return True
         self.sh("git merge --abort", cwd=wt)
         self.log("rebase and merge both conflict with main; builder resolves")
+        # land() runs the gate on the merged tree right after this returns, so the session is not asked to: the
+        # one resolve log reflex1 kept in full spent 15m57s of its 30 on `./gate.sh`, and the 29 resolves took
+        # 10 to 50 min each from this line to the merge, with forge's own gate run inside that span too.
+        gate = self.cfg.get("gate", "./gate.sh")
         self.agent(builder, "Another lane landed changes on main that conflict with this branch. Run `git merge origin/main`, "
-                   "resolve every conflict keeping the intent of both sides, run the gate, and commit the merge. "
-                   "Do not edit gate.sh, tickets/ or .forge/.", wt, timeout_min=30)
+                   "resolve every conflict keeping the intent of both sides (in PROGRESS.md and LEARNINGS.md both sides' "
+                   "entries stay), build and run the tests the conflicted files touch, and commit the merge. Do not run "
+                   f"`{gate}`: forge runs it on your result next. Do not edit gate.sh, tickets/ or .forge/.", wt, timeout_min=30)
         if self.sh("git ls-files -u", cwd=wt).stdout.strip():
             return False
         self.sh("git add -A && git commit -qm 'forge: merge main' || true", cwd=wt)
