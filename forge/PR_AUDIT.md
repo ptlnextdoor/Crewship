@@ -2,6 +2,51 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #87 · 2026-10-29T22:19:44Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #87 reviewer: check the diff against the repo's LEARNINGS.md; a repeated documented mistake is a finding
+What it changes: one sentence at the end of reviewer.md step 5. The reviewer now `rg`s `LEARNINGS.md` at the worktree root for what the diff touches. A diff that does what an entry says not to is a finding that quotes the entry, "unless the same diff corrects the entry". The PR also adds a README row (README.md:79) and one selftest string check (selftest.py:387). forge.py is not changed.
+Findings:
+- medium forge/prompts/reviewer.md:8: one edit to an unprotected file switches the new check off, and the prompt tells the reviewer to accept that edit. Traced:
+  - The reviewer runs in the builder's worktree at the branch tip (forge.py:646 `worktree add -b {branch} {wt} main`, :706 `self.agent(reviewer, rprompt, wt)`).
+  - `LEARNINGS.md` is not protected (reflex1.toml:10, forge.py:95-96).
+  - So "`LEARNINGS.md` at the worktree root" is the builder's copy. An entry the builder deleted gives no `rg` hit. I checked this in a scratch repo: after a branch commit removed the `0113 ... >= 3 seeds` line, `rg seeds LEARNINGS.md` in the worktree printed nothing and `git show origin/main:LEARNINGS.md | rg seeds` printed the entry.
+  - If the reviewer does see the edit in the diff, "unless the same diff corrects the entry" excuses it, with no check that the correction is true.
+  - The PR's own examples are process rules: three seeds (reflex1 LEARNINGS.md:83), recompute on one `route.mjs` (:25), `cargo fmt` before pushing (:23). builder.md:20 says such a pitfall "is not stale because some code here ignores it". Only entries about this repo's code may be corrected, after `rg`/`git log -S`.
+  - The exemption also contradicts step 4 (reviewer.md:7): the builder's LEARNINGS.md prose is "its account of the change", not evidence.
+  - Net effect: a one-seed ranking plus a one-line rewrite of entry 0113 passes this check, and the prompt now names that rewrite as a valid reason. It is no weaker than the base, which had no LEARNINGS check. But the check's headline cases are exactly the ones it lets through.
+- low forge/prompts/reviewer.md:8 Cost and false REJECTs:
+  - The final paragraph makes any step-5 finding a REJECT. A stale entry about code that the builder did not touch can therefore cost an attempt.
+  - The closing "unless you can state why it cannot matter" covers this, the next attempt sees the quoted entry in `Must change:`, and `max_attempts` caps it.
+  - The extra `rg` pass is bounded by the reviewer's `timeout_min=30` plus one rerun (forge.py:706-712). reflex1's origin/main LEARNINGS.md is 132 lines / 75.6 KB. No GPU or new quota path.
+- info traced clean:
+  - No forge.py change. `prompt()` still substitutes with `str.replace` and the PR adds no new placeholder, so no ticket text reaches a shell.
+  - The reviewer is still told "Do not edit files"; `rg`/`git show` are read-only.
+  - Nothing in the new text mentions gate.sh, tickets/, .forge/ or STEERING.md, or tells anyone to skip a test.
+  - Quoting more entries cannot mark a vendor spent: quota detection reads stderr only (forge.py:222-223), and reflex1 entries quoting `usage_limit_reached` reach stdout.
+  - Claim/recover, discard_strays, timeouts/process-group kill, PR create/merge and gpu.py are untouched.
+- info verified:
+  - Ran `git archive` of PR head 2c8bd86a: `py_compile` passes, and `selftest.py` prints "all checks passed", including the new check.
+  - PR figures that hold: 128 entries (`grep -c '^- '` on reflex1 origin/main:LEARNINGS.md), 112 reviewer session logs, and exactly one `per LEARNINGS 0111` among them.
+  - "42 rule-shaped" is a judgement count; I did not reproduce it.
+- nit forge/README.md:79 The three examples in quotation marks are paraphrases, not quotes. "never one" appears nowhere in reflex1 LEARNINGS.md; the rules are entries 83, 25 and 23 in other words. Drop the quotation marks or quote the entries.
+- nit forge/selftest.py:387 It pins wording, like its neighbours :384-386 (house pattern). The edit below keeps both substrings.
+- siblings (base `forge`):
+  - #23 adds a reviewer step 7 that vets *added* LEARNINGS/AGENTS/PROGRESS lines as instructions. This complements #87 and does not contradict it. #23 renumbers 7→8 and "steps 1 to 6"→"1 to 7"; #87's "(step 3)" reference survives that.
+  - #5 moves the builder's PROGRESS/LEARNINGS hunks into a `{NOTES}` block that is read last, as claims. That agrees with "entries the diff adds are claims". Reading main's copy (edit below) also keeps #87 from feeding the builder's entries in mid-review.
+  - #9 (perturbed rerun with another seed in step 1) overlaps in spirit with the seed example and does not contradict it.
+  - #86 (line 1) and #25 (Diff header; its `review_exclude` does not cover LEARNINGS.md) touch other lines. #19 (union merge for LEARNINGS.md) and #85 (builder merges origin/main, keeping both entries) are compatible.
+  - #83 and #85 insert README rows at the same `@@ -76` point. That is a textual conflict only, to be resolved by whichever lands second.
+  - No sibling touches selftest.py near :387. None of these needs #87 to change.
+Change needed (only for MERGE WITH CHANGE):
+1. In forge/prompts/reviewer.md line 8, replace the text from "`LEARNINGS.md` at the worktree root is" through "not this check." with:
+`LEARNINGS.md` on `origin/main` is the repo's record of what earlier sessions got wrong; the worktree's copy carries the builder's edits, so read main's: `rg` it for each file, tool, command and kind of figure the diff touches (`git show origin/main:LEARNINGS.md | rg -n <term>`), and a diff that does what an entry there says not to (one seed where the entry says three, a row compared across versions it says to recompute first, a step it says to run before pushing) is a finding that quotes the entry. The diff editing or deleting that entry clears the finding only for an entry about this repo's code that you show, with `rg` and `git log -S`, no longer exists or behaves that way; a library, tool or process entry is not retired by the diff that breaks it. Entries the diff itself adds are claims (step 3), not this check.
+2. In forge/README.md line 79, replace "(unless the diff corrects the entry)" with "(entries read from `origin/main`; the diff editing or deleting one clears it only for an entry about the repo's code the reviewer shows is stale)".
+
+
 ## PR #86 · 2026-10-29T21:17:48Z · REJECT · risk medium · gate pass · left open: REJECT risk=medium needs the owner
 
 Verdict: REJECT
