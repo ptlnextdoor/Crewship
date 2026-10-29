@@ -840,6 +840,22 @@ with tempfile.TemporaryDirectory() as d:
           len(seen) == 1 and 0 <= seen[0].find(" big.txt |") < seen[0].find("diff --git"),
           f"stat at {seen[0].find(' big.txt |')}, first hunk at {seen[0].find('diff --git')}" if seen else "no review ran")
 
+    # 21. Every history entry names the omp release that ran it. `forge status` groups merged/attempts by
+    # forge.py+prompts hash (PR #12), but ~/.local/bin/omp is a symlink into a versioned install, so an
+    # upgrade changes the instruction stack (arXiv 2610.37332: 1,886 releases of five agents, changing per
+    # release) under the same key. reflex1's 31 entries all read `pre`; nobody can tell what omp ran them.
+    bindir = Path(d) / "bin"; bindir.mkdir()
+    (bindir / "omp").write_text("#!/bin/sh\necho omp/9.9.9\n"); (bindir / "omp").chmod(0o755)
+    real_omp, forge.OMP = forge.OMP, str(bindir / "omp")
+    (repo / "tickets/0002-u.md").write_text("status: open\n\n# u\n")
+    git("add -A", repo); git("commit -qm t2", repo); git("push -q origin main", repo)
+    f.cycle()
+    forge.OMP = str(bindir / "missing")
+    check("a history entry names the omp release that ran the cycle",
+          f.state["history"][-1].get("harness") == "omp/9.9.9", str(f.state["history"][-1]))
+    check("an unreadable omp stamps '?' instead of failing the cycle", f.harness == "?", repr(f.harness))
+    forge.OMP = real_omp
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")

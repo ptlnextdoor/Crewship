@@ -104,6 +104,16 @@ class Forge:
         files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward"))]
         return hashlib.sha256(b"".join(p.read_bytes() for p in files)).hexdigest()[:8]
 
+    @property
+    def harness(self) -> str:
+        """The omp release that will run the next session (`omp/18.12.6`), read at stamp time: ~/.local/bin/omp
+        is a symlink into a versioned install, so an upgrade changes the instruction stack under a running
+        lane without touching forge.py or the prompts (arXiv 2610.37332: 1,886 releases of five agents)."""
+        try:
+            return self.sh(f"{OMP} --version", timeout=30).stdout.strip().splitlines()[0]
+        except (subprocess.TimeoutExpired, IndexError):
+            return "?"
+
     def prompt(self, name: str, **subs: str) -> str:
         text = (self.prompts / f"{name}.md").read_text()
         for k, v in {"PROJECT": self.cfg["name"], "GATE": self.cfg.get("gate", "./gate.sh"), **subs}.items():
@@ -661,7 +671,7 @@ class Forge:
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
             self.push()
             self.state["merged"] += 1
-            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now(), "version": self.version}])[-200:]
+            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now(), "version": self.version, "harness": self.harness}])[-200:]
             self.log(f"cycle {n}: MERGED {tid}")
         except Exception as e:
             # fail() closes the PR on a rejected attempt; a cycle that dies anywhere else (gate timeout,
@@ -720,7 +730,7 @@ class Forge:
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now(), "version": self.version}])[-200:]
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now(), "version": self.version, "harness": self.harness}])[-200:]
         self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {head}")
 
     def steward(self) -> None:
@@ -871,10 +881,10 @@ class Forge:
             print(f"  {h['at']} {h['ticket']}: {h['result']}")
         by_version: dict[str, list[int]] = {}
         for h in (h for s in states for h in s.get("history", [])):
-            t = by_version.setdefault(h.get("version", "pre"), [0, 0])
+            t = by_version.setdefault(f"{h.get('version', 'pre')} {h.get('harness', 'pre')}", [0, 0])
             t[0] += h["result"] == "merged"
             t[1] += 1
-        print("merged/attempts per forge version (forge.py+prompts, now", self.version + "):", ", ".join(f"{v} {m}/{n}" for v, (m, n) in by_version.items()))
+        print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {m}/{n}" for v, (m, n) in by_version.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
