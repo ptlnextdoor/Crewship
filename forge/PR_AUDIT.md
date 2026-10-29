@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #77 · 2026-10-29T12:31:26Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #77 reviewer: check callers of a function the diff changes without renaming
+What it changes: Adds one sentence to step 2 of `forge/prompts/reviewer.md`. For a function whose contract the diff changes, the reviewer runs `rg` on its callers in untouched files and checks that each still holds. It also adds a matching safeguard row to `forge/README.md:76`. It is a prompt-only change; `forge.py` is not touched.
+Findings:
+- low forge/prompts/reviewer.md:5 The new sentence starts "The same for a function the diff changes…". It follows directly on step 2's exemption: "A hit the ticket's `## Out of scope` excludes, or one in `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, is not a miss and never goes in `Must change:`". As worded, that exemption now also covers callers. The exemption was written for unfixed sibling bugs; a broken caller is a regression this diff causes. In reflex1, all 140 tickets have an `## Out of scope` section, and these sections name the modules a shared function's callers live in ("Any behavior change in `decode.rs`/`agent.rs`, HTTP, the bench CLI…", "HTTP, the bench CLI, batching…"). `gate.sh` enforces its agreement floor through that bench CLI (`cargo run -p reflex-bench -- agree … --json`, which parses `choice_agreement` and `n`). So a reviewer that finds a caller in an out-of-scope module now getting a different answer is handed a reason in the text to call it "not a miss" and approve. Before this PR the exemption covered only pattern hits, so a found caller fell under step 5 and the skeptic paragraph with no exemption. Detection does not regress against the base, but the sentence exempts exactly the callers the builder was told to leave alone, which are the ones least likely to have been adapted.
+- info forge/forge.py:118-122,664-676 (traced; no issue) `prompt()` substitutes with `str.replace`. The PR head's reviewer.md still contains only `{PROJECT}`, `{GATE}`, `{TICKET}` and `{DIFF}`, so there is no new placeholder, no ticket text reaching a shell command, and no format-string injection. The reviewer is still told "Do not edit files", and nothing new says to skip a check, to run the gate, or for anyone to edit a protected path. `touched_protected`, `claim`/`recover`/`discard_strays`, the timeouts and process-group kill, and PR open/merge are all unchanged. `prompt()` re-reads the prompt file on every call, and `version` hashes reviewer.md, so running lanes pick the change up without a restart and `history` records it. I copied `forge/`, overlaid the PR's two files, and ran `python3 selftest.py`: "all checks passed". This includes the reviewer-prompt checks for the VERDICT lines and the absence of "benefit of the doubt".
+- info forge/forge.py:665-672 (cost, no new spend) Each review is capped at a fixed `timeout_min=30`, with one rerun on a timeout that produced no verdict. Across 125 reviewer sessions in `~/.local/state/forge/reflex1/forge.log`, the median was 9.0 min and p90 17.9 min; 3 ran to the cap. The extra `rg` pass fits in that headroom. Caller lists for common names (`new`, `run`, `__init__`) have no limit in the text, but the existing timeout bounds them. There is no new GPU or quota path.
+- nit forge/README.md:76 I checked the citations against the arXiv abstracts:
+  - SWE-PRBench (2603.26130): 15-31% of issues found with diff only, and all 8 models degrade as context grows. The README matches.
+  - ReCUBE (2603.25770): its caller-centric toolkit gives up to +7.56% strict pass rate. It is a code-generation benchmark, not a review benchmark, but the row states it accurately.
+  - The r/ChatGPTCoding source is, by the PR body's own account, a "search snippet only". It is weak evidence but harmless.
+  - The reflex1 count (49/16/10) is labelled a name-match proxy. My own proxy over the last 80 merges on reflex1's local `origin/main` gives 48 code merges, 19 with a same-named `fn`/`def` line removed and re-added, and 14 with a same-named call in an untouched file. That is the same order, so the PR's figure is not inflated.
+- info siblings: Four other open PRs touch `prompts/reviewer.md`:
+  - #5 edits line 1, step 3, and adds `{NOTES}`.
+  - #9 edits step 1.
+  - #23 adds step 7 and renumbers "steps 1 to 6".
+  - #25 edits the Diff header.
+  None touches step 2 or adds a caller check, so there is no contradiction or duplicate. Fifteen PRs touch README.md: #6, #8, #16, #19, #20, #23, #25, #28, #31, #39, #40, #42, #44, #47, #48. Each adds a row on an unrelated topic, and grep finds "caller" in none of their README hunks. Because they all append to the same table, a later one needs only a textual rebase.
+- Pass 2 (slop): nothing material. The README row follows the house format. The prompt sentence does not repeat step 2's sibling rule: that rule covers a pattern, this sentence covers a contract.
+Change needed: In `forge/prompts/reviewer.md` line 5, replace the sentence that begins "The same for a function the diff changes without renaming" and ends "is the bug the gate cannot see." with:
+For a function the diff changes without renaming (a new or defaulted parameter, a different return shape, `None` or an empty value where there was an error, a changed error type, a changed order of results): `rg` its callers in files the diff does not touch and check each still holds; a caller that still compiles and now gets the other answer is the bug the gate cannot see. The exclusions above are for unfixed siblings, not for callers: a broken caller in the ticket's `## Out of scope` or in a protected path is still a REJECT, and its `Must change:` line asks the diff to keep that caller's old contract, never to edit the caller.
+
+
 ## PR #76 · 2026-10-29T08:21:38Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
