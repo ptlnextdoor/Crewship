@@ -836,6 +836,9 @@ with tempfile.TemporaryDirectory() as d:
     check("a diff cut at 120 KB tells the reviewer it was cut and how to read the rest",
           len(seen) == 1 and "cut here:" in seen[0] and "git diff origin/main...HEAD" in seen[0],
           f"{len(seen)} review(s), tail: {seen[0][-200:]!r}" if seen else "no review ran")
+    check("the reviewer's diff opens with its --stat, so the shape is known before the first hunk",
+          len(seen) == 1 and 0 <= seen[0].find(" big.txt |") < seen[0].find("diff --git"),
+          f"stat at {seen[0].find(' big.txt |')}, first hunk at {seen[0].find('diff --git')}" if seen else "no review ran")
 
 print()
 if fails:
