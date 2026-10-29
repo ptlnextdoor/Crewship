@@ -2,6 +2,36 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #81 · 2026-10-29T16:37:44Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #81 forge version: one hash per file so status rows show which prompt changed
+What it changes: `Forge.version` (forge.py:113-120) changes from one joint `sha256[:8]` of `forge.py` plus the four role prompts to five dot-joined `sha256[:4]` hashes, one per file, in the order `forge.py.planner.builder.reviewer.steward`. The PR also rewords the README:115 parenthetical and adds selftest check 24 (selftest.py:906-921). The loop's control flow does not change.
+Findings:
+- info forge/forge.py:113-120 Traced end to end. The function reads the same five files as before (`Path(__file__)` plus `prompts_dir/{planner,builder,reviewer,steward}.md`), so its failure modes are unchanged: a missing prompt still raises FileNotFoundError at the same call sites. The string is used in four places:
+  - the history stamps in `cycle()` (merged, base :701) and `fail()` (retry/blocked, base :760);
+  - the `status()` tally key (:911) and its `now …` header (:914);
+  - the steward prompt, through `json.dumps(self.state)[-6000:]` (:765).
+
+  Nothing parses the string. `reviewctl.py` has no match for `version`/`history`, and no prompt reads it. The diff does not touch the gate, `touched_protected`/protected paths, any role prompt, reviewer selection or verdict parsing, claim, `recover()`, `discard_strays()`, timeouts or the process-group kill, PR create/merge, quota, or `gpu.py`. No ticket text and no shell reach it, and it adds no state that two lanes share (each lane writes its own `state.json`). As with any forge.py merge, running lanes exit 75 between cycles and restart (:864-868).
+- info verified: I exported PR head de4bffb8 with `git archive`.
+  - `py_compile` passes, and the full `selftest.py` prints "all checks passed", including check 24.
+  - The PR's selftest run against base forge.py fails check 24 with `['b488b4bc'] -> ['6c11b045']`, so the test catches the old behaviour.
+  - `forge.py status --config ~/.config/forge/reflex1.toml` from the PR head prints `now bdcd.5d4d.a1ce.05d9.e736 omp/18.12.6): pre pre 85/122 (61-77%)`.
+  - Running `sha256sum` on the five files and cutting each hash to 4 hex gives the same `bdcd.5d4d.a1ce.05d9.e736`.
+  - The segment order matches the `files` list, the docstring and README:115.
+- nit forge/forge.py:120 Four hex per file is 16 bits. Two versions that differ only in file X fall into one `status` row when X's two blobs collide: the odds are 2^-16 per pair, against 2^-32 for the old joint 8-hex. If they differ in other files too, the row hides that X changed. There are 52 distinct forge.py blobs on origin/forge so far, which gives about a 2.0% chance of at least one collision. I hashed every historic blob of all five files and found no collision. The effect is limited to the informational status line, with no effect on the loop. No change needed now. Widen to 6 hex if the tally ever gates a decision.
+- info forge/forge.py:765 The steward prompt stays bounded. I measured a live reflex1 history entry: it grows from 160 to 176 bytes. The existing `[-6000:]` cap keeps the STATE size fixed, so the steward sees about 34 recent entries instead of about 37. Each lane's `state.json` grows at most 3.2 KB (200-entry cap × 16 B). The diff adds no new prompt or log growth.
+- info Old and new rows: all 122 entries in the four live reflex1 `state.json` files are `pre` (no `version` field). Any 8-hex joint-hash entries key as their own row, because `status()` keys on the raw string, as the PR body says. A comparison across that boundary cannot show which file changed. That happens once.
+- nit forge/forge.py:114-118, forge/selftest.py:906-907, forge/README.md:115 The rationale appears three times: the arXiv cite, "one hash per file so two rows show which file moved", and the PR #12 history ("a single joint hash made every scout PR the same kind of change"). This matches the repo's existing style (the `harness` and `rate_interval` docstrings do the same), so no change. arXiv 2601.22025 exists under the cited title, "When Generic Prompt Improvements Hurt". The README's new parenthetical matches the code.
+- info siblings: I read the diffs of every open PR on `forge` that touches README.md, forge.py or selftest.py: #79, #48, #47, #44, #42, #40, #39, #31, #28, #25, #23, #20, #19, #16, #8, #7, #6, #5. None touches `version`, `status()`, README:115 or the history stamps. #19 only has `def version` as trailing context.
+  - `git merge-tree` (read-only) shows that #81 adds no conflicting file for any of them. Each sibling's conflict set against #81 is the same as its conflict set against `forge`. #31 is clean against both; the others already conflict with `forge` on their own.
+  - #79 appends `# 23.` at the selftest tail, a number #80 already took. #81 uses 24. The conflict sits on #79's side: it has to renumber whenever it lands.
+  - No sibling contradicts or duplicates this PR.
+
+
 ## PR #80 · 2026-10-29T15:37:31Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
