@@ -896,6 +896,13 @@ with tempfile.TemporaryDirectory() as d:
     check("a reviewer's restored file and scratch do not reach land()",
           at_land == [""], repr(at_land))
 
+# 23. `forge status` prints a 95% interval beside each version's merge rate. Agent pass rates move 2-6 points
+# between identical reruns (arXiv 2602.07150), so a bare 3/4 next to 10/16 reads as a difference it is not.
+# reflex1's 85/122 must read 61-77%; 0/0 (a version with no attempt yet) must not divide.
+check("rate_interval: Wilson bounds", forge.rate_interval(85, 122) == "85/122 (61-77%)" and forge.rate_interval(3, 4) == "3/4 (30-95%)",
+      f"{forge.rate_interval(85, 122)} {forge.rate_interval(3, 4)}")
+check("rate_interval: empty tally", forge.rate_interval(0, 0) == "0/0", forge.rate_interval(0, 0))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")

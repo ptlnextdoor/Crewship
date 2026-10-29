@@ -48,6 +48,18 @@ def now() -> str:
     return dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def rate_interval(m: int, n: int) -> str:
+    """`m/n (lo-hi%)`: Wilson 95% interval on a merge rate. Single-run agent pass rates move 2-6 points
+    between identical reruns (arXiv 2602.07150), so two versions' tallies are only a difference when the
+    intervals clear each other; without the range 3/4 against 10/16 reads as one."""
+    if not n:
+        return f"{m}/{n}"
+    z, p = 1.96, m / n
+    mid = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * ((p * (1 - p) + z * z / (4 * n)) / n) ** 0.5 / (1 + z * z / n)
+    return f"{m}/{n} ({100 * (mid - half):.0f}-{100 * (mid + half):.0f}%)"
+
+
 class Forge:
     def __init__(self, cfg_path: Path, lane: int = 1):
         self.cfg_path = cfg_path
@@ -899,7 +911,7 @@ class Forge:
             t = by_version.setdefault(f"{h.get('version', 'pre')} {h.get('harness', 'pre')}", [0, 0])
             t[0] += h["result"] == "merged"
             t[1] += 1
-        print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {m}/{n}" for v, (m, n) in by_version.items()))
+        print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
