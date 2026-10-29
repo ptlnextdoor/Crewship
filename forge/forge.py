@@ -110,7 +110,8 @@ class Forge:
         is a symlink into a versioned install, so an upgrade changes the instruction stack under a running
         lane without touching forge.py or the prompts (arXiv 2610.37332: 1,886 releases of five agents)."""
         try:
-            return self.sh(f"{OMP} --version", timeout=30).stdout.strip().splitlines()[0]
+            r = self.sh(f"{OMP} --version", timeout=30)
+            return r.stdout.strip().splitlines()[0] if r.returncode == 0 else "?"
         except (subprocess.TimeoutExpired, IndexError):
             return "?"
 
