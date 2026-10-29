@@ -2,6 +2,42 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #73 · 2026-10-29T05:13:38Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #73 forge: the reviewer prompt labels the ticket's forge notes as earlier attempts' record, not the contract
+What it changes: `forge/prompts/reviewer.md:16` changes the bare `Ticket:` label to one sentence. It says that the `## forge <time> (<status>)` sections are forge's record of earlier attempts, not part of the contract. An earlier verdict is not this review's verdict, and an earlier `Must change:` line must be re-checked against this diff. `forge/README.md:72` adds the matching reliability row. No code changes.
+Findings:
+- info forge/prompts/reviewer.md:16 This does not weaken the gate, the reviewer or the protected paths. I traced it:
+  - `cycle()` passes `TICKET=ticket.read_text()` (forge.py:660), which is the lane's main-checkout copy, not the worktree's. A builder edit under `wt/tickets/` cannot reach this prompt, and `touched_protected` (forge.py:626, :638, :559) still fails such an edit.
+  - The heading pattern matches `set_status` (forge.py:344): `## forge {now()} ({status})`.
+  - "The last 3,000 characters of an earlier review" matches `fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")` (forge.py:672). That slice includes the stderr tail, the same caveat line 12 already carries. "Gate tails" matches `gout[-2500:]` (:644) and `gout[-2000:]` (:564).
+  - Steps 1-7, the "REJECT unless it cannot matter" rule and the verdict parse (`verdict[-1]`, :662/:671) are unchanged.
+  - The new text tells the reviewer to re-check an earlier `Must change:`, not to drop it ("not a finding to repeat or to skip"). That cuts anchoring both ways and does not license skipping a check.
+- info forge/prompts/reviewer.md:16 This closes a known authority hole. Step 4 ("only the ticket naming it is") and step 6 ("named by the ticket") used to treat the whole file as the ticket. That included `## forge` notes carrying builder-controlled gate stdout (flagged in PR_AUDIT.md:2321). Those notes are now explicitly not contract. This matches builder.md:16, which already excludes `## forge` notes from authorizing credential use.
+- info forge/prompts/reviewer.md:16 The scope by exact heading is the right choice. In reflex1, `## planner <time>` amendments sit after `## forge` notes and change the retry's contract. For example, 0078 says "Start no pod … cp … commit", and 0062 and 0047 have similar amendments. "Everything after the first `## forge`" would have stripped them. The `## forge <time> (<status>)` pattern leaves them in the contract.
+- low forge/prompts/reviewer.md:16 (pre-existing channel, not introduced here) A section is bounded by headings, but note bodies are not fenced. 5 of reflex1's 13 quoted reviews contain their own `## ` headings: 0011, 0019, 0032, 0052 and 0125, for example `## Contract`, `## Must fix`, `## What must change`. Builder-controlled gate stdout in a note could also print `## Out of scope`. Read by heading, that text falls outside the labelled `## forge` section. On base, all of it was already "Ticket", so this PR does not make it worse. The real fix belongs in `set_status` (fence or indent the note body) and is not part of this PR.
+- nit forge/prompts/reviewer.md:16 The list "gate tails and the last 3,000 characters of an earlier review" is incomplete. Notes also carry the builder output tail on "no diff" (`out[-1500:]`, :619), harness reasons (protected path :628/:640, merge conflict :580), the `PR:` line (:733) and the "Landed by …, approved by …" done note (:676). The `## forge-recover`/`## forge-quota` headings (:796) do not match the pattern, but their text is fixed and carries no verdict. The "not part of the contract" clause still covers all of these. No edit is needed.
+- nit forge/README.md:72 I checked the numbers against `reflex1` origin/main 2c39a79c:
+  - 13 of 140 tickets hold an earlier review: confirmed. 1 of the 13 has a `Must change:` block: confirmed (0106).
+  - "8 of those merged on a later attempt": 8 have `status: done`, but 0047 was set to `done` by a `## planner` note after its code landed through 0077, following a forge `(blocked)` note. So 7 landed on a later forge attempt.
+  - Citations verified. arXiv 2606.30587 reports anchoring 23.5% and framing 33.2% across eight models. Anthropic's "How AI agents shape experts' judgment calls" (2026-10-27) reports 86%. "Repeated its arguments as their own" is 77% in the source and should be qualified. Accuracy only; no behavior depends on it.
+- nit forge/prompts/reviewer.md:16 "3,000" hand-copies the slice at forge.py:672. Line 12 already does the same, so this is not new drift. The prompt grows by 391 characters per review, a bounded cost.
+- info siblings, same base `forge`:
+  - Open PRs that touch `reviewer.md`: #5 (builder notes as claims, read last), #9 (perturbed rerun in step 1), #23 (instruction-file hunks), #25 (`review_exclude`).
+  - None edit the `Ticket:` label, and none contradict or duplicate this PR. #5 covers the builder's PROGRESS/LEARNINGS claims. #73 covers forge's notes on the ticket. Together they are complementary.
+  - #23's "only a ticket may" line, and step 4 on base, are helped by #73 narrowing what "the ticket" is.
+  - #25's hunk edits the `Diff:` line next to `Ticket:`, and its base already predates the current `Diff (...)` label, so it conflicts as text. #25 is the side to rebase; #73 needs no change.
+  - #6 (repair round after REJECT) re-reviews inside the cycle without appending the first review to the ticket, so the two do not interact.
+  - The README-only siblings (#8, #16, #19, #20, #28, #31, #39, #40, #42, #44, #47, #48) all append rows to the same table. They conflict as text only, and whichever lands second rebases.
+- verified:
+  - `git merge-tree origin/forge pr/73` is clean (c0e91068).
+  - On the merged tree, `py_compile forge.py` passes and `selftest.py` passes all checks (5.9 s).
+  - I rendered the merged `reviewer.md` with `{PROJECT,GATE,TICKET,DIFF}` against reflex1 ticket 0078. No placeholders were left over; the new text contains no `{...}`. The label sits directly above the ticket.
+
+
 ## PR #72 · 2026-10-29T04:41:10Z · MERGE · risk none · gate pass · merged
 
 Verdict: MERGE
