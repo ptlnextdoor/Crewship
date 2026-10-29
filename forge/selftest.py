@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -143,9 +144,11 @@ with tempfile.TemporaryDirectory() as d:
     (bindir / "gh").chmod(0o755)
     f.env["PATH"] = f"{bindir}:{f.env.get('PATH', os.environ['PATH'])}"
     f.sync_main = lambda: None; forge.time.sleep = lambda s: None
-    merged = f.pr_merge("https://github.com/x/y/pull/1", "land")
-    calls = (bindir / "gh.log").read_text().splitlines()
-    check("pr_merge polls mergeability, then merges once", merged and calls.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable") == 3 and calls[-1].startswith("pr merge https://github.com/x/y/pull/1"), "\n".join(calls))
+    merged = f.pr_merge("https://github.com/x/y/pull/1", "land", "forge: land 0001-x", "Ticket: 0001-x\nBuilt-by: a/b")
+    log = (bindir / "gh.log").read_text()
+    check("pr_merge polls mergeability, then merges once with the landing subject and trailers",
+          merged and log.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable\n") == 3 and log.count("pr merge") == 1
+          and re.search(r"^pr merge https://github.com/x/y/pull/1 .*--merge --delete-branch -t forge: land 0001-x -b Ticket: 0001-x\nBuilt-by: a/b\n", log, re.M), log)
 
     # 4g. A prompt longer than Linux's 128 KiB per-argument cap still starts the agent (it goes through a file).
     (bindir / "omp").write_text('#!/bin/sh\nfor a; do case "$a" in @*) cat "${a#@}";; esac; done\n')
@@ -343,7 +346,7 @@ with tempfile.TemporaryDirectory() as d:
     f.gh = lambda args, cwd=None, body=None: (calls.append(args), "CONFLICTING")[1]
     f.sh = lambda cmd, cwd=None, timeout=600, check=False: (calls.append(cmd),
                                                             subprocess.CompletedProcess(cmd, 1, "", "conflicts"))[1]
-    merged = f.pr_merge("https://example.invalid/pull/7", "forge/l1-b")
+    merged = f.pr_merge("https://example.invalid/pull/7", "forge/l1-b", "forge: land 0001-b", "")
     forge.time.sleep = real_sleep
 check("a PR GitHub calls CONFLICTING is landed locally, not polled and merged",
       merged is False and len(calls) == 1 and not any("pr merge" in c for c in calls), str(calls)[:300])
@@ -545,7 +548,7 @@ with tempfile.TemporaryDirectory() as d:
           "forge/l1-" not in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
 
     verdict[0] = "VERDICT: APPROVE"
-    f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
+    f.land = lambda wt, branch, tid, builder, trailers: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
     f.cycle()
     check("a branch merged into main is left for land() to decide",
           "forge/l1-" in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
@@ -891,7 +894,7 @@ with tempfile.TemporaryDirectory() as d:
         return 0, ""
 
     f.agent = build_then_messy_review
-    f.land = lambda wt, branch, tid, builder: (at_land.append(git("status --porcelain", wt)), "")[1]
+    f.land = lambda wt, branch, tid, builder, trailers: (at_land.append(git("status --porcelain", wt)), "")[1]
     f.cycle()
     check("a reviewer's restored file and scratch do not reach land()",
           at_land == [""], repr(at_land))
@@ -943,6 +946,27 @@ with tempfile.TemporaryDirectory() as d:
     git("checkout -q -b docs/z", repo); (repo / "doc.txt").write_text("z\n"); git("add -A", repo); git("commit -qm z", repo)
     git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
     check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
+
+# 26. The landing commit carries the ticket, both models and the forge version as git trailers, so
+# `git log --merges --format='%(trailers:key=Built-by,valueonly)' main` counts landings per model from the repo
+# alone (the ticket note is a file a later ticket may rewrite; state.history keeps 200 entries). Local path here;
+# 4f checks the same subject and body reach `gh pr merge`.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, wt = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "wt"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "PROGRESS.md").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg); f.pr = ""
+    f.gate = lambda cwd: (True, "")
+    git(f"worktree add -q -b t {wt} main", repo)
+    (wt / "src.rs").write_text("fn main() {}\n"); git("add -A", wt); git("commit -qm work", wt)
+    why = f.land(wt, "t", "0001-x", "builder", "Ticket: 0001-x\nBuilt-by: a/b\nReviewed-by: c/d\nForge: v1 omp/1")
+    body = git("log -1 --format=%B main", repo)
+    check("the landing commit's subject and trailers", why == "" and body.strip() == "forge: land 0001-x\n\nTicket: 0001-x\nBuilt-by: a/b\nReviewed-by: c/d\nForge: v1 omp/1", why or body)
+    check("git parses them as trailers", git("log --merges --format='%(trailers:key=Built-by,valueonly)' main", repo).strip() == "a/b")
 
 print()
 if fails:
