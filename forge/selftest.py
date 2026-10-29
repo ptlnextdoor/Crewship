@@ -744,9 +744,10 @@ with tempfile.TemporaryDirectory() as d:
     f = forge.Forge(cfg)
     f.plan = lambda: None
     turns: list[str] = []
+    prompts: list[str] = []
 
     def build_then_rewrite_the_gate(role, prompt, cwd, timeout_min=None):
-        turns.append(role)
+        turns.append(role); prompts.append(prompt)
         if len(turns) == 1:
             (cwd / "a.txt").write_text("the work\n")    # a real diff, nothing protected
         else:
@@ -759,6 +760,9 @@ with tempfile.TemporaryDirectory() as d:
     check("a repair that edits the gate is rejected before that gate is run again",
           "gate.sh" in note and runs.read_text().count("run") == 1 and "reviewer" not in turns,
           f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
+    check("the repair session gets the builder's rules, the branch as the earlier patch and the gate output",
+          len(prompts) > 1 and "Credentials:" in prompts[1] and "git diff origin/main...HEAD" in prompts[1] and "\n\nGate output:\n" in prompts[1],
+          prompts[1][-400:] if len(prompts) > 1 else str(turns))
 
 # 19. A builder that brings main into its branch (merge or rebase - both are normal git hygiene, and the
 # loop's own prompt tells it to keep up with main) used to be refused as "edits protected gate/ticket paths":
