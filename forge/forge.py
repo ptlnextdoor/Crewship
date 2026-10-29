@@ -466,8 +466,8 @@ class Forge:
         # 10 to 50 min each from this line to the merge, with forge's own gate run inside that span too.
         gate = self.cfg.get("gate", "./gate.sh")
         self.agent(builder, "Another lane landed changes on main that conflict with this branch. Run `git merge origin/main`, "
-                   "resolve every conflict keeping the intent of both sides (in PROGRESS.md and LEARNINGS.md both sides' "
-                   "entries stay), build and run the tests the conflicted files touch, and commit the merge. Do not run "
+                   "resolve every conflict keeping the intent of both sides, build and run the tests the conflicted files "
+                   "touch, and commit the merge. Do not run "
                    f"`{gate}`: forge runs it on your result next. Do not edit gate.sh, tickets/ or .forge/.", wt, timeout_min=30)
         if self.sh("git ls-files -u", cwd=wt).stdout.strip():
             return False
