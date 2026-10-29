@@ -920,6 +920,30 @@ with tempfile.TemporaryDirectory() as d:
           len(before) == 5 and before[3] != after[3] and [b for i, b in enumerate(before) if i != 3] == [a for i, a in enumerate(after) if i != 3],
           f"{before} -> {after}")
 
+# 25. The builder's starting gate run is skipped only on a tree the gate passed: a landing merge whose tree is
+# its branch tip's, with forge's tickets/-only status commits on top. An owner commit on main (reflex1 10-23:
+# the pivot, a gate.sh change) or a merge main moved under is a tree nobody gated, so the run stays.
+with tempfile.TemporaryDirectory() as d:
+    repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
+    repo.mkdir(); git("init -q -b main", repo)
+    (repo / "src.txt").write_text("v1\n"); (repo / "tickets").mkdir(); (repo / "tickets/0001.md").write_text("status: open\n")
+    git("add -A", repo); git("commit -qm base", repo)
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    check("main_gated: a plain commit is not gated", f.main_gated() == "", f.main_gated())
+    git("checkout -q -b forge/x", repo); (repo / "src.txt").write_text("v2\n"); git("commit -qam work", repo)
+    git("checkout -q main", repo); git("merge -q --no-ff -m 'forge: land 0001' forge/x", repo)
+    (repo / "tickets/0001.md").write_text("status: done\n"); git("commit -qam 'forge: done 0001'", repo)
+    check("main_gated: landing merge under a tickets/-only commit", f.main_gated() == "forge: land 0001", f.main_gated())
+    (repo / "src.txt").write_text("owner\n"); git("commit -qam 'owner: pivot'", repo)
+    check("main_gated: an owner commit on top keeps the starting run", f.main_gated() == "", f.main_gated())
+    git("checkout -q -b forge/y HEAD~2", repo); (repo / "new.txt").write_text("y\n"); git("add -A", repo); git("commit -qm y", repo)
+    git("checkout -q main", repo); git("merge -q --no-ff -m 'forge: land 0002' forge/y", repo)
+    check("main_gated: a merge main moved under is not gated", f.main_gated() == "", f.main_gated())
+    git("checkout -q -b docs/z", repo); (repo / "doc.txt").write_text("z\n"); git("add -A", repo); git("commit -qm z", repo)
+    git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
+    check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")

@@ -375,6 +375,28 @@ class Forge:
         files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
+    def main_gated(self) -> str:
+        """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
+        tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
+        passed; forge's own status commits on top (claim, done, retry, planner) touch tickets/ only, which the
+        gate does not read. Anything else on top (an owner commit, a steward edit, a merge main moved under) is
+        a tree nobody gated, so the builder runs the gate first. reflex1: 76 of main's last 200 first-parent
+        positions; the gate is 8 to 25 minutes of a builder session."""
+        c = "main"
+        for _ in range(12):
+            parents = self.sh(f"git log -1 --format=%P {c}").stdout.split()
+            if len(parents) == 2:
+                trees = self.sh(f"git rev-parse {c}^{{tree}} {parents[1]}^{{tree}}").stdout.split()
+                subject = self.sh(f"git log -1 --format=%s {c}").stdout.strip()
+                # Only land()'s merges: an owner's PR merge of an up-to-date branch has the same tree shape, ungated.
+                landing = re.match(r"forge: land |Merge pull request #\d+ from \S+/forge/l\d+-", subject)
+                return subject if landing and len(trees) == 2 and trees[0] == trees[1] else ""
+            files = self.sh(f"git diff --name-only {c}^ {c}").stdout.split()
+            if not files or any(not f.startswith("tickets/") for f in files):
+                return ""
+            c += "^"
+        return ""
+
     def startable(self) -> list[Path]:
         """Open tickets a lane could claim now: every `depends:` ticket is done."""
         return [t for t in self.open_tickets() if self.ready(t)]
@@ -627,7 +649,11 @@ class Forge:
             builder = "builder_hard" if re.search(r"^difficulty:\s*hard", ticket.read_text(), re.M) else "builder"
             if self.attempts(ticket) >= 2:
                 builder = "builder_hard"  # escalate after repeated failure
-            prompt = self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)))
+            gated = self.main_gated()
+            prompt = self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)),
+                                 GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
+                                             if gated else
+                                             f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
             rc, out = self.agent(builder, prompt, wt)
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
