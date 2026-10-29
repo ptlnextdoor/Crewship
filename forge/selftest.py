@@ -896,6 +896,25 @@ with tempfile.TemporaryDirectory() as d:
     check("a reviewer's restored file and scratch do not reach land()",
           at_land == [""], repr(at_land))
 
+# 23. A gate that never returns is a FAIL with its partial output, and nothing of it survives: the old path
+# raised TimeoutExpired out of cycle() (PR closed as "cycle error", no gate evidence, no attempt counted,
+# `cargo test` left running under the killed shell). The sleeping child must be gone when gate() returns.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir()
+    (repo / "gate.sh").write_text("#!/bin/sh\necho partial\nsleep 300 & echo $! > child.pid\nwait\n")
+    (repo / "gate.sh").chmod(0o755)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[limits]\ngate_timeout_min=0.03\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    ok, out = f.gate(repo)
+    child = (repo / "child.pid").read_text().strip()
+    check("a gate that hangs fails with its output instead of crashing the cycle",
+          ok is False and "partial" in out and "killed after" in out, repr(out)[:200])
+    alive = Path(f"/proc/{child}/status").exists() and "Z" not in Path(f"/proc/{child}/status").read_text().split("\n")[2]
+    check("a hung gate's process tree is killed, not orphaned", not alive, child)
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
