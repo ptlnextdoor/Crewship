@@ -557,7 +557,7 @@ class Forge:
             self.pr_comment(pr, f"**forge: not merged.**\n\n```\n{why[-6000:]}\n```\nThe ticket goes back to the queue with this evidence; the next attempt opens a new PR.")
             self.gh(f"pr close {pr}")
 
-    def pr_merge(self, pr: str, branch: str) -> bool:
+    def pr_merge(self, pr: str, branch: str, subject: str, body: str) -> bool:
         """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge."""
         if not pr:
             return False
@@ -573,14 +573,14 @@ class Forge:
                 self.log(f"PR {pr} conflicts on GitHub; landing it locally instead of waiting")
                 return False
             time.sleep(3)
-        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch", timeout=180)
+        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch -t {shlex.quote(subject)} -b {shlex.quote(body)}", timeout=180)
         if r.returncode:
             self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
             return False
         self.sync_main()
         return True
 
-    def land(self, wt: Path, branch: str, tid: str, builder: str) -> str:
+    def land(self, wt: Path, branch: str, tid: str, builder: str, trailers: str = "") -> str:
         """Bring the branch up to date with main, re-gate, merge (through the PR when there is one). Returns "" or
         why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
@@ -601,10 +601,10 @@ class Forge:
                 return f"gate failed after updating from main.\n{gout[-2000:]}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
-            if self.pr_merge(self.pr, branch):
+            if self.pr_merge(self.pr, branch, f"forge: land {tid}", trailers):
                 return ""
             self.sync_main()
-            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}").returncode == 0:
+            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' -m {shlex.quote(trailers)} {branch}").returncode == 0:
                 self.push()
                 # `gh pr merge --delete-branch` cleans the remote branch; this fallback path never did, and 64 of
                 # reflex1's 106 remote forge branches are landed leftovers. Only once the tip is in origin/main,
@@ -718,10 +718,17 @@ class Forge:
             self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
-            why = self.land(wt, branch, tid, builder)
+            reviewed_by = self.last_model.get(reviewer, self.cfg["roles"][reviewer]["model"])
+            # The landing commit carries who built and reviewed it and which forge ran, as git trailers: the ticket
+            # note is a file a later ticket may rewrite and state.history keeps 200 entries, while
+            # `git log --merges --format='%(trailers:key=Built-by,valueonly)' main` answers from the repo alone.
+            # One subject on both paths: 16 of reflex1's 80 landings read "Merge pull request #N from ..." (gh's
+            # default) and 64 "forge: land NNNN" (the local fallback).
+            trailers = f"Ticket: {tid}\nBuilt-by: {built_by}\nReviewed-by: {reviewed_by}\nForge: {self.version} {self.harness}" + (f"\nPR: {self.pr}" if self.pr else "")
+            why = self.land(wt, branch, tid, builder, trailers)
             if why:
                 return self.fail(ticket, why)
-            done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
+            done_note = f"Landed by {built_by}, approved by {reviewed_by}." + (f" PR: {self.pr}" if self.pr else "")
             self.sync_main()
             self.set_status(ticket, "done", done_note)
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
