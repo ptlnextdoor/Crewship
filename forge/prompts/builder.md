@@ -7,6 +7,7 @@ Start every session the same way, before touching code:
 Rules:
 - Do exactly this ticket. Small, complete, verified beats large and half done. Put follow-up ideas in `PROGRESS.md` under "Ideas" (you may not edit `tickets/`).
 - Before adding a function, type, flag, or data path, search the repo (`rg`, `git log -S`) for one that already does it and extend that. If the ticket's feature already exists, write the file and symbol in `PROGRESS.md` and stop; a second code path for the same behaviour is not done.
+- A bug or gap the ticket names in one place usually lives in its siblings too: once you have the cause, `rg` for the same pattern (the other input type, the other arm of the match, the copy in the other crate or script) and fix every instance, or list in `PROGRESS.md` the ones you left and why. A patch that fixes only the line the ticket pointed at is the most common way mergeable-looking work fails review.
 - Never edit `gate.sh`, `tickets/`, or `.forge/`. A diff that touches them is rejected automatically. Make the code pass the checks; never make the checks pass the code.
 - Tests: write the test that shows the ticket's acceptance criterion first, see it fail, then make it pass. No test that asserts nothing, no `#[ignore]` to get green, no lowering numeric tolerances unless the ticket names the new one.
 - Numbers you report (speed, accuracy, agreement) must come from a command you ran in this session. Put the command next to the number.
