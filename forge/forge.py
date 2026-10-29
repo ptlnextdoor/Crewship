@@ -111,10 +111,13 @@ class Forge:
 
     @property
     def version(self) -> str:
-        """Short hash of forge.py and the four role prompts as they are on disk now; prompt() re-reads the
-        prompts on every call and a prompt-only merge does not restart the lanes, so hash at stamp time."""
+        """`forge.py.planner.builder.reviewer.steward`, four hex each, of the files as they are on disk now;
+        prompt() re-reads the prompts on every call and a prompt-only merge does not restart the lanes, so
+        hash at stamp time. One hash per file so two `status` rows show which file moved between them: a
+        prompt edit is a regression risk to test, not an improvement to assume (arXiv 2601.22025), and a
+        single joint hash made every scout PR the same kind of change."""
         files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward"))]
-        return hashlib.sha256(b"".join(p.read_bytes() for p in files)).hexdigest()[:8]
+        return ".".join(hashlib.sha256(p.read_bytes()).hexdigest()[:4] for p in files)
 
     @property
     def harness(self) -> str:

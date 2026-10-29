@@ -903,6 +903,23 @@ check("rate_interval: Wilson bounds", forge.rate_interval(85, 122) == "85/122 (6
       f"{forge.rate_interval(85, 122)} {forge.rate_interval(3, 4)}")
 check("rate_interval: empty tally", forge.rate_interval(0, 0) == "0/0", forge.rate_interval(0, 0))
 
+# 24. `version` is one hash per file (forge.py, planner, builder, reviewer, steward), so two `status` rows
+# tell which file changed between them; the joint hash (PR #12) only said "something did".
+with tempfile.TemporaryDirectory() as d:
+    repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
+    repo.mkdir(); git("init -q -b main", repo)
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nprompts_dir="{d}/p"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    (Path(d) / "p").mkdir()
+    for r in ("planner", "builder", "reviewer", "steward"):
+        (Path(d) / "p" / f"{r}.md").write_text(f"{r} v1\n")
+    f = forge.Forge(cfg)
+    before = f.version.split(".")
+    (Path(d) / "p/reviewer.md").write_text("reviewer v2\n")
+    after = f.version.split(".")
+    check("version: five hashes, only the edited prompt's segment moves",
+          len(before) == 5 and before[3] != after[3] and [b for i, b in enumerate(before) if i != 3] == [a for i, a in enumerate(after) if i != 3],
+          f"{before} -> {after}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
