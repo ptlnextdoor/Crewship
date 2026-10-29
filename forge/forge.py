@@ -635,7 +635,7 @@ class Forge:
                 # dependencies, files outside the worktree, the formatter), and never said that the branch's
                 # commits are the earlier session's patch - the thing to fix, not to redo (conversational
                 # repair keeps the failed patch next to its feedback so the next one is not the same patch).
-                rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff main...HEAD` is its work) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. Every rule below still holds.\n\n{prompt}\n\nGate output:\n{gout}", wt)
+                rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff origin/main...HEAD` is its work; local `main` sits at the branch point) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end, so skip the starting gate run. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. Every rule below still holds.\n\n{prompt}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
