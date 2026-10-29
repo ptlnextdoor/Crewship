@@ -635,7 +635,7 @@ class Forge:
             # The --stat first: a reviewer handed one long diff reads it once and rates it as a whole, and that
             # read's quality collapses with size (arXiv 2606.15689: F1 0.66 on diffs under 10 lines, 0.04 over
             # 150; 47 of reflex1's 79 merged PRs are over 150). The prompt tells it to go file by file past that.
-            stat = self.sh("git diff --stat origin/main...HEAD", cwd=wt).stdout
+            stat = self.sh("git diff --stat=1000 --stat-graph-width=40 origin/main...HEAD", cwd=wt).stdout
             shown = stat + "\n" + diff[:120000] + ("" if len(diff) <= 120000 else
                                                    f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
