@@ -843,6 +843,9 @@ with tempfile.TemporaryDirectory() as d:
     check("the reviewer's diff opens with its --stat, so the shape is known before the first hunk",
           len(seen) == 1 and 0 <= seen[0].find(" big.txt |") < seen[0].find("diff --git"),
           f"stat at {seen[0].find(' big.txt |')}, first hunk at {seen[0].find('diff --git')}" if seen else "no review ran")
+    check("the reviewer is told which model built the diff, not that it was another family",
+          len(seen) == 1 and "`a/b`" in seen[0] and "{BUILT_BY}" not in seen[0] and "different model family" not in seen[0],
+          seen[0][:400] if seen else "no review ran")
 
     # 21. Every history entry names the omp release that ran it. `forge status` groups merged/attempts by
     # forge.py+prompts hash (PR #12), but ~/.local/bin/omp is a symlink into a versioned install, so an

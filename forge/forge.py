@@ -702,7 +702,7 @@ class Forge:
             shown = stat + "\n" + diff[:120000] + ("" if len(diff) <= 120000 else
                                                    f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
-            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown)
+            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown, BUILT_BY=built_by)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             if rc == 124 and not verdict:
