@@ -672,6 +672,9 @@ class Forge:
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
+            # The reviewer may restore files from origin/main to run the diff's tests against the old code (step 3).
+            # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.
+            self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
             why = self.land(wt, branch, tid, builder)
