@@ -545,7 +545,7 @@ with tempfile.TemporaryDirectory() as d:
           "forge/l1-" not in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
 
     verdict[0] = "VERDICT: APPROVE"
-    f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
+    f.land = lambda wt, branch, tid, builder, gated="": (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
     f.cycle()
     check("a branch merged into main is left for land() to decide",
           "forge/l1-" in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
@@ -891,7 +891,7 @@ with tempfile.TemporaryDirectory() as d:
         return 0, ""
 
     f.agent = build_then_messy_review
-    f.land = lambda wt, branch, tid, builder: (at_land.append(git("status --porcelain", wt)), "")[1]
+    f.land = lambda wt, branch, tid, builder, gated="": (at_land.append(git("status --porcelain", wt)), "")[1]
     f.cycle()
     check("a reviewer's restored file and scratch do not reach land()",
           at_land == [""], repr(at_land))
@@ -943,6 +943,38 @@ with tempfile.TemporaryDirectory() as d:
     git("checkout -q -b docs/z", repo); (repo / "doc.txt").write_text("z\n"); git("add -A", repo); git("commit -qm z", repo)
     git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
     check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
+
+# 26. The landing gate is skipped only when the tree outside tickets/ is the one the gate passed before the
+# review: main unmoved, or moved by forge's tickets/-only status commits. A source commit on main reruns it.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
+    (repo / "tickets").mkdir(); (repo / "tickets/0001.md").write_text("status: doing\n"); (repo / "lib.rs").write_text("base\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg); f.pr = ""
+    gates: list[int] = []
+    f.gate = lambda cwd: (gates.append(1), (True, ""))[1]
+    def branch(name, text):
+        wt = Path(d) / name
+        git(f"worktree add -q -b {name} {wt} main", repo)
+        (wt / "src.rs").write_text(text); git("add -A", wt); git("commit -qm work", wt)
+        return wt, git("rev-parse HEAD", wt).strip()
+    def main_commit(path, text):
+        git("pull -q origin main", other); (other / path).write_text(text); git("add -A", other); git("commit -qm m", other); git("push -q origin main", other)
+    wt, gated = branch("a", "a\n")
+    why = f.land(wt, "a", "0001-a", "builder", gated)
+    check("landing gate skipped when main did not move", why == "" and gates == [], f"why={why} gates={gates}")
+    wt, gated = branch("b", "b\n"); main_commit("tickets/0001.md", "status: done\n")
+    why = f.land(wt, "b", "0001-b", "builder", gated)
+    check("landing gate skipped when main moved by tickets/ only", why == "" and gates == [], f"why={why} gates={gates}")
+    wt, gated = branch("c", "c\n"); main_commit("lib.rs", "moved\n")
+    why = f.land(wt, "c", "0001-c", "builder", gated)
+    check("landing gate runs when main moved outside tickets/", why == "" and gates == [1], f"why={why} gates={gates}")
+    why = f.land(*branch("e", "e\n")[:1], "e", "0001-e", "builder")
+    check("landing gate runs when no gated commit is given", why == "" and gates == [1, 1], f"why={why} gates={gates}")
 
 print()
 if fails:

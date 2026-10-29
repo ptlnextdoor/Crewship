@@ -580,7 +580,7 @@ class Forge:
         self.sync_main()
         return True
 
-    def land(self, wt: Path, branch: str, tid: str, builder: str) -> str:
+    def land(self, wt: Path, branch: str, tid: str, builder: str, gated: str = "") -> str:
         """Bring the branch up to date with main, re-gate, merge (through the PR when there is one). Returns "" or
         why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
@@ -596,9 +596,16 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket paths {bad}; not allowed."
-            ok, gout = self.gate(wt)
-            if not ok:
-                return f"gate failed after updating from main.\n{gout[-2000:]}"
+            # The gate is a function of the tree outside tickets/ (gate.sh never reads tickets/, and forge's
+            # own claim/done/retry commits on main touch nothing else). When the sync changed nothing beyond
+            # that since the commit the gate passed, the 8 to 25 minute rerun would gate the same tree again;
+            # 13 of reflex1's 85 landings saw no other lane land between cycle start and land.
+            if gated and self.sh(f"git diff --quiet {gated} HEAD -- . ':!tickets'", cwd=wt).returncode == 0:
+                self.log(f"gate skipped for {tid}: tree unchanged outside tickets/ since the gate passed on {gated[:8]}")
+            else:
+                ok, gout = self.gate(wt)
+                if not ok:
+                    return f"gate failed after updating from main.\n{gout[-2000:]}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
             if self.pr_merge(self.pr, branch):
@@ -687,6 +694,7 @@ class Forge:
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
+            gated = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()  # the commit the gate just passed
             diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
@@ -718,7 +726,7 @@ class Forge:
             self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
             if not verdict or verdict[-1] != "APPROVE":
                 return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
-            why = self.land(wt, branch, tid, builder)
+            why = self.land(wt, branch, tid, builder, gated)
             if why:
                 return self.fail(ticket, why)
             done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
