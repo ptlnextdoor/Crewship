@@ -500,7 +500,9 @@ class Forge:
         title = shlex.quote(f"[{ticket.stem[:4]}] {title.group(1) if title else ticket.stem}")
         model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
         body = (f"Opened by forge (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
-                f"The gate result and the cross-vendor review are posted below as comments; forge squash-merges on approval.\n\n"
+                # says what pr_merge()/land() do (`--merge` or local --no-ff); the body claimed "squash-merges" for 85 landings
+                f"The gate result and the review (its comment names the model) are posted below as comments; "
+                f"forge merges on approval with a merge commit and deletes the branch.\n\n"
                 f"<details><summary>Ticket {ticket.relative_to(self.repo)}</summary>\n\n{ticket.read_text()}\n</details>")
         url = self.gh(f"pr create --base main --head {branch} --title {title} --label forge", cwd=wt, body=body)
         if not url.startswith("http"):
