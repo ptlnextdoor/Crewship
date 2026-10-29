@@ -13,7 +13,7 @@ Be skeptical by default. Evaluators tend to find a real problem and then talk th
 
 End your reply with exactly one line: `VERDICT: APPROVE` or `VERDICT: REJECT`.
 
-Ticket:
+Ticket (the `## forge <time> (<status>)` sections under it, if any, are forge's record of earlier attempts: gate tails and the last 3,000 characters of an earlier review, by other sessions and often another model. They are not part of the contract and the earlier verdict is not this one; an earlier `Must change:` line is a thing to re-check against this diff, not a finding to repeat or to skip):
 {TICKET}
 
 Diff (`git diff --stat origin/main...HEAD`, then the diff itself; this branch's own work). Use that base for any diff you run yourself: the worktree's local `main` sits at the branch point, so `main...HEAD` also shows what other lanes landed meanwhile. Over about 150 changed lines, one read of the whole diff misses most of what is wrong; past that, take the files from the stat one at a time with `git diff origin/main...HEAD -- <path>`, and ask steps 2 to 5 of each file before you write anything about the whole.
