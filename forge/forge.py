@@ -350,8 +350,20 @@ class Forge:
     # ---------- the cycle ----------
     def gate(self, cwd: Path) -> tuple[bool, str]:
         g = self.cfg.get("gate", "./gate.sh")
-        r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
-        return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
+        mins = self.cfg.get("limits", {}).get("gate_timeout_min", 30)
+        # A gate that never returns is the patch's fault (a test waiting on a port, a loop) as often as the
+        # host's, so it is a FAIL with its output, not a crash: the crash path closed the PR with no gate
+        # evidence, recorded no attempt, and left `cargo test` running (shell=True kills the shell, not the
+        # tree). reflex1: 2 gate timeouts, both on lane 4, 0012 spent 6 cycles for 3 counted attempts.
+        p = subprocess.Popen(g, shell=True, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True, env=self.env, start_new_session=True)
+        try:
+            out, _ = p.communicate(timeout=60 * mins)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, 9)
+            out, _ = p.communicate()
+            return False, f"{(out or '')[-4500:]}\nforge: {g} killed after {mins} min with no exit (gate_timeout_min); a build or test that never returns fails the gate"
+        return p.returncode == 0, (out or "")[-5000:]
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):
