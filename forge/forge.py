@@ -57,7 +57,7 @@ def rate_interval(m: int, n: int) -> str:
     z, p = 1.96, m / n
     mid = (p + z * z / (2 * n)) / (1 + z * z / n)
     half = z * ((p * (1 - p) + z * z / (4 * n)) / n) ** 0.5 / (1 + z * z / n)
-    return f"{m}/{n} ({100 * (mid - half):.0f}-{100 * (mid + half):.0f}%)"
+    return f"{m}/{n} ({max(0.0, 100 * (mid - half)):.0f}-{100 * (mid + half):.0f}%)"
 
 
 class Forge:

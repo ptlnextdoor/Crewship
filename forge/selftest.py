@@ -899,7 +899,7 @@ with tempfile.TemporaryDirectory() as d:
 # 23. `forge status` prints a 95% interval beside each version's merge rate. Agent pass rates move 2-6 points
 # between identical reruns (arXiv 2602.07150), so a bare 3/4 next to 10/16 reads as a difference it is not.
 # reflex1's 85/122 must read 61-77%; 0/0 (a version with no attempt yet) must not divide.
-check("rate_interval: Wilson bounds", forge.rate_interval(85, 122) == "85/122 (61-77%)" and forge.rate_interval(3, 4) == "3/4 (30-95%)",
+check("rate_interval: Wilson bounds", forge.rate_interval(85, 122) == "85/122 (61-77%)" and forge.rate_interval(3, 4) == "3/4 (30-95%)" and forge.rate_interval(0, 15) == "0/15 (0-20%)",
       f"{forge.rate_interval(85, 122)} {forge.rate_interval(3, 4)}")
 check("rate_interval: empty tally", forge.rate_interval(0, 0) == "0/0", forge.rate_interval(0, 0))
 
