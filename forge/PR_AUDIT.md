@@ -2,6 +2,86 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #79 · 2026-10-29T14:41:55Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #79 forge: a gate that hangs is a FAIL with its output, not a cycle error
+What it changes: `Forge.gate()` stops using `sh()` (`subprocess.run(timeout=)`, which raised `TimeoutExpired` out of `cycle()`). It now runs `Popen(..., start_new_session=True, stderr=STDOUT)`. When `gate_timeout_min` runs out it sends SIGKILL to the process group and returns `(False, tail + "forge: ./gate.sh killed after N min ...")`. The PR also adds README row 36 and selftest 23 (forge/selftest.py:899-916).
+Findings:
+- medium forge/forge.py:364 After `killpg`, the PR calls `p.communicate()` with no timeout. That call blocks until every holder of the stdout pipe exits. `killpg` reaches only the shell's own process group, so a descendant that left the group keeps the pipe open and gate() never returns.
+  - I ran the PR's gate() body in memory with a 2 s timeout. `setsid sleep 12 & wait` returned after 12.0 s, and so did `timeout 12 sleep 13` (coreutils `timeout` calls setpgid). The old `subprocess.run` path raised at 2.0 s.
+  - The same thing happens when gate.sh exits on its own but such a descendant still holds the pipe. The first communicate runs to the timeout, then the second one blocks.
+  - The gate runs code the builder wrote (`cargo test --workspace`, `cargo run -p reflex-bench` in reflex1's gate.sh). A Rust `Command` child inherits stdout by default. `setsid nohup` is already common in reflex1 (LEARNINGS.md:86/90/100), and `nohup` keeps a pipe stdout.
+  - Traced consequence:
+    - The lane sits in gate() forever.
+    - Its ticket stays `in_progress lane=N`, because the other lanes' `recover()` only matches their own lane (forge.py:781-785). Its worktree also stays.
+    - The watchdog never fires. It watches the shared `forge.log` (forge.py:72, forge-watchdog@.service), and the other lanes keep writing to it.
+    - At the deadline, `run()` waits on that lane forever (forge.py:827-839).
+  - Before this PR, the same case raised at `gate_timeout_min`, so it had a limit. Nothing in reflex1's current gate path does this today: the only `start_new_session` is tools/compare_serve.py, which logs to a file and which gate.sh does not run. So the hang is latent. PR #40's audit flagged the same defect in `sh()`.
+- medium forge/selftest.py:915 The liveness check takes line 3 of `/proc/<pid>/status` as the `State:` line. A zombie has no `Umask:` line, so its line 3 is `Tgid:` (confirmed here: `['Name:\ttrue', 'State:\tZ (zombie)', 'Tgid:...']`). A child that was killed but not yet reaped therefore counts as alive.
+  - The `exists()`/`read_text()` pair also races. When the process vanishes in between, it raises `FileNotFoundError` or `ProcessLookupError`, and that crashes the whole selftest.
+  - Measured on the PR head:
+    - The full `selftest.py` failed this check in 1 of 5 runs.
+    - In 80 tight-loop runs of the same gate, the check reported a dead child as alive 28 times and raised 12 times.
+  - `reviewctl.gate()` runs base's selftest as the gate for every Crewship PR (reviewctl.py:116-122). Once this lands, it fails unrelated PRs at random. It fails closed, but a failed gate is not re-audited until base moves (reviewctl.py:68-72).
+- low forge/forge.py:358-359 `start_new_session` takes the gate tree out of the terminal's foreground group, and gate() kills nothing on a non-timeout exception. So Ctrl-C during `forge.py once` leaves cargo running. The systemd path is not affected: forge@.service sets no KillMode, so the default control-group kill reaches it.
+- low forge/forge.py:365 Every timeout now costs the ticket an attempt plus a repair session (up to 75/90 min) and a second gate run.
+  - The marker blames the code ("a build or test that never returns fails the gate"), while the comment at :354-355 says the host is at fault "as often".
+  - Under four-lane load, the repair builder is pushed to make a slow test cheaper, and tests are not protected paths.
+  - These still cover it: builder.md:12 (no `#[ignore]`, no lowered tolerances), gate.sh's `#[ignore]` grep, the "never the gate or tests' expectations" line in the repair prompt (:638), and the cross-vendor review.
+  - Not blocking; the cost is capped by `max_attempts`.
+- ok forge/forge.py:351-366 Traced end to end with nothing weakened:
+  - A timeout always returns False; the PR adds no path that passes.
+  - The marker comes after the 4500-char tail, so it survives every later slice: PR comments `[-3500:]` (:630, :646), the repair prompt (:638), the fail note `[-2500:]` (:648) and land `[-2000:]` (:564).
+  - The protected-path check before the second gate (:642) is unchanged. A second FAIL goes to `fail()`, which writes a `## forge` note that `attempts()` counts, so `max_attempts` bounds it.
+  - No review happens without a PASS. `g` comes from the TOML, not from ticket text, so nothing can be injected. No state is shared between lanes, and there is no GPU path.
+  - Normal runs are unchanged: a passing gate returned in 0.0 s with ok=True, and `exit 3` returned ok=False.
+  - The kill reaches a plain background child: `sleep 60 &` was gone 1.8 s after the timeout.
+- sibling #40 (same base; forge.py, README.md, selftest.py) duplicates this PR. It fixes the same failure, cites the same incident (reflex1 0012, gate timeouts at 08:53Z and 14:45Z), and adds its own README row, but it makes every `sh()` timeout non-raising. Its audit lists what that breaks: `touched_protected` fails open and `claim()` leaves tickets `in_progress`. Once #79 lands, gate() no longer calls `sh()`, so #40's gate rationale and README row are duplicates. #40 is the side that should change: drop the gate part or close it. This PR needs no text change for this.
+- info Other siblings: #6 adds a `self.gate(wt)` call in a review-repair round. That is compatible; a timeout there becomes a FAIL instead of a raise. No other open PR on `forge` edits `gate()`. I checked the diffs of #48, #47, #44, #42, #39, #31, #28, #25, #23, #20, #19, #16, #8, #7 and #5.
+- nit (slop) forge/forge.py:354-357
+  - The comment repeats README row 36. "shell=True kills the shell" is imprecise: the kill that reaches only the shell is `subprocess.run`'s timeout kill.
+  - Text this PR leaves stale:
+    - forge.py:692-694 (the except comment lists "gate timeout")
+    - the `recover()` ticket note at :797-799 ("crash or gate timeout")
+    - the selftest 4p comment (:271)
+  - README row 36 says "handed to the repair pass", which holds only for `cycle()`'s first gate. A timeout in `land()`'s re-gate (:562-564) goes straight to `fail()`.
+  - I did not verify the README's "alone 8.8 min median ... 109 gates" figures. "2 gate timeouts, both on lane 4" matches forge.log lines 137 and 281.
+Change needed (only for MERGE WITH CHANGE): two parts, both required.
+
+In forge/forge.py:364, replace
+```python
+            out, _ = p.communicate()
+```
+with
+```python
+            try:
+                out, _ = p.communicate(timeout=30)
+            except subprocess.TimeoutExpired as e:  # a descendant that left the process group still holds the pipe
+                p.stdout.close()
+                p.wait()
+                out = (e.stdout or b"").decode(errors="replace")
+```
+In forge/selftest.py, add `import select` after `import os` (line 11). Then replace line 915 (`alive = Path(f"/proc/{child}/status").exists() and ...`) with
+```python
+    try:  # a pidfd turns readable once the process has exited; a dying task's /proc status has no Umask line
+        pfd = os.pidfd_open(int(child))
+        alive = not select.select([pfd], [], [], 5)[0]
+        os.close(pfd)
+    except ProcessLookupError:
+        alive = False
+```
+Checked on a throwaway copy of the PR head with both edits applied:
+- `setsid sleep 60 &` returns after 31.9 s with FAIL, `partial` and the marker.
+- A plain child returns after 1.8 s, and the child is dead.
+- Passing and failing gates behave as before.
+- The full selftest passes 8 of 8 runs.
+- The pidfd check reports dead in 80 of 80 loop runs.
+- Negative control: it reports alive for the orphan the old `subprocess.run` path leaves behind.
+
+
 ## PR #78 · 2026-10-29T13:36:30Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
