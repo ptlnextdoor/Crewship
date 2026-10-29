@@ -2,6 +2,69 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #82 · 2026-10-29T17:41:34Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #82 builder skips the starting gate run when main's tree is one land() gated
+What it changes: adds `main_gated()` (forge.py:378-395). It walks local `main` down through commits that touch only `tickets/`, up to 12 deep, and returns the subject of the first 2-parent merge whose tree equals its second parent's tree. `cycle()` (forge.py:649-653) fills the new `{GATE_START}` slot in builder.md:5: with a "Skip the starting gate run…" sentence when that subject is non-empty, otherwise with the old step-2 sentence. Also adds a README row (README.md:78) and selftest 25 (selftest.py:923-942).
+Findings:
+- medium forge/forge.py:388-390 `main_gated()` accepts any 2-parent merge whose tree equals its `^2` tree. It never checks that the merge came from `land()`.
+  - Evidence from reflex1 `origin/main` first-parent history: `cd70ac3 Merge pull request #7 from ptlnextdoor/docs/steering` and `00e8196 Merge pull request #6 from ptlnextdoor/docs/readme-assets` (2026-10-22) both have tree == `^2^{tree}`, and neither went through forge's gate.
+  - With either one at the tip, the builder is told "forge ran `./gate.sh` on this exact tree when it landed". It also loses "If it already fails on main, your first job is to make it pass again".
+  - The same thing happens with a `sync_main()` merge of origin/main (forge.py:444) when the merge result equals origin/main's tree, whatever origin/main's tip is.
+  - The docstring ("a merge commit whose tree equals its second parent's is a tree the gate passed") and README.md:78 ("any other tip (an owner commit, …) keeps the run") both claim the opposite.
+  - It is not a gate bypass: forge still runs the gate after the builder (forge.py:667, :683 after a repair) and in `land()` (:596). The cost is that the builder does not repair a red main, and the attempt is charged to the ticket.
+- ok forge/forge.py:378-395, 649-653 For land()'s own merges the claim holds. Traced:
+  - Every head forge pushes to a PR is gated on that exact tree: the pr_open push is followed by the gate, the repair push is followed by the gate or fail(), and land() pushes `--force-with-lease` only after its gate at :596.
+  - The local fallback merges the gated branch, and the reviewer's restored files are reset at :715.
+  - The tickets-only walk is safe for reflex1: neither reflex1 `gate.sh` nor `crates/` reads `tickets/` (checked with grep).
+  - No injection: `c` is `main` plus `^`s, the parents are git hex, and the subject only goes into the prompt file.
+  - It reads only the lane's own repo, writes no shared state, and runs inside cycle()'s try, so worktree and branch cleanup still happen. A failed git call returns "", which keeps the starting run.
+  - builder.md:18 still requires `{GATE}` before the last commit. Protected paths, reviewer and gate code are untouched.
+  - Simulated on reflex1's last 200 first-parent positions: 77 would skip (73 `forge: land`, 4 GitHub forge merges). The PR says 76; history has moved since.
+- low forge/forge.py:651 "so a gate failure at the end comes from your change" is stated as fact. Gate time depends on load: sibling #79 measures 8.8 min alone vs 11.1 min with two neighbour gates, against `gate_timeout_min`. A timeout or a flaky test is not the builder's change. It is wording only, since forge's own gate decides. Not blocking.
+- low forge/README.md:78 "8 to 25 minutes per builder session" overstates the saving.
+  - `prune_target()` (forge.py:749-771) deletes the workspace crates' artifacts after every cycle, so the fresh worktree's build is paid by the builder's first cargo command anyway.
+  - [INFERENCE] The real saving is one clippy/test/agreement pass, and the agreement check alone is ~8 min per gate.sh's own comment.
+  - The citation exists (arXiv 2606.26978: banning execution saves 48-54% of Claude Code's wall clock), but it measures removing all execution, not one starting run.
+- low forge/forge.py:133-137 vs :890-894 There is a deploy window. `prompt()` re-reads builder.md on every call, but a lane restarts on a forge.py change only at the top of its loop.
+  - A lane that picks up the new builder.md after that check (during sync_main, a planner turn of up to 40 min, or claim) renders it with the old `cycle()`, which passes no GATE_START.
+  - That one session then sees a literal `2. {GATE_START}`. The gate at the end is still required, so this is transient.
+- nit slop:
+  - main_gated hardcodes `tickets/` while forge.py:87 honours `tickets_dir`. No project config sets it, so the only effect would be fewer skips.
+  - The 6-line docstring repeats the README row, reflex1 counts included.
+  - `self.cfg.get('gate', './gate.sh')` appears twice in one expression.
+  - Step 2's text now lives in forge.py instead of builder.md. The per-file version hash from #81 still covers both files.
+- verified: `selftest.py` on the PR head (from `git archive` into /tmp) passes all checks. With the change below applied, it also passes, including the new owner-merge check.
+- siblings (same base `forge`, overlapping files), checked for contradictions:
+  - #1 adds a line between builder.md steps 1 and 2, with step 2 as context. That is a textual conflict only, and #1 already conflicts with the base.
+  - #3 and #23 edit other builder.md lines and are compatible.
+  - #48 has push() merge origin/main into local main. Those merges carry the landing or done commit, so their tree differs from origin/main's and main_gated returns "": fewer skips, never a false one. The subject check below also excludes them.
+  - #8 re-checks protected paths and re-gates the merged revision in land(), which matches main_gated's assumption.
+  - #6's review-repair prompt is inline, not builder.md, so it is unaffected.
+  - #16 commits the autofix before the gate, so the gated tree is still the branch tip.
+  - None contradicts #82.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `main_gated()`, replace line 390
+```
+                return self.sh(f"git log -1 --format=%s {c}").stdout.strip() if len(trees) == 2 and trees[0] == trees[1] else ""
+```
+with
+```
+                subject = self.sh(f"git log -1 --format=%s {c}").stdout.strip()
+                # Only land()'s merges: an owner's PR merge of an up-to-date branch has the same tree shape, ungated.
+                landing = re.match(r"forge: land |Merge pull request #\d+ from \S+/forge/l\d+-", subject)
+                return subject if landing and len(trees) == 2 and trees[0] == trees[1] else ""
+```
+and after forge/selftest.py:942 add
+```
+    git("checkout -q -b docs/z", repo); (repo / "doc.txt").write_text("z\n"); git("add -A", repo); git("commit -qm z", repo)
+    git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
+    check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
+```
+
+
 ## PR #81 · 2026-10-29T16:37:44Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
