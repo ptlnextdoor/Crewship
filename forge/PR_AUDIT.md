@@ -2,6 +2,31 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #70 · 2026-10-29T02:39:36Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #70 forge: history entries name the omp release; status tallies per forge version + omp release
+What it changes: adds a `Forge.harness` property that returns the first line of `omp --version`, or `?` on TimeoutExpired/IndexError. Both `state["history"]` writers (`cycle()` merged at forge.py:674, `fail()` retry/blocked at :733) add `"harness"` to the entry. `status` (:884,:887) tallies per `version harness` pair. Also one README paragraph and selftest 21. Loop control flow is unchanged.
+Findings:
+- low forge/forge.py:113 `harness` ignores the return code. It depends on `sh` raising `TimeoutExpired`, which is the only way it detects a hang. Sibling #40 (open, same base) changes `sh` so that a timeout never raises. Instead it returns rc 124 with stdout `TIMEOUT after {timeout}s (process group killed)\n…`. With both PRs merged, a hung `omp --version` is stamped into history, and into the status tally key, as the release `TIMEOUT after 30s (process group killed)`. The `except subprocess.TimeoutExpired` becomes dead code. I checked this in a throwaway copy by stubbing `sh` with #40's contract: the PR head returned `'TIMEOUT after 30s (process group killed)'`, and with the rc check below it returned `'?'`. The same gap exists on today's base: any non-zero exit that prints to stdout gets stamped. #70 should change, not #40: the rc-124 contract is the whole point of #40. Blast radius is the stats key only.
+- info forge/forge.py:674,733 Exception path traced. The stamp runs after the ticket's `done`/`retry`/`blocked` commit is pushed. A missing binary makes the shell exit 127 with empty stdout, which raises IndexError and stamps `?` (selftest 21b). The exceptions still uncaught (OSError from fork, UnicodeDecodeError) are the same ones `self.version`/`now()` already risk in the same dict literal. If one fires, it reaches `lane_loop` :850. `recover()` then finds no `in_progress` ticket, because it was already re-statused. The `finally` still removes the worktree and branch, so no ticket gets stuck. The only loss is one history entry, while `merged`/`failed` still count it. Each stamp is capped at 30 s; I measured 0.9 s. It runs locally and spends no model quota and no GPU.
+- info forge/forge.py:108-115 Nothing else is affected. `OMP` is a module constant (`shutil.which` or `~/.local/bin/omp`), so no ticket text reaches the shell. History lives in each lane's own `state.json`, so no state is shared between lanes. The diff does not touch the gate, `touched_protected`, the protected paths, any role prompt, reviewer selection or verdict parsing, claim, `recover()`, `discard_strays()`, PR create/merge, or `gpu.py`. The one prompt input that changes is the steward's `STATE=json.dumps(self.state)[-6000:]` (:738). Each entry grows 134→160 chars, so at the 200-entry cap the steward sees about 37 entries instead of about 44. The prompt size stays the same.
+- nit forge/selftest.py:843-857 Test 21's cycle ends in `retry`, not `merged`. The stub writes the same `big.txt` that test 20 already landed, so the builder produces no diff. Running the PR's selftest against base forge.py printed `'result': 'retry'`. So only `fail()`'s stamp (:733) is exercised; the merged stamp (:674) is the same expression but is not tested. The check name "instead of failing the cycle" claims more than it tests: it only reads the property. Verified: the full selftest exits 0 on the PR head, and check 21 fails on base forge.py (no `harness` key, then AttributeError).
+- nit forge/forge.py:109-111 The docstring says "the omp release that will run the next session". The value is actually read after the cycle has run, so an omp upgrade during a cycle is credited to the new release. This matches `version`'s stamp-time semantics, and README:108 states it correctly ("taken when each history entry is written"). The rationale (the arXiv cite and the symlink) appears three times: docstring, README and selftest comment. This matches repo style, so no change.
+- info forge/README.md:108 Claims verified on this box. `~/.local/bin/omp` is a symlink to `~/.local/share/crewship/omp/18.12.6/.../cli.js`, and `omp --version` prints `omp/18.12.6`. Smoke test: PR-head `forge.py status --config ~/.config/forge/reflex1.toml` prints `merged/attempts per forge version + omp release (now 3c75bb6f omp/18.12.6): pre pre 85/122`, which is read-only.
+- info siblings: the #40 pair is covered in the first finding. The other open PRs on `forge` that touch forge.py, README.md or selftest.py (#48, #47, #44, #42, #39, #31, #28, #25, #23, #20, #19, #16, #8, #7, #6, #5) do not touch history entries, `version`, `status` or `harness`. Neither contradicts nor duplicates.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py:113, replace
+`            return self.sh(f"{OMP} --version", timeout=30).stdout.strip().splitlines()[0]`
+with
+```
+            r = self.sh(f"{OMP} --version", timeout=30)
+            return r.stdout.strip().splitlines()[0] if r.returncode == 0 else "?"
+```
+and keep the `except (subprocess.TimeoutExpired, IndexError): return "?"` clause as it is. I applied this to a throwaway copy of the PR head and ran the full selftest: it exits 0.
+
+
 ## PR #69 · 2026-10-29T01:39:02Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
