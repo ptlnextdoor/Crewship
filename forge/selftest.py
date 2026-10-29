@@ -940,6 +940,9 @@ with tempfile.TemporaryDirectory() as d:
     git("checkout -q -b forge/y HEAD~2", repo); (repo / "new.txt").write_text("y\n"); git("add -A", repo); git("commit -qm y", repo)
     git("checkout -q main", repo); git("merge -q --no-ff -m 'forge: land 0002' forge/y", repo)
     check("main_gated: a merge main moved under is not gated", f.main_gated() == "", f.main_gated())
+    git("checkout -q -b docs/z", repo); (repo / "doc.txt").write_text("z\n"); git("add -A", repo); git("commit -qm z", repo)
+    git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
+    check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
 
 print()
 if fails:

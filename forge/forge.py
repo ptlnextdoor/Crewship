@@ -387,7 +387,10 @@ class Forge:
             parents = self.sh(f"git log -1 --format=%P {c}").stdout.split()
             if len(parents) == 2:
                 trees = self.sh(f"git rev-parse {c}^{{tree}} {parents[1]}^{{tree}}").stdout.split()
-                return self.sh(f"git log -1 --format=%s {c}").stdout.strip() if len(trees) == 2 and trees[0] == trees[1] else ""
+                subject = self.sh(f"git log -1 --format=%s {c}").stdout.strip()
+                # Only land()'s merges: an owner's PR merge of an up-to-date branch has the same tree shape, ungated.
+                landing = re.match(r"forge: land |Merge pull request #\d+ from \S+/forge/l\d+-", subject)
+                return subject if landing and len(trees) == 2 and trees[0] == trees[1] else ""
             files = self.sh(f"git diff --name-only {c}^ {c}").stdout.split()
             if not files or any(not f.startswith("tickets/") for f in files):
                 return ""
