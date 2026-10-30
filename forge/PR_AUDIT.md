@@ -2,6 +2,48 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #103 · 2026-10-30T22:40:20Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #103 forge status: lane-minutes per merged ticket count the model's failed attempts
+What it changes: `status()` changes its per-builder-model line (forge.py:1042-1052). It used to print the upper-median minutes of merged entries. It now sums `secs` over every history entry that has the field and divides by the merged entries that have it, printed as `N min/merge`, or `N min, 0 merges` when a model has no merge. It adds one selftest check (selftest.py:942-948) and rewrites the `status` paragraph in README.md:128.
+Findings:
+- none forge/forge.py:1042-1052 The change only affects what `status` prints.
+  - `status()` is the read-only CLI command (forge.py:12, :1062). Nothing in the loop calls it or parses its output: grepping the repo for the old and new labels finds only README, SCOUT.md and PR_AUDIT.md. The steward gets `json.dumps(self.state)` (:879), not this line.
+  - No line changes in the gate, `touched_protected`/protected paths, any prompt, the reviewer flow, claim, `recover()`, `discard_strays()`, timeout/killpg, PR create/merge, quota or `gpu.py`.
+  - No ticket text reaches the code. It starts no subprocess and writes nothing.
+  - Like any forge.py merge, it changes the file's mtime, so running lanes restart between cycles and a new `version` bucket starts.
+- none forge/prompts/*.md, forge/selftest.py, forge/README.md Nothing is deleted from the prompts or the selftest (selftest.py is +7/-0).
+  - The one README line replaced is the `status` paragraph under "Watch and steer", not the safeguard table.
+  - The sentence it drops ("reflex1's 80 merges took 23 to 159 min, median 60") is a measurement, not a rule. No safeguard layer is removed.
+- none forge/forge.py:1044-1049 I traced the arithmetic.
+  - Numerator and denominator both count only entries with `secs`, so entries from before #102 count in the rate and not in the minutes, as before.
+  - `secs // 60 // nm` equals floor(secs / (60·nm)).
+  - In production the `pre` bucket cannot pick up minutes. `record()` is called only at :804 and from `fail()` (:863). Both run after `self.agent(builder, …)` (:718) has set `last_model[builder]` (:229). `model` (#101, 0d5fcb27) landed before `secs` (#102, f49f0e78).
+  - I ran the PR-head `status()` against stub histories. Model `a/b` with 7,199+1 s of failed attempts prints `120 min, 0 merges`. Model `c/d` with 3,599+3,601 s plus one merge that has no `secs` prints `3/3 (44-100%) 60 min/merge`. A `pre` bucket with no `secs`, and an `e/f` with 0 s, print no minutes.
+- info forge/selftest.py:942-948 I ran the PR-head selftest in memory (selftest.py and forge.py loaded via `git show`, nothing written to the checkout).
+  - It prints "all checks passed".
+  - With base forge.py, only the new check fails: it prints `g/h 1/2 (9-91%) 10 min` (median of merged) instead of `30 min/merge`.
+  - The block restores `f.state["history"]` before `forge.OMP` is switched, so the checks after it read the same entry as before.
+  - I ran the PR-head `forge.py status --config ~/.config/forge/reflex1.toml` in memory (read-only). It prints `pre 85/122 (61-77%)`, as the PR body says.
+- info forge/README.md:128, forge/selftest.py:942 I checked the data claim against `~/.local/state/forge/reflex1/forge.log`, pairing each claim with its MERGED/RETRY/BLOCKED line per lane.
+  - Counts: 85 merged, 32 RETRY, 5 BLOCKED.
+  - Lane-minutes: 7,139 in total, 2,097 of them in failed attempts; merge median 60; 83.99 per merge.
+  - arXiv 2610.19345 exists and states that "failed attempts still use resources" and that it compares models "on resources per successfully completed task".
+- nit forge/forge.py:1052 `status` rounds down, so the same data would print `83 min/merge`. The README, the selftest comment and the PR body say 84 (rounded). Harmless.
+- nit forge/forge.py:1052 Wording and coverage of the status line:
+  - The label "counting its failed attempts" reads as the ticket's own failures. The number actually charges every failed attempt of the model, including tickets that were blocked or later merged by another model. The README and the selftest check name describe this correctly.
+  - `120 min, 0 merges` puts a comma inside a comma-separated list.
+  - Cycles that end in an exception or a restart write no history entry (`record()` has only the two callers above), so their minutes are not counted. The README's "every attempt that carries `secs` on its history entry" is accurate, and the log measurement has the same scope.
+  - No change needed.
+- nit slop: the paper and reflex1 rationale appears in the code comment, the README and the selftest comment. That matches the repo's existing style. The edit is focused: no defensive try/except, and no unrelated rewrite.
+- info siblings: these open PRs on base `forge` touch forge.py, README.md or selftest.py: #99, #86, #85, #84, #83, #79, #48, #47, #44, #42, #40, #39, #31, #28, #25, #23, #20, #19, #16, #8, #7, #6, #5.
+  - I grepped their diffs for `by_model`, `secs`, `median minutes`, `min/merge`, `def status`, `def record`, `rate_interval`, `cycle_t0`, `merged/attempts`, `A second line tallies` and `lane-minutes`. Nothing matched.
+  - No sibling contradicts or duplicates this PR.
+
+
 ## PR #102 · 2026-10-30T17:28:24Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
