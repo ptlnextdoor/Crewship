@@ -822,9 +822,8 @@ class Forge:
         `all_lanes` (the supervisor at startup, when every lane is restarting) recovers every lane's tickets."""
         self.sync_main()
         self.sh("git worktree prune")
-        # The dead cycle's PR stayed open with nothing on it: cycle()'s handler closes it only when the exception
-        # reaches it, and a killed process never gets there. Of reflex1's 10 `recovered -> retry` lines, 6 left an
-        # open PR (#5 #8 #9 #12 #27 #31), 4 of them on tickets a later attempt had since landed or cancelled.
+        # The dead cycle's PR stayed open: cycle()'s handler closes it only when the exception reaches it, and a killed
+        # process never gets there (reflex1 #5 #8 #9 #31, all left by supervisor restarts).
         # Matched on the branch name cycle() gives, forge/l<lane>-<cycle>-<ticket>, so another lane's live cycle
         # is never touched.
         try:
@@ -860,7 +859,7 @@ class Forge:
                 self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
                 for pr in open_prs:
                     if re.fullmatch(rf"forge/l{lane}-\d+-{re.escape(p.stem)}", pr["headRefName"]):
-                        self.pr_close(str(pr["number"]), "interrupted: the loop restarted mid-cycle, so this attempt was never gated or reviewed; not counted as an attempt.")
+                        self.pr_close(str(pr["number"]), "interrupted: the cycle stopped before this attempt finished (loop restart, crash or cycle error); not counted as an attempt.")
                         self.sh(f"git push -q origin --delete {pr['headRefName']} 2>/dev/null || true", timeout=120)
         for wt in (self.home / "wt").glob("*") if (self.home / "wt").exists() else []:
             self.sh(f"git worktree remove --force {wt}; rm -rf {wt}")
