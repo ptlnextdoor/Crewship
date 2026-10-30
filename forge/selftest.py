@@ -543,7 +543,10 @@ with tempfile.TemporaryDirectory() as d:
     f.claim = lambda: repo / "tickets/0004-r.md"
     f.gate = lambda cwd: (True, "")
     f.pr_open = lambda wt, branch, ticket, builder: (git(f"push -q -u origin {branch}", wt), "https://example.invalid/pull/9")[1]
-    verdict = ["VERDICT: REJECT"]
+    # 11a. The retry's note is the review whole, with omp's `[stderr]` chatter off: the PASS/FAIL ledger is at the
+    # head, and in 3 of reflex1's 10 REJECT reviews the old `rout[-3000:]` dropped all or all but one FAIL line.
+    verdict = ["- **FAIL** - `cargo test -p x` exits 101 on input `probe.json`\n" + "detail " * 500
+               + "\nMust change: fix the probe\nVERDICT: REJECT\n[stderr]\nWorking...\n"]
     def build_or_review(role, prompt, cwd, timeout_min=None):
         (cwd / "src.rs").write_text(f"fn main() {{}} // {role}\n")
         return 0, verdict[0]
@@ -551,6 +554,10 @@ with tempfile.TemporaryDirectory() as d:
     f.cycle()
     check("a rejected attempt's branch is deleted from the remote",
           "forge/l1-" not in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
+    note = (repo / "tickets/0004-r.md").read_text()
+    check("the retry note keeps the review's FAIL ledger and drops the stderr chatter",
+          "exits 101 on input `probe.json`" in note and "Must change: fix the probe" in note and "[stderr]" not in note,
+          note[-300:])
 
     verdict[0] = "VERDICT: APPROVE"
     f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
