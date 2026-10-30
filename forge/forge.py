@@ -369,12 +369,21 @@ class Forge:
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
         return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
 
+    # Files omp loads into every later session's context before its first turn (omp docs, context-files.md):
+    # standalone CLAUDE.md/GEMINI.md and the editor rule files anywhere on the walk up, and the config
+    # directories holding AGENTS.md, RULES.md (an always-apply sticky rule), mcp.json, hooks and skills.
+    # The reviewer's own session runs in the worktree, so a RULES.md the diff adds is in its context while it
+    # judges that diff; no reflex1 PR (0 of 123) has touched one, and no ticket needs to.
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills)/"
+                                r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?)$")
+
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):
             # A stale remote-tracking ref puts main's own commits on this branch's side of the diff.
             self.sh("git fetch -q origin", cwd=cwd, timeout=120)
         files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
-        return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
+        return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
 
     def unrequested_deps(self, cwd: Path, ticket_text: str) -> list[str]:
         """Third-party packages the branch adds to or bumps in `Cargo.lock` that the ticket does not name and
@@ -634,7 +643,7 @@ class Forge:
             # the diff is the branch's own work and not another lane's landed ticket updates.
             bad = self.touched_protected(wt, "origin/main")
             if bad:
-                return f"resolving the conflict with main edited protected gate/ticket paths {bad}; not allowed."
+                return f"resolving the conflict with main edited protected gate/ticket/harness-config paths {bad}; not allowed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
             # patch (context shifts on any rebase, so a clean one posts nothing).
             sha, lines = self.reviewed
@@ -715,7 +724,7 @@ class Forge:
             # The reviewer's diff below has the same base, so it is the branch's work and not another lane's.
             bad = self.touched_protected(wt, "origin/main")
             if bad:
-                return self.fail(ticket, f"diff edits protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
+                return self.fail(ticket, f"diff edits protected gate/ticket/harness-config paths {bad}; not allowed. Change the code, not the oracle or the files every session loads at start.")
             deps = self.unrequested_deps(wt, ticket.read_text())
             if deps:
                 return self.fail(ticket, f"diff adds packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
@@ -734,7 +743,7 @@ class Forge:
                 # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
                 bad = self.touched_protected(wt, "origin/main")
                 if bad:
-                    return self.fail(ticket, f"the repair edited protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
+                    return self.fail(ticket, f"the repair edited protected gate/ticket/harness-config paths {bad}; not allowed. Change the code, not the oracle or the files every session loads at start.")
                 deps = self.unrequested_deps(wt, ticket.read_text())
                 if deps:
                     return self.fail(ticket, f"the repair added packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
