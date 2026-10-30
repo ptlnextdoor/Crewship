@@ -542,7 +542,10 @@ class Forge:
         # shell (ticket 0052's `tools/baselines.py` ran for 22 s and its output became the PR title)
         title = shlex.quote(f"[{ticket.stem[:4]}] {title.group(1) if title else ticket.stem}")
         model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
-        body = (f"Opened by forge (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
+        # The PR is the record that outlives this box: state.json keeps 200 history entries per lane and 0 of
+        # reflex1's 121 forge PRs say which prompt set or omp release built them (arXiv 2610.40071: the git log
+        # "does not show what an AI agent did, which model it used"). Same stamps `status` groups merge rates by.
+        body = (f"Opened by forge `{self.version}` on `{self.harness}` (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
                 # says what pr_merge()/land() do (`--merge` or local --no-ff); the body claimed "squash-merges" for 85 landings
                 f"The gate result and the review (its comment names the model) are posted below as comments; "
                 f"forge merges on approval with a merge commit and deletes the branch.\n\n"
