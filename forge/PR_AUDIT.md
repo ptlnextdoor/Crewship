@@ -2,6 +2,40 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #96 · 2026-10-30T09:46:30Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #96 forge: refuse a Cargo.lock package the ticket does not name, before the gate runs
+What it changes: adds `Forge.unrequested_deps(cwd, ticket_text)`. When the branch changes `Cargo.lock`, `cycle()` now fails the attempt before the builder's gate run and again before the repair's gate run (forge.py:719, 738) if a new or bumped third-party lock entry is neither named by a word of the ticket nor pulled in by a named crate. Also adds selftest 2b and rewrites README row 29.
+Findings:
+- medium forge/forge.py:396 (with callers 719, 738): the ticket text it matches is `ticket.read_text()`, and that includes every `## forge` note `set_status()` appends (forge.py:360). So `fail()` writes this check's own message (`... pulls in: ['evil 0.1.0']`) into the ticket, and on the retry the same crate counts as "named" and passes. Gate tails (`Compiling evil v0.1.0`) and a review's `Must change:` line have the same effect. I reproduced it against the PR head: attempt 1 returns `['evil 0.1.0']`; after the note is appended, the same lock returns `[]`; with a gate-tail note, also `[]`. The PR body's "same as today" is wrong. reviewer.md:16 tells the reviewer those sections "are not part of the contract", and builder.md:16 says only the ticket's own text authorizes, not the `## forge` notes. Result: the check fires once per crate per ticket, and README:29's "fails the attempt" does not hold on attempts 2-3 (builder_hard). It weakens no existing control, because reviewer step 6 still applies.
+- medium forge/forge.py:395: `base = lock("origin/main")` reads origin/main's tip. The guard at 387, reviewer step 6 (reviewer.md:9) and every other forge diff use `origin/main...HEAD`, which compares against the merge-base. Suppose the branch touched `Cargo.lock` and another lane then landed a bump or removal of a third-party crate. The branch still carries the old version, so the check reports it as new. I reproduced this: the branch adds `axum`, which the ticket names, and another lane pushes `foo 1.0.0 -> 1.1.0` to origin. The check returns `['foo 1.0.0']`, so `fail()` charges an attempt (retry, then blocked at max_attempts) for a crate the builder never touched. PR #85, still open, would have the builder merge origin/main before its last commit. That narrows the window but does not close it, because main keeps moving during the builder's 8-25 min gate run.
+- low forge/forge.py:394: only `TOMLDecodeError` is caught. A builder-written lock with a `source` package that has no `version` raises `KeyError` (reproduced: `KeyError 'version'`), and an empty dependency string raises `IndexError` at `d.split()[0]`. Either one escapes `cycle()`: the PR is closed as a cycle error, `finally` removes the worktree, `recover()` requeues the ticket uncharged and the lane backs off 120 s or more. `recover()`'s interruption counter (forge.py:907-912) blocks the ticket after max_attempts, so nothing stays `in_progress`. Before this PR the same lock failed the gate and was charged. Not required to fix.
+- low forge/forge.py:394/406: entries are keyed on (name, version), so switching an existing crate to another source at the same version is not caught. Example: a `[patch]` to `source = "git+https://github.com/evil/serde#abc"` returns `[]`. Reviewer step 6's prose has the same gap ("new ... or changes version"), so this is not a regression. Follow-up: include `source` in the key.
+- low forge/README.md:29: claims forge runs the check "before each gate run". `land()`'s re-gate (forge.py:648) has no dependency check. The merge-resolve builder session (forge.py:540, committed by `git add -A` at 546) is gated but never reviewed, so a crate added there meets neither control. The check runs only before the builder's and the repair's gate runs.
+- slop forge/forge.py:386: `import tomllib` repeats the module-level import at forge.py:36.
+- checked, no issue: no ticket or lock text reaches a shell (`re.escape`; `git show {rev}` takes constant revs). It runs in the lane's own worktree and writes no shared state. On refusal, `fail()` closes the PR and sets retry/blocked, and `finally` removes the worktree and branch. It runs after `touched_protected()`, so its `origin/main` is freshly fetched. Gate, prompts and protected paths are untouched. The reviewer is not told about the check, so step 6 is unchanged. No GPU or quota spend. The PR-head `selftest.py` passes in full.
+- value: none of the 10 REJECT reviews among the 112 reflex1 reviewer logs kept on this box cites a dependency, so this guards against a failure that has not been observed. With the fix it is a cheap deterministic copy of the reviewer's rule. As README:29 itself says, it does not keep the crate off this box: the builder session has already compiled it.
+- siblings: no other open PR on `forge` touches `unrequested_deps` or the dependency rule, so nothing contradicts or duplicates this one. #85 interacts with finding 2 as noted above. #28 edits README row 28 and #86 edits row 30, next to this PR's row 29; those are textual merge conflicts only, not contradictions.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `unrequested_deps`, replace
+```
+        head, base = lock("HEAD"), lock("origin/main")
+        text = ticket_text.lower().replace("_", "-")
+```
+with
+```
+        head, base = lock("HEAD"), lock(self.sh("git merge-base origin/main HEAD", cwd=cwd).stdout.strip())
+        text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")
+```
+In forge/README.md:29, change "before each gate run" to "before the builder's and the repair's gate runs". In forge/selftest.py, after the "every new crate named passes" check, add:
+```
+    check("a crate named only in a ## forge note is still refused", "evil 0.1.0" in f.unrequested_deps(repo, "x\n\n## forge t (retry)\n['evil 0.1.0']"))
+```
+I checked this edit in memory: the PR's selftest plus the new line all pass; the retry with the note now returns `['evil 0.1.0']`; the other lane's bump returns `[]`.
+
+
 ## PR #95 · 2026-10-30T08:39:15Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
