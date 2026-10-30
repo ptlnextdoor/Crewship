@@ -717,7 +717,11 @@ class Forge:
             # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.
             self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
             if not verdict or verdict[-1] != "APPROVE":
-                return self.fail(ticket, f"reviewer did not approve.\n{rout[-3000:]}")
+                # The whole review, not its tail: a REJECT's PASS/FAIL ledger (which "Done when" line failed, on what
+                # input) sits at the head and the `Must change:` block at the end; the next attempt needs both. In
+                # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
+                # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
+                return self.fail(ticket, f"reviewer did not approve.\n{review}")
             why = self.land(wt, branch, tid, builder)
             if why:
                 return self.fail(ticket, why)
@@ -782,7 +786,7 @@ class Forge:
         self.sync_main()
         tries = self.attempts(ticket) + 1
         status = "blocked" if tries >= self.cfg.get("max_attempts", 3) else "retry"
-        self.set_status(ticket, status, why[-4000:])
+        self.set_status(ticket, status, why[-7000:])  # room for a whole 6,000-character review plus its PR line
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
