@@ -2,6 +2,52 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #91 · 2026-10-30T03:33:24Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #91 forge: recover() closes the interrupted cycle's PR with a note, deletes its branch
+What it changes: `recover()` now runs `gh pr list --state open --limit 100 --json number,headRefName` once (skipped when `pull_requests=false`; a bad JSON body is read as empty). For each ticket it puts back to retry or blocked, every open PR whose head fully matches `forge/l<lane>-<digits>-<ticket stem>` is closed through `pr_close()` with an "interrupted" note, and that branch is deleted from origin. Under `all_lanes` the lane part matches any lane. The PR also adds a selftest 8 check and a README row (README:62).
+Findings:
+- low forge/forge.py:863 The close note says the attempt "was never gated or reviewed". That is false for 2 of the 4 PRs this change exists to close: reflex1 #5 (`forge/l3-00001-0010-…`) and #31 (`forge/l1-00013-0020-…`) each carry forge's own `**gate: PASS**` comment, posted at forge.py:671. Those cycles died during review or landing. Any lane killed after :671 gets this note directly under a gate result on the same PR page. The note's "loop restarted mid-cycle" is also wrong when recover() runs after `QuotaExhausted` (:918) or a cycle error (:922). On those paths cycle()'s handler (:740-741) has normally closed the PR already, so the note only appears when that close failed. The text goes on the PR page only and never into an agent prompt, so it misleads the owner, not the loop.
+- low forge/README.md:62, forge/forge.py:825-827 The evidence is overstated. "6 of reflex1's 10 `recovered -> retry` lines left an open PR (#5 #8 #9 #12 #27 #31)" counts two PRs that are not this failure:
+  - #12 (`l4-00001-0012`, opened 08:23:18Z) and #27 (`l4-00004-0012`, opened 14:15:41Z) are the two gate timeouts at forge.log:137 (08:53:20Z) and :281 (14:45:44Z). The comment at forge.py:738-739 already cites them for cycle()'s except handler, which now closes such PRs.
+  - The kill case is 4 PRs (#5 #8 #9 #31), all left by supervisor restarts. Each `recovered` line comes before its `lane 1 start`, so it is `run()`'s `recover(all_lanes=True)`: forge.log:85-88 at 07:07:16Z and :317 at 16:59:56Z.
+  - The tickets of those four are now `done` (0009, 0010, 0011) or `cancelled` (0020) on reflex1 origin/main. All 6 PRs are still open.
+  - "left open with nothing on it" (README:62, forge.py:825) is wrong for #5 and #31, which have gate comments.
+- info forge/forge.py:830-833 This is recover()'s first GitHub API call.
+  - A gh error is handled: `gh()` returns empty stdout and `or "[]"` turns it into an empty list.
+  - A gh call that hangs past 120 s is not handled. It raises `subprocess.TimeoutExpired` out of `sh()` (:197-199), despite `gh()`'s "Never raises" docstring, and `except ValueError` does not catch it.
+  - At lane start (:892, outside the try) that kills the lane, and the supervisor restarts it 30 s later. In `run()` (:862) it kills the supervisor.
+  - The failure class already existed: recover() already runs `sync_main()`'s fetch and `push()` with the same timeout.
+  - A raise inside the ticket loop (:861-864) leaves the status commits local. The next recover() pushes them (they survive sync_main and no longer match `in_progress`) and clears the stale worktrees. That pass's PR then stays open.
+  - Sibling #40 makes `sh()` return rc 124 instead of raising, which removes this case. No change needed here.
+- info PR body "Risk" says recover runs only "at lane start, before any cycle". It also runs at :918 and :922. I traced both: each comes after cycle()'s except (closes the PR if OPEN) and its finally (removes the worktree; deletes the branch from origin unless it is merged into local main). Both are on the same lane, so that lane has no live cycle at that point.
+  - Lane N only matches `forge/lN-…` heads, for tickets whose status names lane N. Lane 1 also takes a bare `in_progress`.
+  - `all_lanes` runs only in `run()`, before any `start(k)`.
+  - So the body's conclusion holds: no live PR gets closed.
+- nit forge/forge.py:825-829 The 5-line comment repeats README:62, including the overstated count. README:62 also says "this lane's" branch, but under `all_lanes` any lane's branch matches.
+- info Traced clean:
+  - Matching, checked with a throwaway driver on the PR tree with gh stubbed. Under `all_lanes`, with ticket `0020-a` at lane=2 and `0021-b` bare: it closes the l2 and l3 heads of 0020-a and the l1 and l11 heads of 0021-b, and leaves `forge/l2-00009-0020-a-extra` open. Lane 1 closes only `forge/l1-00002-0021-b`, lane 2 only `forge/l2-00004-0020-a`. `l11` never matches lane 1. `re.escape` plus `fullmatch` pin the head to the literal stem.
+  - Shell injection: `pr['headRefName']` reaches `git push --delete` (:864) only after it fully matches `forge/l<n>-<digits>-<stem>`. `<stem>` is a tickets/ filename that is already interpolated unquoted at :860 (`git add {p}`) and in cycle()'s branch name (:645-646), so the change adds no new input to the shell. `pr["number"]` is a JSON int.
+  - No commits are lost: only heads with an open PR are deleted, and GitHub keeps `refs/pull/N/head`. reflex1 #119 and #120 have no branch left, yet their pull refs still resolve.
+  - Not touched: the gate, `touched_protected`, protected paths, prompts, the reviewer, claim, quota fallback, GPU.
+  - Cost: one `gh pr list` per recover(), which runs at lane start, every 15-min quota pause and every cycle error. At most one comment and one close per matched PR, capped by `--limit 100` (reflex1 has 10 open today). Nothing grows without bound.
+  - `gh-body.md` sits in each lane's home. The supervisor shares lane 1's home, but its recover() finishes before `start(1)`.
+  - Selftest on the PR tree (`git archive` of 3d2b2ad4 plus the PR patch): py_compile passes and selftest reports "all checks passed". With base forge.py swapped in, the new check fails (`[]`). That check does not cover `all_lanes` or the branch delete; the driver above covered `all_lanes`.
+- info Siblings: these open PRs on `forge` touch the same files: #86 #85 #84 #83 #79 #48 #47 #44 #42 #40 #39 #31 #28 #25 #23 #20 #19 #16 #8 #7 #6 #5. None edits `recover()`, closes PRs on recovery, or matches heads.
+  - #40 complements this PR (see the third finding).
+  - #79 makes a gate timeout a gate FAIL, a third path that agrees with the second finding about #12/#27.
+  - #44 adopts a builder-opened PR in `pr_open()` and cites #5 as open for another reason. The evidence overlaps but the code does not conflict.
+  - The README rows go in at different lines, so any conflict is textual only.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:863: replace `"interrupted: the loop restarted mid-cycle, so this attempt was never gated or reviewed; not counted as an attempt."` with `"interrupted: the cycle stopped before this attempt finished (loop restart, crash or cycle error); not counted as an attempt."`
+2. Evidence text:
+   - forge/README.md:62: replace `leaving its PR open with nothing on it: \`cycle()\`'s handler closes the PR only when the exception reaches it; 6 of reflex1's 10 \`recovered -> retry\` lines left an open PR (#5 #8 #9 #12 #27 #31), 4 of them on tickets a later attempt had since landed or cancelled` with `leaving its PR open: \`cycle()\`'s handler closes the PR only when the exception reaches it; 4 of reflex1's 10 \`recovered -> retry\` lines, all supervisor restarts, left one open (#5 #8 #9 #31, two under a gate PASS), on tickets since done or cancelled`.
+   - forge/forge.py:825-827: replace the three comment lines with `# The dead cycle's PR stayed open: cycle()'s handler closes it only when the exception reaches it, and a killed` / `# process never gets there (reflex1 #5 #8 #9 #31, all left by supervisor restarts).`
+
+
 ## PR #90 · 2026-10-30T02:28:14Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
