@@ -87,6 +87,7 @@ with tempfile.TemporaryDirectory() as d:
     got = f.unrequested_deps(repo, "status: open\n# serve\nAdd an HTTP server on axum.\n")
     check("unrequested crate refused, named crate and its pulls pass", got == ["evil 0.1.0", "serde_derive 1.0.1"], str(got))
     check("every new crate named passes", f.unrequested_deps(repo, "axum, evil and a serde-derive bump") == [])
+    check("a crate named only in a ## forge note is still refused", "evil 0.1.0" in f.unrequested_deps(repo, "x\n\n## forge t (retry)\n['evil 0.1.0']"))
     git("checkout -q main", repo); git("checkout -q -b work2", repo)
     check("no Cargo.lock change is no finding", f.unrequested_deps(repo, "") == [])
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.

@@ -392,8 +392,8 @@ class Forge:
             except tomllib.TOMLDecodeError:
                 return {}
             return {(p["name"], p["version"]): [d.split()[0] for d in p.get("dependencies", [])] for p in pkgs if "source" in p}
-        head, base = lock("HEAD"), lock("origin/main")
-        text = ticket_text.lower().replace("_", "-")
+        head, base = lock("HEAD"), lock(self.sh("git merge-base origin/main HEAD", cwd=cwd).stdout.strip())
+        text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")
         # shortcut: a crate named by any word of the ticket counts as requested (`image`, `png`), so this loosens
         # toward the reviewer's reading, never blocks a named crate; tighten to a `crates:` line if it ever passes one.
         named = lambda n: re.search(rf"(?<![a-z0-9-]){re.escape(n.lower().replace('_', '-'))}(?![a-z0-9-])", text)
