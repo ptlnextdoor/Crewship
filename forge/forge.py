@@ -818,10 +818,19 @@ class Forge:
 
     def recover(self, all_lanes: bool = False, quota: bool = False) -> None:
         """After a crash or restart: this lane's in_progress tickets go back to retry (blocked once the
-        interruptions reach max_attempts), stale worktrees go.
+        interruptions reach max_attempts), their open PRs close with the reason, stale worktrees go.
         `all_lanes` (the supervisor at startup, when every lane is restarting) recovers every lane's tickets."""
         self.sync_main()
         self.sh("git worktree prune")
+        # The dead cycle's PR stayed open: cycle()'s handler closes it only when the exception reaches it, and a killed
+        # process never gets there (reflex1 #5 #8 #9 #31, all left by supervisor restarts).
+        # Matched on the branch name cycle() gives, forge/l<lane>-<cycle>-<ticket>, so another lane's live cycle
+        # is never touched.
+        try:
+            open_prs = json.loads(self.gh("pr list --state open --limit 100 --json number,headRefName") or "[]") if self.cfg.get("pull_requests", True) else []
+        except ValueError:
+            open_prs = []
+        lane = r"\d+" if all_lanes else str(self.lane)
         if all_lanes:
             pat = r"^status:\s*in_progress(\s+lane=\d+)?\s*$"
         elif self.lane == 1:
@@ -848,6 +857,10 @@ class Forge:
                     p.write_text(p.read_text() + (f"\n\n## forge-quota {now()}\nno model had quota; not counted as an attempt\n" if quota else f"\n\n## forge-recover {now()}\ninterrupted (loop restarted mid-cycle); not counted as an attempt\n"))
                     self.log(f"recovered {p.stem} -> retry")
                 self.sh(f"git add {p} && git commit -qm 'forge: recover {p.stem} after restart'")
+                for pr in open_prs:
+                    if re.fullmatch(rf"forge/l{lane}-\d+-{re.escape(p.stem)}", pr["headRefName"]):
+                        self.pr_close(str(pr["number"]), "interrupted: the cycle stopped before this attempt finished (loop restart, crash or cycle error); not counted as an attempt.")
+                        self.sh(f"git push -q origin --delete {pr['headRefName']} 2>/dev/null || true", timeout=120)
         for wt in (self.home / "wt").glob("*") if (self.home / "wt").exists() else []:
             self.sh(f"git worktree remove --force {wt}; rm -rf {wt}")
         for b in self.sh("git branch --list 'forge/*'").stdout.split():
