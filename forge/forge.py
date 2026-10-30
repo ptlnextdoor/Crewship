@@ -687,6 +687,8 @@ class Forge:
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
+            # The commit whose diff the reviewer gets, read before its yolo session can move HEAD; land() rewrites it.
+            reviewed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
             diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
@@ -712,7 +714,7 @@ class Forge:
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
-            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
+            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}` of {reviewed}**\n\n{review[-12000:]}")
             # The reviewer may restore files from origin/main to run the diff's tests against the old code (step 3).
             # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.
             self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
