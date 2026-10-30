@@ -2,6 +2,63 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #100 · 2026-10-30T15:25:41Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #100 forge: protect the harness config files omp loads into every session
+What it changes: adds a constant regex, `Forge.HARNESS_CONFIG` (forge/forge.py:372-378). `touched_protected()` ORs it into its path filter (:385), so the three existing checks also refuse `.omp/`, `.claude/`, `.codex/`, `.gemini/`, `.cursor/`, `.windsurf/`, `.agent(s)/` and `.github/instructions/` directories, plus `CLAUDE.md`, `GEMINI.md`, `.cursorrules`, `.clinerules`, `.windsurfrules` and `.github/copilot-instructions.md` files, at any depth. The three checks are pre-gate (:726), post-repair (:745) and after the landing sync in `land()` (:645). The three fail messages now say "gate/ticket/harness-config". Also adds README row 88 and selftest 2c. Line numbers are at head 46268d7c.
+Findings:
+- medium forge/forge.py:377-378, forge/README.md:88: the regex misses the project MCP files that omp starts at session start, which is the surface README row 88 says it closes ("an MCP server ... that every later builder, reviewer, planner and steward session loads at start").
+  - How I checked: in a scratch git repo I ran `omp/18.12.6 -p --no-session --model=nonexistent-model-xyz`. It exits at model lookup, so no quota was spent.
+  - Result: omp started the stdio servers declared in root `.mcp.json`, root `mcp.json`, `.vscode/mcp.json` (`mcp.servers`) and root `opencode.json` before it exited; each one wrote its marker file.
+  - `HARNESS_CONFIG.search()` misses all four. It also misses three more paths, from omp's docs only (not run):
+    - `.opencode/…` (MCP and commands, per mcp-config.md).
+    - `.clinerules/<x>.md`: per rulebook-matching-pipeline.md omp loads the `.clinerules` directory form, but the regex anchors `\.clinerules$`.
+    - `.github/skills/<x>/SKILL.md` (github provider skills, per skills.md).
+  - Traced: a builder commit that adds root `.mcp.json` passes the check at :724. The reviewer's session (`self.agent(reviewer, …, wt)`, :772) then starts that server as the owner while it judges the diff. Once the commit lands, every planner and steward session (cwd `self.repo`, :460, :864) and every later builder worktree starts it too.
+  - The hole predates this PR; the PR does not open it. But the README row and the PR body ("any diff path omp loads into a session's context before its first turn") both say it is now closed, and this is a code-execution surface, not just an instruction surface.
+- ok forge/forge.py:385: the change only widens the filter.
+  - The `self.protected` prefix test is unchanged, and `re.search` on a path string cannot raise. So there is no new exception path, no ticket left `in_progress`, no state two lanes write, no prompt or log growth, and no quota or GPU spend.
+  - All three call sites run before the gate or reviewer they guard. `land()`'s check (:643) runs on every landing pass, so these paths are also refused in a commit made by the reviewer or by the conflict session.
+  - The changed messages are free text. Nothing parses "gate/ticket paths"; selftest:215 only passes its own literal to `fail()`.
+- ok forge/selftest.py:73-80: tested from a `git archive` of head 46268d7c.
+  - `py_compile` passes, and `python3 selftest.py` reports "all checks passed" (11.6 s).
+  - With `origin/forge`'s forge.py and this PR's selftest, exactly one check fails: `harness config files are protected …: ['gate.sh']`.
+  - The `docs/omp.md` negative case guards against the regex matching too much.
+- ok false-positive cost: none of the 1,021 paths in `git -C ~/Dev/reflex1 log --all --name-only` match this regex, or the widened one below.
+  - reflex1's `origin/main` has only a root `AGENTS.md`, which stays editable as builder rule 20 needs.
+  - Cost when it does fire: a ticket that needs one of these files loses one attempt, and the path is named in the ticket note. builder.md ("Never edit `gate.sh`, `tickets/`, or `.forge/`") and the conflict prompt (:551) do not name these paths, so the fail note is how the next attempt learns. That is acceptable at zero occurrences.
+- none: the PR deletes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table, and changes no prompt text.
+- info, pre-existing, not counted: forge/forge.py:384 `git diff --name-only` uses rename detection.
+  - In a scratch repo (git 2.43), `git mv .omp/RULES.md docs-RULES.md` lists only `docs-RULES.md`.
+  - So a harness file the owner puts in place (for example `.omp/config.yml` with `disabledProviders`) can be removed by renaming it out without the check seeing it. A ticket file can already be removed the same way.
+  - Renaming a file into a protected path is caught, because git lists the destination.
+- nit forge/selftest.py:73: the block labelled "2c" comes before "2b".
+- siblings: every open PR on `forge` except #1, #3 and #9 touches forge.py, README.md or selftest.py, and I read all of them. None changes `touched_protected`'s filter or adds harness paths.
+  - #84 and #99 overlap only in text and do not contradict this PR; whichever lands second rebases.
+    - #84 rewrites the lines just after :645 (it skips the re-gate in `land()`).
+    - #99 edits the repair prompt 14 lines above :745 and adds a README row at the same place as row 88.
+  - #8 and #28 are older copies of the `origin/main` base change already on `forge`. They duplicate code that has landed; they are the side that should change, not this PR.
+  - #23's reviewer step on `AGENTS.md`/`LEARNINGS.md`/`PROGRESS.md` has been replaced by reviewer step 4, which already landed (reviewer.md:7). It complements this PR: review covers root `AGENTS.md`, and this PR refuses the other loaders mechanically.
+- PR body claims I checked, all of which hold: same three call sites; selftest fails on base and passes on head; zero matches in reflex1; reviewer step 4 covers `AGENTS.md`.
+Change needed (only for MERGE WITH CHANGE): replace forge/forge.py:377-378 with
+```
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills)/"
+                                r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?)$")
+```
+I checked this regex in a scratch run:
+- It matches every path above.
+- It does not match `docs/omp.md`, `AGENTS.md`, `.vscode/settings.json`, `.github/workflows/ci.yml`, `src/claude.rs`, `CLAUDE.md.bak` or `xmcp.json`.
+- It matches none of the 1,021 paths in reflex1's history.
+
+In the same commit:
+- Add `.opencode/`, `.clinerules/`, `.github/skills/`, `mcp.json`/`.mcp.json`, `.vscode/mcp.json` and `opencode.json(c)` to the list in README row 88.
+- Add `".mcp.json"` and `".vscode/mcp.json"` to the selftest:75 tuple and to the expected set at :80.
+
+
 ## PR #99 · 2026-10-30T13:22:26Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
