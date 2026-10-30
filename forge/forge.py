@@ -374,8 +374,9 @@ class Forge:
     # directories holding AGENTS.md, RULES.md (an always-apply sticky rule), mcp.json, hooks and skills.
     # The reviewer's own session runs in the worktree, so a RULES.md the diff adds is in its context while it
     # judges that diff; no reflex1 PR (0 of 123) has touched one, and no ticket needs to.
-    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.github/instructions)/"
-                                r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md)$")
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills)/"
+                                r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?)$")
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):
