@@ -931,11 +931,14 @@ with tempfile.TemporaryDirectory() as d:
         return build_big_then_review(role, prompt, cwd, timeout_min)
 
     f.agent = build_on_fallback
+    f.cycle_t0 = forge.time.monotonic() - 86400  # stale start: cycle() must reset it at claim
     f.cycle()
     # The per-version tally hides a lane that fell back to the other vendor mid-day (arXiv 2610.37700: the
     # saving in a planner-coder-reviewer pipeline is choosing the model per task), so the entry names the builder.
     check("a history entry names the builder model that ran, not the configured one",
           f.state["history"][-1].get("model") == "e/f", str(f.state["history"][-1]))
+    check("a history entry records the cycle's wall time in seconds",
+          isinstance(f.state["history"][-1].get("secs"), int) and 0 <= f.state["history"][-1]["secs"] < 3600, str(f.state["history"][-1]))
     forge.OMP = str(bindir / "missing")
     check("a history entry names the omp release that ran the cycle",
           f.state["history"][-1].get("harness") == "omp/9.9.9", str(f.state["history"][-1]))

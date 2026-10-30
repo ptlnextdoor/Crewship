@@ -98,6 +98,7 @@ class Forge:
         # next quota_ok() pass that sees the window back under the floor, not on a timer.
         self.exhausted: dict[str, float] = {}
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
+        self.cycle_t0 = time.monotonic()  # claim time of the cycle in progress; record() stores the elapsed seconds
         self.reviewed: tuple[str, set[str]] = ("", set())  # (sha, patch_lines) the reviewer approved; see land()
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
@@ -704,6 +705,7 @@ class Forge:
         self.sh(f"git worktree add -q -b {branch} {wt} main", check=True)
         self.pr = ""
         self.last_model.clear()  # record() reads the builder that ran this cycle, not a previous one's fallback
+        self.cycle_t0 = time.monotonic()
         try:
             builder = "builder_hard" if re.search(r"^difficulty:\s*hard", ticket.read_text(), re.M) else "builder"
             if self.attempts(ticket) >= 2:
@@ -865,9 +867,12 @@ class Forge:
         """One history entry per attempt. `model` is the builder that actually ran (its fallback after a
         quota refusal, not the configured one): arXiv 2610.37700 finds the saving in a planner-coder-reviewer
         pipeline is choosing the model per task, and the one tally that can show it here is merge rate per
-        builder model, which the per-version tally hides when a lane falls back mid-day."""
+        builder model, which the per-version tally hides when a lane falls back mid-day. `secs` is the wall
+        time from claim to this entry: omp prints no token count, the lanes are plan-billed, and compute time
+        is the usable proxy for cost when the meter is unreadable (arXiv 2610.39621); reflex1's 80 merges ran
+        23 to 159 min (median 60) and only forge.log held that."""
         model = next((m for r, m in self.last_model.items() if r.startswith("builder")), None)
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model}])[-200:]
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "secs": int(time.monotonic() - self.cycle_t0)}])[-200:]
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
@@ -1034,12 +1039,15 @@ class Forge:
             t[0] += h["result"] == "merged"
             t[1] += 1
         print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
-        by_model: dict[str, list[int]] = {}
+        by_model: dict[str, tuple[list[int], list[int]]] = {}
         for h in (h for s in states for h in s.get("history", [])):
-            t = by_model.setdefault(h.get("model") or "pre", [0, 0])
+            t, mins = by_model.setdefault(h.get("model") or "pre", ([0, 0], []))
             t[0] += h["result"] == "merged"
             t[1] += 1
-        print("merged/attempts per builder model that ran:", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_model.items()))
+            if h["result"] == "merged" and "secs" in h:
+                mins.append(h["secs"] // 60)
+        # upper median; entries written before `secs` existed count in the rate and not in the minutes
+        print("merged/attempts per builder model that ran, median minutes per merged ticket:", ", ".join(f"{v} {rate_interval(m, n)}" + (f" {sorted(mins)[len(mins) // 2]} min" if mins else "") for v, ((m, n), mins) in by_model.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
