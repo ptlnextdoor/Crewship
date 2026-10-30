@@ -54,7 +54,7 @@ def log(msg: str) -> None:
 
 
 def open_prs() -> list[dict]:
-    r = sh(f"gh pr list -R {GH_REPO} --base {BASE} --state open --json number,title,headRefName,files,additions,deletions")
+    r = sh(f"gh pr list -R {GH_REPO} --base {BASE} --state open --json number,title,headRefName,files,additions,deletions,isCrossRepository")
     return json.loads(r.stdout or "[]")
 
 
@@ -193,6 +193,12 @@ def run() -> None:
     base = sh(f"git rev-parse origin/{BASE}").stdout.strip()
     for pr in prs:
         n = pr["number"]
+        if pr.get("isCrossRepository"):
+            # The repo is public, so anyone can open a PR against `forge` from a fork. gate() runs base's
+            # selftest, which imports the PR's forge.py, on this box as the owner; the audit reads the PR's
+            # text at yolo. Only a branch pushed to this repo (owner or scout) gets that.
+            log(f"PR #{n}: from a fork, not audited or gated here; the owner decides")
+            continue
         prev = previous(n)
         if not needs_pass(prev, base):
             continue
