@@ -134,8 +134,15 @@ with tempfile.TemporaryDirectory() as d:
         git("merge origin/main", cwd); (cwd / "PROGRESS.md").write_text("both\n"); git("add -A", cwd); git("commit -qm merge", cwd)
         return 0, ""
     f.gate, f.agent = gate, agent
+    comments: list[str] = []
+    f.pr_comment = lambda pr, text: comments.append(text)
+    f.reviewed = ("abc123", f.patch_lines(git("diff origin/main...HEAD", wt)))  # what the reviewer approved
     why = f.land(wt, "land", "0001-x", "builder")
     check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
+    # The first pass rebased cleanly (nothing posted); the second landed the conflict session's "both", which
+    # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced.
+    check("a conflict resolved after the review posts the lines the reviewer never saw",
+          len(comments) == 1 and "abc123" in comments[0] and "+both" in comments[0] and "+branch" in comments[0], str(comments))
 
     # 4f. pr_merge waits for GitHub to finish recomputing mergeability after the push, then merges through gh.
     bindir = Path(d) / "bin"; bindir.mkdir()
