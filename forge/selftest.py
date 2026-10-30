@@ -925,7 +925,17 @@ with tempfile.TemporaryDirectory() as d:
     real_omp, forge.OMP = forge.OMP, str(bindir / "omp")
     (repo / "tickets/0002-u.md").write_text("status: open\n\n# u\n")
     git("add -A", repo); git("commit -qm t2", repo); git("push -q origin main", repo)
+
+    def build_on_fallback(role, prompt, cwd, timeout_min=None):
+        f.last_model[role] = "e/f" if role == "builder" else "c/d"  # what agent() records after a quota fallback
+        return build_big_then_review(role, prompt, cwd, timeout_min)
+
+    f.agent = build_on_fallback
     f.cycle()
+    # The per-version tally hides a lane that fell back to the other vendor mid-day (arXiv 2610.37700: the
+    # saving in a planner-coder-reviewer pipeline is choosing the model per task), so the entry names the builder.
+    check("a history entry names the builder model that ran, not the configured one",
+          f.state["history"][-1].get("model") == "e/f", str(f.state["history"][-1]))
     forge.OMP = str(bindir / "missing")
     check("a history entry names the omp release that ran the cycle",
           f.state["history"][-1].get("harness") == "omp/9.9.9", str(f.state["history"][-1]))
