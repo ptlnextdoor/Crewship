@@ -703,6 +703,7 @@ class Forge:
         branch = f"forge/l{self.lane}-{n:05d}-{tid}"
         self.sh(f"git worktree add -q -b {branch} {wt} main", check=True)
         self.pr = ""
+        self.last_model.clear()  # record() reads the builder that ran this cycle, not a previous one's fallback
         try:
             builder = "builder_hard" if re.search(r"^difficulty:\s*hard", ticket.read_text(), re.M) else "builder"
             if self.attempts(ticket) >= 2:
@@ -798,7 +799,7 @@ class Forge:
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
             self.push()
             self.state["merged"] += 1
-            self.state["history"] = (self.state["history"] + [{"cycle": n, "ticket": tid, "result": "merged", "at": now(), "version": self.version, "harness": self.harness}])[-200:]
+            self.record(tid, "merged")
             self.log(f"cycle {n}: MERGED {tid}")
         except Exception as e:
             # fail() closes the PR on a rejected attempt; a cycle that dies anywhere else (gate timeout,
@@ -857,8 +858,16 @@ class Forge:
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": status, "at": now(), "version": self.version, "harness": self.harness}])[-200:]
+        self.record(tid, status)
         self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {head}")
+
+    def record(self, tid: str, result: str) -> None:
+        """One history entry per attempt. `model` is the builder that actually ran (its fallback after a
+        quota refusal, not the configured one): arXiv 2610.37700 finds the saving in a planner-coder-reviewer
+        pipeline is choosing the model per task, and the one tally that can show it here is merge rate per
+        builder model, which the per-version tally hides when a lane falls back mid-day."""
+        model = next((m for r, m in self.last_model.items() if r.startswith("builder")), None)
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model}])[-200:]
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
@@ -1025,6 +1034,12 @@ class Forge:
             t[0] += h["result"] == "merged"
             t[1] += 1
         print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
+        by_model: dict[str, list[int]] = {}
+        for h in (h for s in states for h in s.get("history", [])):
+            t = by_model.setdefault(h.get("model") or "pre", [0, 0])
+            t[0] += h["result"] == "merged"
+            t[1] += 1
+        print("merged/attempts per builder model that ran:", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_model.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
