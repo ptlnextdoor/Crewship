@@ -2,6 +2,46 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #92 · 2026-10-30T04:33:22Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #92 forge: review comment names the commit the reviewer sat on
+What it changes: after the reviewer session, `cycle()` runs `git rev-parse HEAD` in the worktree and adds the result to the review comment header (`**review by <model> of <sha>**`). `forge/README.md` gets a new reliability row. Nothing reads the SHA back (grep: the posting site is the only match).
+Findings:
+- low forge/forge.py:718 The SHA is read after the reviewer session, so it does not identify the commit that was reviewed. Trace:
+  - The reviewer's diff and stat are built from HEAD at :690/:701.
+  - The reviewer then runs at yolo in the same worktree (:706, and again at :712 on a rerun).
+  - :718 reads HEAD only after that session ends. :722 `git reset -q --hard HEAD` keeps any commit the session made, and `land()` rebases and lands it.
+  - Throwaway smoke with the PR head's `forge.py` (loaded from `git show 80201b07`), using selftest #22's fixture with a reviewer that commits one change: the reviewer got the diff of `e64df50d…`, while the comment header named `0e423636…`, which is HEAD at `land()`.
+  - Impact: when the session commits, `git diff <sha> <landed tip>` leaves out exactly the unreviewed change this row is meant to expose. That SHA was also never pushed: `pr_open` (:533) and the repair (:681) push before the review, and `land()` force-pushes the rebased tip. Its local copy is unreachable once `git branch -D` runs in `finally`.
+  - This is the same placement the audits of sibling #8's `rev(wt)` flagged three times (PR_AUDIT.md:2706, 2843, 3163, each with the advice "capture the sha next to `diff = ...`"). The PR body cites line 2714 of that same audit.
+  - With the edit below, the smoke header names `d55e7862…`, which is the reviewed commit, and selftest passes.
+- none forge/forge.py:715-719 Security trace found nothing that weakens the gate, the reviewer, or the protected paths:
+  - `gate.sh`, prompts, `touched_protected` and the verdict parse are untouched. The SHA is posted after the verdict is parsed and never reaches an agent: no prompt reads PR comments, and reviewer.md step 4 forbids `gh pr view`.
+  - The command is constant (no ticket text reaches a shell). The body goes through the lane's own `gh-body.md`.
+  - No state is shared between lanes: everything runs in the lane's own worktree.
+  - Failure paths: `sh()` raises only `TimeoutExpired`. `cycle()`'s `except` closes the PR, and `finally` removes the worktree and branch, so no ticket is stranded in `in_progress`.
+  - Cost: about 50 characters per comment. No quota or GPU use.
+  - Checks run: `py_compile` passes on the PR head. The full `selftest.py` passes against the PR head's `forge.py` (84 ok lines, 0 FAIL). Both also pass with the change below.
+- low forge/forge.py:715-717, forge/README.md:82 The comment and README overstate their evidence:
+  - forge.py:715 says "every reflex1 landing carries post-review committer dates", README:82 says "only post-rebase dates", and the PR body says "40 of 40".
+  - `gh pr list -R ptlnextdoor/reflex1 --state merged --limit 40` today gives 38 of 40. reflex1 #73 and #124 keep commits dated before their review comment, because when the rebase conflicts, the plain `git merge origin/main` path (:497) keeps the original commits.
+  - The 29 figure is correct: 29 "rebase conflicts with main; builder resolves via merge" lines in reflex1's forge.log. Those come from the old path; current code tries a plain merge first.
+  - The 3-line comment also repeats the README row and `land()`'s comment at :591-593.
+  - The change below replaces this comment with one line. The README wording does not block the merge.
+- info sibling #8 (forge.py, README.md) posts `**review of <short sha> by <model>**` through `self.rev(wt)` at the same post-review point. Against this PR it is both a duplicate and a contradiction (opposite header order, short vs full SHA). #8 is built on stale base 4ee81ee3, and current forge already has its `land()` protected-path re-check (forge.py:591-598). #8 should change by dropping its review-header hunk.
+- info sibling #84 adds `gated = git rev-parse HEAD` in `cycle()` right after the gate, the same point the change below moves `reviewed` to. Whichever lands second should reuse the other's value rather than add a second rev-parse. The two do not contradict.
+- info sibling #6 (stale base) wraps the review in a two-round loop that still posts the old `review by <model>` header. If it lands after this PR, each round's comment needs its own pre-review SHA. #6 should change.
+- info siblings #42 (verdict parse :707-713), #83 (`land()` call/`done_note`) and #86 (`rprompt` :705) touch only adjacent lines and do not contradict this PR. Other open PRs' README rows overlap only as text. #85 cites the same 29 resolve sessions, consistently.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `cycle()`, delete the four added lines 715-718 (the 3-line `# The commit the verdict is about: ...` comment and `reviewed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()`) and leave line 719 (`self.pr_comment(... of {reviewed}**...)`) as the PR has it. Insert these two lines directly above line 690 `            diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout`:
+```
+            # The commit whose diff the reviewer gets, read before its yolo session can move HEAD; land() rewrites it.
+            reviewed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
+```
+
+
 ## PR #91 · 2026-10-30T03:33:24Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
