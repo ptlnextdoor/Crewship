@@ -2,6 +2,55 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #89 · 2026-10-30T01:26:54Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #89 builder: existing code takes precedence over a stale AGENTS.md
+What it changes: Prompt and docs only. builder.md:20 appends a sentence after the LEARNINGS.md precedence rule: where `AGENTS.md` describes the repo "(its crates, paths, commands, conventions)" and the code disagrees, the existing code wins, and the builder corrects those AGENTS.md lines in the same commit; "rules that are not about the code (the gate, credentials, what not to edit) stand". README.md:73 extends the row to match, and selftest.py:388 adds a wording check. forge.py is unchanged.
+Findings:
+- medium forge/prompts/builder.md:20, forge/README.md:73 The carve-out keeps only "rules that are not about the code". Read the other way round, that tells the builder to rewrite any AGENTS.md rule that IS about the code once existing code breaks it.
+  - reflex1's AGENTS.md (origin/main, last edit b20a626) has rules found nowhere else: :11 keep MLX/Metal out of the default build, :12 keep the sys1rust licence header and name the source, :13 no Python at runtime, :14 one crate per concern. STEERING.md's Rules list, which is prepended above every prompt, covers none of :11-:13.
+  - So one ticket that slips in a breach lets the next builder "follow the code" and delete the rule.
+  - "conventions" is in the scope list. The paper only measured style conventions; its abstract's example is print vs logging.
+  - The trigger is "the code disagrees". That is the broad trigger the #74 audit took out of the LEARNINGS rule (commit ce056923: it "would have deleted lessons exactly when they matter"). README calls the result "the same precedence", but it is not the same.
+  - The edit reaches every later session. omp 18.12.6 auto-loads AGENTS.md: the cli.js `loadAgentsMd` provider is registered, and forge.py:254-255 passes no flag that disables context files. The reviewer of the same diff runs with cwd=wt (forge.py:706), so it loads the edited file too.
+  - The reviewer has no matching check. reviewer.md never mentions AGENTS.md. Its step 5 verifies a retired entry only for LEARNINGS.md. Step 4 covers "check, assertion, lint, log, alert, or monitoring hook", not prose rules, so the PR body's claim that step 4 mitigates this does not hold.
+  - No live breach today: `git grep` of reflex1 crates finds no Python spawned at runtime.
+- low forge/prompts/builder.md:20 The reviewer is never told about the new edit type. A Bach-style reviewer may flag an AGENTS.md correction under step 2 ("nothing unrelated") and REJECT. That fails closed and costs an attempt of quota. [INFERENCE on reviewer behaviour; not run]
+- low forge/prompts/builder.md:20 All four lanes see the same stale lines (:3, which predates the pivot; :10 `cargo run -p reflex-bench`; the :14 crate list missing reflex-policy).
+  - Each lane may rewrite those lines differently on its own branch. Different rewrites of the same line conflict at land, and the conflicting lane gets a builder resolve session of up to 30 min (forge.py:497-508).
+  - This stops once one correction lands. It costs quota, not safety.
+- info Traced clean:
+  - The added text has no `{...}` placeholder, so `prompt()` (forge.py:133-136) and ticket substitution are unaffected. No ticket text reaches a shell.
+  - Nothing changes in claim, recover, discard_strays, quota fallback, killpg timeouts or PR create/merge.
+  - AGENTS.md is not a protected path (live ~/.config/forge/reflex1.toml:10). The sentence keeps "what not to edit". The `touched_protected` calls at forge.py:596, :667 and :683 are unchanged.
+  - The repair pass gets the builder prompt whole (forge.py:~679), so the rule is applied the same way there.
+  - The prompt grows by a fixed ~340 bytes.
+  - The cited paper's numbers match the arXiv 2610.30571 abstract.
+  - Ran on the PR tree, exported with `git archive eba33efe`: `py_compile` passes and `selftest.py` passes ("all checks passed", 6.4 s).
+- info sibling #1 duplicates this PR and contradicts it. Both add an AGENTS.md-vs-code precedence rule to builder.md.
+  - #1 says to list the mismatch in LEARNINGS.md and leave the docs alone. #89 says to correct the AGENTS.md lines.
+  - #1 also covers "any other documentation" with the broad trigger, and #74 has already landed the narrowed LEARNINGS half.
+  - #1 should change: close it as superseded by #74 + #89. It already conflicts with origin/forge (`git merge-tree` rc=1).
+- info sibling #23 complements this PR. Its reviewer check 7 reads added AGENTS.md lines as instructions: run, install or skip is a REJECT unless the ticket names it. That is the reviewer-side guard #89 lacks, and there is no contradiction. It conflicts with origin/forge.
+- info siblings #85 and #3 touch other builder.md lines (:18, and a new rule after :8) with no semantic conflict. #85's README row (after :76) collides textually with :73 here, but #85 already conflicts with origin/forge.
+- info other siblings: none of the other README/selftest siblings edit README:73 or selftest:388. I grepped all 22 sibling diffs for removed lines of the row-73 text and for "stale" / "existing code"; the only hits were #1 and #85's context lines.
+- nit forge/selftest.py:388 The `` "`AGENTS.md`" in b `` half of the check is always true: step 1 already names the file, and it is True on origin/forge. Only the phrase half tells the two versions apart. This wording check fits the house style of section 6.
+Change needed (only for MERGE WITH CHANGE): replace the two sentences this PR adds, in both files.
+
+1. In forge/prompts/builder.md:20, replace "The same holds for `AGENTS.md`: where it describes this repo (its crates, paths, commands, conventions) and the code disagrees, the existing code takes precedence; say which lines disagree, follow the code, and correct those lines in the same commit. Its rules that are not about the code (the gate, credentials, what not to edit) stand." with:
+
+   The same holds for `AGENTS.md`'s description of this repo (which crates, paths and commands exist, the code style it uses): where the code disagrees, the existing code takes precedence; say which lines disagree, follow the code, and correct those lines in the same commit. Its rules stand even where existing code breaks them (the gate, what not to edit, credentials, licence headers, what may run at runtime, how numbers are measured): put the file:line that breaks one under "Ideas" in `PROGRESS.md` and leave the rule as it is.
+
+2. In forge/README.md:73, replace "The same precedence is stated for `AGENTS.md`: where its description of the repo (crates, paths, commands, conventions) and the code disagree, the existing code wins and the builder corrects the lines in the same commit; its rules that are not about the code stand" with:
+
+   The same precedence is stated for `AGENTS.md`'s description of the repo (which crates, paths and commands exist, its code style): where the code disagrees, the existing code wins and the builder corrects those lines in the same commit; its rules stand even where existing code breaks them, and a breach goes under Ideas in `PROGRESS.md`
+
+selftest.py:388 still passes after this edit, because the phrase "existing code takes precedence" and `` `AGENTS.md` `` are both kept.
+
+
 ## PR #88 · 2026-10-30T00:22:41Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
