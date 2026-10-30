@@ -98,6 +98,7 @@ class Forge:
         # next quota_ok() pass that sees the window back under the floor, not on a timer.
         self.exhausted: dict[str, float] = {}
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
+        self.reviewed: tuple[str, set[str]] = ("", set())  # (sha, patch_lines) the reviewer approved; see land()
         # Prompts are part of the Crewship setup, not the project: default to the ones beside this file.
         self.prompts = Path(c.get("prompts_dir", Path(__file__).resolve().parent / "prompts")).expanduser()
         home = str(Path.home())
@@ -485,6 +486,11 @@ class Forge:
             time.sleep(3 + self.lane * 2)
         return None
 
+    @staticmethod
+    def patch_lines(diff: str) -> set[str]:
+        """The +/- lines of a diff without the file headers: what a reviewer approved, hunk positions aside."""
+        return {ln for ln in diff.splitlines() if ln[:1] in "+-" and not ln.startswith(("+++", "---"))}
+
     def rebase_onto_main(self, wt: Path, builder: str) -> bool:
         """Bring the branch up to date with main. Conflicts (another lane landed nearby) go to the builder once."""
         self.sh("git fetch -q origin", cwd=wt, timeout=120)
@@ -596,6 +602,18 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket paths {bad}; not allowed."
+            # The conflict session (29 reflex1 cycles) commits whatever it touched, gated but never reviewed, and
+            # the rebase leaves the PR's commit list with post-review dates only. Post what moved since the
+            # reviewed commit so the approval reads against the tree that landed. Context lines shift when main
+            # touched the same file, so only the +/- lines are compared: a clean rebase posts nothing.
+            sha, lines = self.reviewed
+            now = self.patch_lines(self.sh("git diff origin/main...HEAD", cwd=wt).stdout)
+            if lines and now != lines:
+                delta = "\n".join(["now, not reviewed:", *sorted(now - lines), "reviewed, gone:", *sorted(lines - now)])
+                self.log(f"landing patch differs from the one reviewed at {sha[:9]}: +{len(now - lines)} -{len(lines - now)} lines")
+                self.pr_comment(self.pr, f"**landing patch differs from the one reviewed at {sha}** (the sync with main was "
+                                         f"resolved after the review; gated, not reviewed)\n\n```\n{delta[:6000]}\n```")
+                self.reviewed = (sha, now)  # a later pass of this loop reports only further movement
             ok, gout = self.gate(wt)
             if not ok:
                 return f"gate failed after updating from main.\n{gout[-2000:]}"
@@ -690,6 +708,7 @@ class Forge:
             # The commit whose diff the reviewer gets, read before its yolo session can move HEAD; land() rewrites it.
             reviewed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
             diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout
+            self.reviewed = (reviewed, self.patch_lines(diff))
             # Reviewer comes from the other vendor than the model that actually built it (cross-family review).
             built_by = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
             same = built_by.split("/")[0] == self.cfg["roles"]["reviewer"]["model"].split("/")[0]
