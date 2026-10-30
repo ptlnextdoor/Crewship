@@ -483,6 +483,12 @@ with tempfile.TemporaryDirectory() as d:
           not rc.needs_pass({"gate": "pass", "base": "oldbase"}, "newbase")
           and not rc.needs_pass({"gate": "fail", "base": "newbase"}, "newbase")
           and rc.needs_pass(None, "newbase"))
+    calls.clear()
+    rc.previous = lambda n: None
+    rc.open_prs = lambda: [{"number": 29, "headRefName": "b", "isCrossRepository": True, "files": [{"path": "forge/forge.py"}]}]
+    rc.run()
+    check("a PR from a fork is neither gated nor audited (its forge.py would run here as the owner)",
+          calls == [], str(calls))
 
 # 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
 # stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the
