@@ -376,6 +376,35 @@ class Forge:
         files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected)]
 
+    def unrequested_deps(self, cwd: Path, ticket_text: str) -> list[str]:
+        """Third-party packages the branch adds to or bumps in `Cargo.lock` that the ticket does not name and
+        no crate it names pulls in. Builder rule 15 and reviewer step 6 say this in prose, and the review
+        runs after the gate has built the crate; here it costs seconds. A harness rule that bites gets a
+        mechanical copy beside the prose (reflex1: 0 of 14 Cargo.toml-changing commits on main added a direct
+        dependency no ticket names, so the prose has held; the lock is the surface the LiteLLM 1.107.0
+        stealer came through)."""
+        import tomllib
+        if "Cargo.lock" not in self.sh("git diff --name-only origin/main...HEAD -- Cargo.lock", cwd=cwd).stdout:
+            return []
+        def lock(rev: str) -> dict[tuple[str, str], list[str]]:
+            try:
+                pkgs = tomllib.loads(self.sh(f"git show {rev}:Cargo.lock", cwd=cwd).stdout).get("package", [])
+            except tomllib.TOMLDecodeError:
+                return {}
+            return {(p["name"], p["version"]): [d.split()[0] for d in p.get("dependencies", [])] for p in pkgs if "source" in p}
+        head, base = lock("HEAD"), lock("origin/main")
+        text = ticket_text.lower().replace("_", "-")
+        # shortcut: a crate named by any word of the ticket counts as requested (`image`, `png`), so this loosens
+        # toward the reviewer's reading, never blocks a named crate; tighten to a `crates:` line if it ever passes one.
+        named = lambda n: re.search(rf"(?<![a-z0-9-]){re.escape(n.lower().replace('_', '-'))}(?![a-z0-9-])", text)
+        ok = {k for k in head if named(k[0])}
+        while True:
+            more = {k for k in head if k not in ok and any(k[0] in head[o] for o in ok)}
+            if not more:
+                break
+            ok |= more
+        return sorted(f"{n} {v}" for n, v in head if (n, v) not in base and (n, v) not in ok)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -687,6 +716,9 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return self.fail(ticket, f"diff edits protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
+            deps = self.unrequested_deps(wt, ticket.read_text())
+            if deps:
+                return self.fail(ticket, f"diff adds packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
             ok, gout = self.gate(wt)
             self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
             if not ok:
@@ -703,6 +735,9 @@ class Forge:
                 bad = self.touched_protected(wt, "origin/main")
                 if bad:
                     return self.fail(ticket, f"the repair edited protected gate/ticket paths {bad}; not allowed. Change the code, not the oracle.")
+                deps = self.unrequested_deps(wt, ticket.read_text())
+                if deps:
+                    return self.fail(ticket, f"the repair added packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if not ok:
