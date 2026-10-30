@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #90 · 2026-10-30T02:28:14Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #90 forge: the retry gets the REJECT review whole, stderr stripped
+What it changes: on a REJECT, `cycle()` now passes `fail()` the text `review` (that is, `rout.split("[stderr]")[0].strip()`, the same text the PR comment gets, at most 6,000 chars) where it used to pass `rout[-3000:]`. `fail()` now keeps `why[-7000:]` of the note instead of `why[-4000:]`. Two sentences in reviewer.md and one README row are reworded to match, and selftest 11a is added.
+Findings:
+- low forge/forge.py:714,724 Regression on a review with no verdict whose only output is on stderr. `_agent_once` builds `so + "\n[stderr]\n" + se` (:274). When the reviewer exits rc≠0 with empty stdout and an error that does not match the quota regex (a provider 5xx, an auth failure), `agent()` returns it (:223-228). `verdict` is empty and rc≠124, so the rerun at :708 does not fire. `review` is then `""`, and both the ticket note and the `pr_close` comment read only "reviewer did not approve.". The old `rout[-3000:]` carried the error. Reproduced with a throwaway: `rout="\n[stderr]\nWorking...\nAPI error (500 internal server error): overloaded_error\n"` gives the note `'PR: x\nreviewer did not approve.'` (old code: the 500 line). The case happens on reflex1: `sessions/00008-reviewer_alt.log` has 0 chars of stdout and only the error on stderr. That one was a quota error, which now raises earlier; a 5xx does not. The full text survives in `sessions/*.log`, so nothing is lost, but it no longer reaches the ticket.
+- low forge/README.md:46 The citation claims "location and value alone, or the fix alone, stay near baseline". arXiv 2607.14167 has four arms (RawDiag, TypedFields, SameNL, LocObs) and no alternatives-only arm. Its own conclusion goes the other way: "the alternatives account for most of the improvement". Only LocObs, location and value alone, "stays near RawDiag". The 14/50→36/50 figure is terminal success on TextWorld games, not code repair. Checked against the abstract and the HTML full text.
+- nit forge/prompts/reviewer.md:12 "gets this review whole" is not quite what the code does. `agent()` returns `text[-6000:]` including stderr: 311 chars at most in the measured logs, so stdout gets about 5,690 chars. The longest measured REJECT is 5,098. A longer review loses its head, which is the ledger this PR is about, and the prompt no longer tells the reviewer that any limit exists. It is never worse than the old 3,000-char tail, which the new window contains, so no change is required.
+- nit forge/forge.py:720-723, forge/selftest.py:546-547, forge/README.md:46 The same "3 of reflex1's 10 REJECT reviews" figure appears in three places. One place (the README row) is enough.
+- info Checked and found clean:
+  - PR body numbers re-measured from `~/.local/state/forge/reflex1/{,lane*/}sessions/*reviewer*.log`: 112 logs, 111 with `[stderr]`, 10 REJECTs, longest 5,098 chars. Under the old tail, `lane3/00046` keeps 0 of 1 FAIL lines, `00011` 0 of 3, `00013` 1 of 4.
+  - selftest at PR head: all checks pass. With `origin/forge`'s forge.py swapped in, the new 11a check fails, so the test catches the old behaviour.
+  - Edge cases that the head of a review could newly trip, none seen in 112 reviewer stdouts:
+    - a literal `[stderr]`, which the first-occurrence split would cut the note at;
+    - `## forge `, which would inflate `attempts()` (:363);
+    - a `status: open|retry` line, which `open_tickets()` would match in the first 600 chars (:350).
+  - Growth: each failed note is at most about 6.1K chars. A ticket blocks after 3 attempts by default, so at most about 18K chars of review per ticket. Prompts go through a file (:252), and the PR body is capped at 60000 (:519). The other `fail()` callers pass at most 2.5K, so the 7000 cap changes only this path.
+  - Not touched: the gate, `touched_protected`, verdict parsing, `claim`/`recover`/`discard_strays`, quota, GPU. No new shell interpolation: the note is written by `write_text`, and `git add {ticket}` takes a path. The prompt edits add no permission and do not loosen a REJECT criterion.
+- info Sibling #42 (verdict from the reviewer's last line) edits the same hunk (forge.py:707-724) and keeps `rout[-3000:]` as context. It strips with the same `rout.split("[stderr]")[0].strip()`. The overlap is textual only, not a contradiction. #42 is on a stale base and should keep `{review}` when it rebases.
+- info Sibling #6 (repair round after a REJECT, stale base) adds a second REJECT `fail()` path that still uses `rout[-3000:]`. If it lands after #90, the tail cut comes back on that path. #6 should change to `review`.
+- info Sibling #23 (stale base) rewrites reviewer.md:12 to the pre-#33 sentence "say exactly what must change so the next attempt can fix it". That would drop both the `Must change:` rule and #90's sentence. #23 should change.
+- info Sibling #47 (provider 5xx failover in `agent()`) complements this PR. It narrows the case in the first finding but does not remove it.
+- info The other open PRs on `forge` that touch these files (#86, #85, #84, #83, #79, #48, #44, #40, #39, #31, #28, #25, #20, #19, #16, #9, #8, #7, #5) edit other lines. None touches the REJECT note path or reviewer.md:12/16.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:724: replace `return self.fail(ticket, f"reviewer did not approve.\n{review}")` with `return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")`.
+2. forge/README.md:46: replace `location and value alone, or the fix alone, stay near baseline` with `location and value alone stay near baseline`.
+
+
 ## PR #89 · 2026-10-30T01:26:54Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
