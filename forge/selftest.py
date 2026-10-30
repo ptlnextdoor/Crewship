@@ -453,6 +453,22 @@ with tempfile.TemporaryDirectory() as d:
     f.recover(quota=True)
     check("a quota recovery is not counted toward the interruption cap",
           "status: retry" in quota.read_text(), quota.read_text()[:200])
+    # A killed lane's PR stayed open with nothing on it (reflex1 #5 #8 #9 #12 #27 #31). recover() closes the
+    # recovered ticket's PRs on this lane's branches only: another lane's live cycle keeps its PR.
+    dead = repo / "tickets/0014-dead.md"
+    dead.write_text("status: in_progress lane=1\n---\n# dead\n")
+    cfg.write_text(cfg.read_text().replace("pull_requests=false", "pull_requests=true"))
+    f = forge.Forge(cfg)
+    f.sync_main, f.push = (lambda: None), (lambda: None)
+    calls = []
+    f.gh = lambda args, cwd=None, body=None: (calls.append(args), '[{"number": 7, "headRefName": "forge/l1-00003-0014-dead"}, '
+                                               '{"number": 8, "headRefName": "forge/l2-00004-0014-dead"}, '
+                                               '{"number": 9, "headRefName": "forge/l1-00002-0015-live"}]'
+                                               if args.startswith("pr list") else "")[1]
+    f.recover()
+    closed = [a for a in calls if a.startswith("pr close")]
+    check("recover() closes the interrupted ticket's PR on this lane and no other",
+          closed == ["pr close 7"] and any(a.startswith("pr comment 7") for a in calls), str(calls)[:300])
 
 # 9. reviewctl: a PR whose last pass failed the gate must be looked at again once the base branch moves - the
 # failure is usually a conflict with base, not the PR. Crewship PR #28 failed the gate on 2026-10-24, merged
