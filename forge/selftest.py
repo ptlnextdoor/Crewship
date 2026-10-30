@@ -70,6 +70,26 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered again\n")
     git("add -A", repo); git("commit -qm t2", repo)
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
+    # 2b. A third-party crate new to Cargo.lock is refused before the gate unless the ticket names it or a named
+    # crate pulls it in; a version bump of a named crate's dependency passes with it.
+    o = Path(d) / "origin"; o.mkdir(); git("init -q --bare", o)
+    git(f"remote add origin {o}", repo); git("push -q origin main", repo)
+    lock = lambda extra: ('version = 4\n[[package]]\nname = "reflex"\nversion = "0.1.0"\ndependencies = ["serde"]\n'
+                          '[[package]]\nname = "serde"\nversion = "1.0.0"\nsource = "registry+x"\ndependencies = ["serde_derive 1.0.0"]\n'
+                          '[[package]]\nname = "serde_derive"\nversion = "1.0.0"\nsource = "registry+x"\n' + extra)
+    (repo / "Cargo.lock").write_text(lock(""))
+    git("add -A", repo); git("commit -qm lock", repo); git("push -q origin work:main", repo)
+    (repo / "Cargo.lock").write_text(lock('[[package]]\nname = "evil"\nversion = "0.1.0"\nsource = "registry+x"\n'
+                                          '[[package]]\nname = "axum"\nversion = "0.8.0"\nsource = "registry+x"\ndependencies = ["tower 0.5.0"]\n'
+                                          '[[package]]\nname = "tower"\nversion = "0.5.0"\nsource = "registry+x"\n'
+                                          '[[package]]\nname = "serde_derive"\nversion = "1.0.1"\nsource = "registry+x"\n'))
+    git("add -A", repo); git("commit -qm deps", repo)
+    got = f.unrequested_deps(repo, "status: open\n# serve\nAdd an HTTP server on axum.\n")
+    check("unrequested crate refused, named crate and its pulls pass", got == ["evil 0.1.0", "serde_derive 1.0.1"], str(got))
+    check("every new crate named passes", f.unrequested_deps(repo, "axum, evil and a serde-derive bump") == [])
+    check("a crate named only in a ## forge note is still refused", "evil 0.1.0" in f.unrequested_deps(repo, "x\n\n## forge t (retry)\n['evil 0.1.0']"))
+    git("checkout -q main", repo); git("checkout -q -b work2", repo)
+    check("no Cargo.lock change is no finding", f.unrequested_deps(repo, "") == [])
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"
     f.set_status(t, "in_progress lane=2")
