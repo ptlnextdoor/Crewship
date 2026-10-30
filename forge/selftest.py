@@ -936,6 +936,8 @@ with tempfile.TemporaryDirectory() as d:
     # saving in a planner-coder-reviewer pipeline is choosing the model per task), so the entry names the builder.
     check("a history entry names the builder model that ran, not the configured one",
           f.state["history"][-1].get("model") == "e/f", str(f.state["history"][-1]))
+    check("a history entry records the cycle's wall time in seconds",
+          isinstance(f.state["history"][-1].get("secs"), int) and f.state["history"][-1]["secs"] >= 0, str(f.state["history"][-1]))
     forge.OMP = str(bindir / "missing")
     check("a history entry names the omp release that ran the cycle",
           f.state["history"][-1].get("harness") == "omp/9.9.9", str(f.state["history"][-1]))
