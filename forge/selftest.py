@@ -939,6 +939,13 @@ with tempfile.TemporaryDirectory() as d:
           f.state["history"][-1].get("model") == "e/f", str(f.state["history"][-1]))
     check("a history entry records the cycle's wall time in seconds",
           isinstance(f.state["history"][-1].get("secs"), int) and 0 <= f.state["history"][-1]["secs"] < 3600, str(f.state["history"][-1]))
+    # reflex1's 85 merges read median 60 min while its 37 failed cycles held 2,097 of 7,139 lane-minutes: 84 per merge.
+    import contextlib, io
+    f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200), dict(f.state["history"][-1], model="g/h", result="merged", secs=600)]
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        f.status()
+    check("status charges a model's failed attempts to its merged tickets", "g/h 1/2 (9-91%) 30 min/merge" in out.getvalue(), out.getvalue())
+    f.state["history"] = f.state["history"][:-2]
     forge.OMP = str(bindir / "missing")
     check("a history entry names the omp release that ran the cycle",
           f.state["history"][-1].get("harness") == "omp/9.9.9", str(f.state["history"][-1]))
