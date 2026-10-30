@@ -1039,15 +1039,17 @@ class Forge:
             t[0] += h["result"] == "merged"
             t[1] += 1
         print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
-        by_model: dict[str, tuple[list[int], list[int]]] = {}
+        by_model: dict[str, list[int]] = {}
         for h in (h for s in states for h in s.get("history", [])):
-            t, mins = by_model.setdefault(h.get("model") or "pre", ([0, 0], []))
+            t = by_model.setdefault(h.get("model") or "pre", [0, 0, 0, 0])  # merged, attempts, secs of every attempt carrying it, merged among those
             t[0] += h["result"] == "merged"
             t[1] += 1
-            if h["result"] == "merged" and "secs" in h:
-                mins.append(h["secs"] // 60)
-        # upper median; entries written before `secs` existed count in the rate and not in the minutes
-        print("merged/attempts per builder model that ran, median minutes per merged ticket:", ", ".join(f"{v} {rate_interval(m, n)}" + (f" {sorted(mins)[len(mins) // 2]} min" if mins else "") for v, ((m, n), mins) in by_model.items()))
+            if "secs" in h:
+                t[2] += h["secs"]
+                t[3] += h["result"] == "merged"
+        # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
+        # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
+        print("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts:", ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
