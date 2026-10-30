@@ -712,7 +712,11 @@ class Forge:
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
-            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}`**\n\n{review[-12000:]}")
+            # The commit the verdict is about: land() rebases after the review (every reflex1 landing carries
+            # post-review committer dates) and 29 cycles ran a builder session to resolve the conflict, whose
+            # `git add -A` commits what it touched; without the SHA here there is nothing to diff the landing against.
+            reviewed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
+            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}` of {reviewed}**\n\n{review[-12000:]}")
             # The reviewer may restore files from origin/main to run the diff's tests against the old code (step 3).
             # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.
             self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
