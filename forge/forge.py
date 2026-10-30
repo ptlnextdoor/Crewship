@@ -591,6 +591,7 @@ class Forge:
         why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
         the merge re-syncs and re-gates instead of costing the attempt."""
+        posted = ""  # the last delta posted: each pass reports against the reviewed patch, once per change
         for _ in range(3):
             if not self.rebase_onto_main(wt, builder):
                 return "could not bring the branch up to date with main (conflicts the builder could not resolve)"
@@ -602,18 +603,16 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket paths {bad}; not allowed."
-            # The conflict session (29 reflex1 cycles) commits whatever it touched, gated but never reviewed, and
-            # the rebase leaves the PR's commit list with post-review dates only. Post what moved since the
-            # reviewed commit so the approval reads against the tree that landed. Context lines shift when main
-            # touched the same file, so only the +/- lines are compared: a clean rebase posts nothing.
+            # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
+            # patch (context shifts on any rebase, so a clean one posts nothing).
             sha, lines = self.reviewed
             now = self.patch_lines(self.sh("git diff origin/main...HEAD", cwd=wt).stdout)
-            if lines and now != lines:
-                delta = "\n".join(["now, not reviewed:", *sorted(now - lines), "reviewed, gone:", *sorted(lines - now)])
+            delta = "\n".join(["now, not reviewed:", *sorted(now - lines), "reviewed, gone:", *sorted(lines - now)])
+            if lines and now != lines and delta != posted:
                 self.log(f"landing patch differs from the one reviewed at {sha[:9]}: +{len(now - lines)} -{len(lines - now)} lines")
                 self.pr_comment(self.pr, f"**landing patch differs from the one reviewed at {sha}** (the sync with main was "
                                          f"resolved after the review; gated, not reviewed)\n\n```\n{delta[:6000]}\n```")
-                self.reviewed = (sha, now)  # a later pass of this loop reports only further movement
+                posted = delta
             ok, gout = self.gate(wt)
             if not ok:
                 return f"gate failed after updating from main.\n{gout[-2000:]}"
