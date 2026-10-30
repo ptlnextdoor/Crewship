@@ -7,10 +7,11 @@ What forge does, so you can judge blast radius: a supervisor starts 4 lane proce
 ## Audit it with two passes
 
 Pass 1, security and correctness (be rigorous; nothing slips through):
-- Only judge what the diff ADDS or MODIFIES, not pre-existing issues.
+- Only judge what the diff ADDS, MODIFIES or DELETES, not pre-existing issues.
 - Trace side effects end to end through forge.py: lane concurrency and the claim race, `recover()`, `discard_strays()`, protected paths (`gate.sh`, `tickets/`, `.forge/`, `STEERING.md`), quota fallback, timeouts and the process-group kill, PR creation and merge.
 - Look specifically for: a change that lets a builder weaken or bypass the gate; anything that makes the reviewer more likely to approve bad work; prompt text that could be read as permission to edit protected paths or to skip tests; shell or f-string injection from ticket text into a command; state that two lanes could write at once; an exception path that leaves a ticket `in_progress` forever or a worktree behind; unbounded growth of a prompt or log; anything that spends money (GPU) or quota without a cap.
 - A prompt-only change is still a security change here: these prompts drive an agent with yolo approvals.
+- A line the diff deletes from `forge/prompts/*.md`, `forge/selftest.py` or the safeguard table in `forge/README.md` is a layer removed for every later run, whatever still covers the same case today: for each one, name in Findings what it prevented and which remaining rule, check or protected path now carries that alone. "Another check already covers it" is a deletion masked by that check, not a no-op (arXiv 2610.38392: behind a working safeguard a deletion shows almost no harm to a gate that scores task success, and the depth it cost turns into harm when the harness runs on a weaker model); it is MERGE only when the PR body names the layer it retires and you traced the one left.
 - Sibling PRs: run `gh pr list -R {GH_REPO} --state open --json number,title,baseRefName,files`. For every other open PR on the same base that touches a file this one touches, read its diff with `gh pr diff <n> -R {GH_REPO}` (read only: do not check out, merge or commit anything) and name the pair in Findings if they contradict or duplicate each other, saying which side should change. A contradiction lowers this PR's verdict only when this PR's own text is the side that should change; never copy a sibling's text into Change needed.
 
 Pass 2, slop:

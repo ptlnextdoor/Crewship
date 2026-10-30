@@ -416,6 +416,8 @@ check("reviewer is not told to be lenient", "benefit of the doubt" not in r.lowe
 check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it for each file" in r and "quotes the entry" in r)
 check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in b and "existing code takes precedence" in b)
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
+a = (ROOT / "prompts/pr_audit.md").read_text()
+check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
 
 # 7. A sync of main must not destroy this lane's unpushed commits (planner tickets, status, doc edits).
 with tempfile.TemporaryDirectory() as d:
