@@ -2,6 +2,43 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #102 · 2026-10-30T17:28:24Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #102 forge: history entries carry the cycle's wall time; status prints median minutes per merged ticket per builder model
+What it changes: `Forge.cycle_t0 = time.monotonic()` is set in `__init__` (forge.py:101) and again in `cycle()` right after `git worktree add` (forge.py:708). `record()` adds `"secs": int(monotonic - cycle_t0)` to every history entry (:875). `status()`'s per-builder-model line also prints the upper-median minutes of the merged entries that carry `secs` (:1042-1050). The PR adds one selftest check (selftest.py:939-940) and one README sentence (README.md:128).
+Findings:
+- none forge/forge.py:708,875: control flow is unchanged. Traced end to end:
+  - `record()` has exactly two callers: the merged path (cycle :802) and `fail()` (:861). `fail()` is reached only from inside `cycle()`'s try, and from selftest:215, which is why the `__init__` default exists (without it, that call would raise AttributeError).
+  - `recover()`, `claim()`, `discard_strays()`, `land()`, `pr_open`/`pr_merge`, quota fallback, timeouts/killpg and `gpu.py` are untouched.
+  - The new line in `cycle()` runs before the `try` and cannot raise, so no new path leaves a ticket `in_progress` or a worktree behind.
+  - `cycle_t0` is per-process, each lane writes its own `state.json`, and history stays capped at `[-200:]`, so no new shared state and no unbounded growth.
+  - No ticket text reaches a shell.
+- none gate / reviewer / protected paths: the diff touches no prompt, `gate.sh` handling, `touched_protected`, protected list or reviewer selection. It deletes nothing from `forge/prompts/*.md`, `forge/selftest.py` (additions only) or the README safeguard table (README:128 is under "Watch and steer"; the old sentence is kept verbatim and extended). No layer is retired.
+- info forge/forge.py:875 (steward): `steward()` sends `json.dumps(self.state)[-6000:]` as `{STATE}`. Each entry gains about 14 characters (`, "secs": 3600`), so the steward sees roughly 7% fewer history entries. The tail is bounded, so this does not grow.
+- low forge/README.md:128: the closing decision rule, "a model that merges as often but twice as slowly is the cheaper one to drop", is not supported by what `secs` measures. `secs` runs from worktree creation to the end of `record()`, so it includes:
+  - forge's own gate runs: :732 plus one per `land()` pass at :657, 8 to 25 min each per the comments at :423/:632;
+  - the reviewer session;
+  - any merge-resolve builder session.
+  The reviewer is from the other vendor by construction (:760-762). With reflex1.toml, an Opus-built diff is reviewed by `reviewer_alt` (gpt-6-astra, then Fable), and a Codex-built diff by `reviewer` (Opus). So each builder row carries the other vendor's review time. `builder` (high) and `builder_hard` (xhigh) share the model string `anthropic/claude-opus-5-5` (reflex1.toml:36,42), and `builder_hard` gets the `difficulty: hard` tickets and every attempt from the third on (:708-710). The Opus median therefore mixes effort levels and harder tickets. Gate minutes also cost no plan quota. This paragraph is what the hourly scout reads when it proposes routing changes, so the rule should not be there.
+- low forge/selftest.py:939-940: the new check passes even if the reset in `cycle()` is deleted. Mutation run: I removed forge.py:708 and ran the full selftest, and it still reports "all checks passed". The `__init__` value is seconds old when the test's cycle runs, so `secs >= 0` holds either way. As written, the check confirms the field exists, not that it measures the cycle. The edit below fails on that mutant (secs=86400) and passes on the PR head.
+- nit forge/forge.py:867-870 (docstring) and README:128: both apply the paper's claim ("compute time is a reliable proxy for energy", per the SCOUT.md 17:05 entry on arXiv 2610.39621, which is about LLM prefill/decode) to a cycle wall time that is mostly cargo and another model's session. The README sentence also says "claim to merge", but the clock starts after `claim()`, the cycle log line, lane 1's `board()` gh call and `git worktree add`, so it reads slightly below the log-derived numbers.
+- info verified on the PR head a043effd (extracted to /tmp, then removed):
+  - `py_compile` passes, and the full `selftest.py` passes, including the new check.
+  - The PR body's figures match the live `forge.log`: 80 claim-to-MERGED pairs, 23 to 159 min, median 60.
+  - Smoke test of the never-exercised minutes branch: `status` on a fake two-lane state with secs 3600/1500/5999 (merged Opus), 9000 (retry Opus), 119 (merged Codex) and one entry without `model` prints `pre 1/1 (21-100%), anthropic/claude-opus-5-5 3/4 (30-95%) 60 min, openai-codex/gpt-6.1-sol 1/2 (9-91%) 1 min`. Retries are excluded, `pre` has no minutes, and lanes are pooled. All of this is correct.
+  - No other file parses the old status label. reviewctl.py and the prompts do not read it.
+- info siblings: I grepped every open PR on `forge` that touches forge.py, README.md or selftest.py (#99, #86, #84, #83, #79, #48, #47, #44, #42, #40, #39, #31, #28, #25, #20, #19, #16, #8, #7, #6, #5) for `record(`, `history`, `secs`, `cycle_t0`, `monotonic`, `by_model`, `def status`, `median` and README "A second line". None touches `record()`, the history entry, the per-model line or README:128.
+  - #83 adds per-landing `Built-by:` git trailers. That complements this PR and does not duplicate it.
+  - #84 drops a `land()` gate run, so per-model minutes before and after it are not comparable; the per-model line pools forge versions. That is a data shift, not a contradiction.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/README.md:128: replace `, and a model that merges as often but twice as slowly is the cheaper one to drop.` with `. The span includes forge's gate runs, the review by the other vendor's model and any merge-resolve session, and `builder_hard` (same model string, more effort) takes the hard tickets and later attempts, so it is not the builder model's own time; same caveat as the rate.`
+2. forge/selftest.py:933-934: insert `    f.cycle_t0 = forge.time.monotonic() - 86400  # stale start: cycle() must reset it at claim` between `f.agent = build_on_fallback` and `f.cycle()`.
+3. forge/selftest.py:940: change `and f.state["history"][-1]["secs"] >= 0` to `and 0 <= f.state["history"][-1]["secs"] < 3600`.
+
+
 ## PR #101 · 2026-10-30T16:26:09Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
