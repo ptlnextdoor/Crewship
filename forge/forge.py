@@ -721,7 +721,7 @@ class Forge:
                 # input) sits at the head and the `Must change:` block at the end; the next attempt needs both. In
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
-                return self.fail(ticket, f"reviewer did not approve.\n{review}")
+                return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
             why = self.land(wt, branch, tid, builder)
             if why:
                 return self.fail(ticket, why)
