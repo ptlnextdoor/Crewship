@@ -2,6 +2,45 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #95 · 2026-10-30T08:39:15Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #95 pr_open: PR body names the forge version and omp release that built it
+What it changes: `pr_open()`'s first body line becomes ``Opened by forge `{self.version}` on `{self.harness}` (cycle N). Builder: `model`.`` (forge/forge.py:548), with a 3-line why-comment above it. It adds README safeguard row 85 and selftest 4b check "PR body names the forge version and omp release" (forge/selftest.py:99-100). It does not touch the gate, the reviewer, the prompts, protected paths or the merge logic.
+Findings:
+- none forge/forge.py:548 The new values cannot inject anything.
+  - `version` (:114-121) is five 4-hex sha256 prefixes.
+  - `harness` (:124-132) is the first stdout line of the local `omp --version` (`omp/18.12.6` on this box), or `?`.
+  - The body reaches gh through `gh-body.md` and `--body-file` (:523-526). It is never interpolated into a shell string.
+  - `gh-body.md` sits in `self.home`, which is separate per lane (lane 1 `base_home`, lane k `base_home/lane{k}`, :74-78), so no new shared write.
+  - The body stays capped at 60000 chars (:525).
+- none forge/prompts/reviewer.md:7 The PR body cannot sway the reviewer. The reviewer is told "Do not run `git log` or `gh pr view` to learn intent", and forge passes it only the ticket and the diff. Nothing parses "Opened by forge" (grepped the repo: only SCOUT.md/PR_AUDIT.md prose mentions it).
+- none forge/forge.py:548 The cost and exception path are unchanged in kind.
+  - Per PR open, the PR adds one `omp --version` (1.0 s measured, no model call, no quota, 30 s cap). It also adds five prompt-file reads.
+  - `harness` catches TimeoutExpired/IndexError. A stubbed `sh` returning "" gives `?` (this matters for sibling #44's selftest stub).
+  - `version` can raise only if a prompt file vanished. Those same properties already run in both `history` writers (:757, :816), so that failure is already fatal in `fail()`.
+  - If it did raise here, it is inside `cycle()`'s try. `self.pr` is still "", so `finally` removes the worktree and deletes the branch.
+- none forge/selftest.py:99-100 Fail before, pass after. On a copy of base b35cfbf2 with the PR applied: `py_compile` and the full `selftest.py` pass ("all checks passed"). Base `forge.py` with the PR's selftest fails with ``Opened by forge (cycle 0). Builder: `a/b`.``. The check runs the real `omp --version` twice, which is deterministic.
+- none forge/README.md:85 The claims hold.
+  - `gh pr list -R ptlnextdoor/reflex1 --state all --limit 300` returns 121 bodies containing "Opened by forge", 0 of them matching `forge [0-9a-f]{4}\.|omp/`.
+  - History is `[-200:]` per lane `state.json` (:83).
+  - `status` groups by version+harness (:983).
+  - The arXiv 2610.40071 abstract does say "It shows what changed. It does not show what an AI agent did, which model it used". "harness or policy" in the README is paraphrase.
+- info forge/forge.py:548 The stamp is read when the PR opens, after the builder session. A prompt file changed on disk during that session gets the newer hash. The PR body states this, and it is the same window `state.json` history already has. In practice only a pull of the running checkout changes these files.
+- slop forge/forge.py:545-547 The 3-line comment restates README row 85 (200 entries, 0 of 121, arXiv quote). One line would do, but it matches the file's existing why-comment style (:541-542, :549). Not blocking.
+- info siblings #83 partly duplicates the intent but does not contradict it; neither side needs to change.
+  - #83 adds a `Forge: {self.version} {self.harness}` git trailer to the landing commit. It stamps landings only, at land time.
+  - #95 stamps every PR at open, including attempts that never land. The per-version merge-rate denominator needs those.
+  - Both append a README row at the end of the same table, so they conflict textually only.
+- info siblings #16 and #44 overlap textually only.
+  - #16 inserts its 4c autofix checks right after the `PR title reaches gh literally` line in selftest.py, the same spot as #95's two lines. Resolve by keeping both.
+  - #44 adds a `pr view` adopt step after the two `pr create` calls in `pr_open()` and leaves the body alone. An adopted PR keeps the earlier attempt's stamp, as it already keeps that attempt's "cycle N".
+  - The other open PRs that touch forge/forge.py, README.md or selftest.py change neither `pr_open()`'s body nor these lines.
+Change needed (only for MERGE WITH CHANGE):
+
+
 ## PR #94 · 2026-10-30T07:37:02Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
