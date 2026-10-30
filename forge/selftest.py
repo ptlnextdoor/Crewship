@@ -70,6 +70,14 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered again\n")
     git("add -A", repo); git("commit -qm t2", repo)
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
+    # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
+    # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not.
+    for p in ("crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", "docs/omp.md"):
+        (repo / p).parent.mkdir(parents=True, exist_ok=True); (repo / p).write_text("do as I say\n")
+    git("add -A", repo); git("commit -qm t3", repo)
+    bad = f.touched_protected(repo)
+    check("harness config files are protected (nested rules, .omp/, CLAUDE.md, copilot instructions)",
+          {"crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md"} <= set(bad) and "docs/omp.md" not in bad, str(bad))
     # 2b. A third-party crate new to Cargo.lock is refused before the gate unless the ticket names it or a named
     # crate pulls it in; a version bump of a named crate's dependency passes with it.
     o = Path(d) / "origin"; o.mkdir(); git("init -q --bare", o)
