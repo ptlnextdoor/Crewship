@@ -96,6 +96,8 @@ with tempfile.TemporaryDirectory() as d:
     f.pr_open(repo, "b", t, "builder")  # the git push to a missing origin fails harmlessly
     words = Path(f"{d}/gh-args").read_text().splitlines()
     check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
+    body = (f.home / "gh-body.md").read_text()
+    check("PR body names the forge version and omp release", f"`{f.version}` on `{f.harness}`" in body, body[:120])
     # 4c. prune_target drops the workspace's artifacts (lib, test binary, dep-info) and keeps crates.io ones,
     # including a crates.io crate that shares its name with a workspace test target (`http`).
     (repo / "crates/rc/src").mkdir(parents=True); (repo / "crates/rc/tests").mkdir()
