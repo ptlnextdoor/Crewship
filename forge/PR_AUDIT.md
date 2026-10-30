@@ -2,6 +2,58 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #101 · 2026-10-30T16:26:09Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #101 forge: merge rate per builder model that ran
+What it changes: `Forge.record(tid, result)` replaces the two inline `state["history"]` writes (merged in `cycle()`, retry/blocked in `fail()`) and adds `"model"`, the first `builder*` entry in `last_model`. `cycle()` clears `last_model` before each attempt. `status` prints a second Wilson tally keyed on that model. It also adds a README paragraph and one selftest check.
+Findings:
+- none forge/forge.py:706 `self.last_model.clear()` changes no routing. Traced every reader:
+  - `last_model` is read only at `pr_open` (:583), `built_by` (:760, which picks the cross-vendor reviewer), the review comment (:783) and the done note (:796).
+  - Every one of those runs after `self.agent(builder, …)` at :716 in the same cycle. That call either sets `last_model[builder]` (forge.py:228) or raises `QuotaExhausted`, so each read sees the value it saw before.
+  - `agent()` never reads `last_model`. The quota state (`self.exhausted`, `spent()`) is untouched.
+  - The clear sits after `plan()`/`claim()` and before the `try`, and it cannot raise.
+- none forge/forge.py:864-870 `record()` writes the same fields as the two deleted lines. The merged path's `n` equals `self.state["cycle"]`, since `cycle()` sets it at :679 and nothing in the cycle changes it.
+  - `fail()` is called only inside `cycle()`, always after the builder ran. `recover()` writes no history. So `model` is never stale or None in practice.
+  - Only roles `builder`/`builder_hard` match `startswith("builder")`. `land()`'s conflict session (:549) and the repair (:741) reuse the cycle's one `builder` key.
+  - Each lane writes only its own `state.json`, and the list is still capped at `[-200:]`. The value comes from config model names, not ticket text, and reaches no shell.
+  - The steward's `STATE=json.dumps(self.state)[-6000:]` stays bounded. A live entry grows from 109 to about 146 bytes, so the steward sees fewer recent entries.
+  - No new subprocess: `version`/`harness` run once per entry, as before.
+- none forge/forge.py:1037-1042 `status` stays read-only and tolerates entries with no `model` (`or "pre"`). I ran the PR head's `forge.py status --config ~/.config/forge/reflex1.toml` on the live state. It prints `merged/attempts per builder model that ran: pre 85/122 (61-77%)`, and all 122 live entries lack the field.
+- none gate / reviewer / protected paths: no prompt, `gate.sh` handling, `touched_protected`, protected list, claim, `recover()`, `discard_strays()`, timeout/killpg, PR create/merge, quota or `gpu.py` line changes.
+  - The diff deletes nothing from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+  - The only deleted lines are the two inline history writes. `record()` replaces them field for field, so no safeguard layer is removed.
+- low forge/forge.py:706, forge/selftest.py:929-938 The new check does not pin the `clear()`. The test's earlier cycle uses a stub that never writes `last_model`, so it is empty either way.
+  - I removed the `clear()` line from a copy and the full selftest still printed "all checks passed".
+  - A throwaway two-cycle run shows what the line prevents: cycle 1 `builder_hard` falls back to `e/f`, cycle 2 `builder` runs `a/b`.
+    - With the line, the history reads `[e/f, a/b]`.
+    - Without it, it reads `[e/f, e/f]`, because `next()` hits the stale `builder_hard` key first.
+  - The code is right. Only the regression guard for that line is missing. Not blocking.
+- low forge/forge.py:869, forge/README.md:128 The tally key is the model only, and the role `r` is dropped.
+  - In `~/.config/forge/reflex1.toml:36,42`, `builder` (high) and `builder_hard` (xhigh) are both `anthropic/claude-opus-5-5`.
+  - `builder_hard` takes `difficulty: hard` tickets and every attempt from the third on (forge.py:707-709).
+  - So the Opus row blends two effort levels and the hardest tickets. The README's "different tickets, not a controlled comparison" caveat covers this in general terms. It is informational only and does not affect the loop.
+- nit forge/forge.py:865-868, forge/selftest.py:934-935, forge/README.md:128 (slop) The arXiv 2610.37700 rationale appears three times. That matches the house style of the `version`/`harness`/`rate_interval` docstrings.
+  - The `by_model` loop (:1037-1041) is a 5-line copy of the `by_version` loop.
+  - Neither is worth a change.
+- info verified on PR head 6e4a4641, exported with `git archive` (no checkout):
+  - The full `selftest.py` prints "forge selftest: all checks passed".
+  - The PR's selftest against base 28d5e90e `forge.py` fails only the new check (entry has no `model`), so the test catches the old code.
+  - The body's motivation counts reproduce:
+    - `git grep 'Landed by'` in `~/Dev/reflex1` gives 82 `anthropic/claude-opus-5-5` and 3 `openai-codex/gpt-6.1-sol`.
+    - `forge.log` has 18 quota fallbacks, 1 for `builder` and 17 for `reviewer_alt`.
+  - The arXiv 2610.37700 abstract matches the README sentence: 135 HumanEval/ClassEval tasks, 3.22x cost, no more solved, the saving in per-task model choice.
+- info blast radius: like any forge.py merge, the mtime change makes running lanes exit 75 between cycles and restart (forge.py:977-981), and it opens a new `version` bucket. `forge@reflex1` is inactive right now.
+- info siblings: I read every open PR on `forge` that touches README.md, forge.py or selftest.py (#5 #6 #7 #8 #16 #19 #20 #23 #25 #28 #31 #39 #40 #42 #44 #47 #48 #79 #83 #84 #85 #86 #99). None contradicts this PR, and neither side needs to change.
+  - #83 also records the builder model, as a `Built-by:` trailer on landing commits only, read from `built_by`, which is set after the builder ran. It partly overlaps but is complementary: #101 covers failed attempts too, which the tally needs.
+  - #47 (5xx failover) and #6 (builder repair after a reviewer REJECT) only change which model `agent()` leaves in `last_model[builder]`. `record()` picks that up the same way `built_by` already does.
+  - #86 passes `built_by` to the reviewer prompt. That read is after the builder ran, so `clear()` does not affect it.
+  - #48 (merged only once the merge is in origin/main) and #99 (fenced fail note, editing `fail()` lines above :861) change code around the call sites, not the history entry.
+Change needed (only for MERGE WITH CHANGE): none
+
+
 ## PR #100 · 2026-10-30T15:25:41Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
