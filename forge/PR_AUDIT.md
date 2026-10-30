@@ -2,6 +2,50 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #93 · 2026-10-30T05:36:01Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #93 forge: land() posts the +/- lines that moved since the reviewed commit
+What it changes: before the review, `cycle()` stores the reviewed SHA and the set of `+`/`-` lines of `git diff origin/main...HEAD` in `self.reviewed`. After `rebase_onto_main()` and the protected re-check, `land()` recomputes that set. When it differs, it logs the counts and posts one PR comment (capped at 6000 chars) listing the lines added since the review and the reviewed lines that are gone. The PR also adds a README row and extends selftest 4d. What lands, the gate, the prompts and the protected paths are unchanged.
+
+Findings:
+- none forge/forge.py:101,489-492,605-616,711 Security trace. Nothing here weakens the gate, the reviewer or the protected paths:
+  - `gate.sh`, `touched_protected`, `self.protected`, every prompt and the verdict parse are untouched. The new block runs after the protected re-check (:602) and before the gate (:617). It returns nothing and changes no control flow, so a landing still needs that gate PASS.
+  - Reviewer: `self.reviewed` is set after the reviewer's SHA and diff are read (:709-711) and never goes into a prompt. The comment is posted only after APPROVE. No role prompt reads PR comments; reviewer.md check 4 tells the reviewer not to read the PR page.
+  - Injection: the only new command is the constant `git diff origin/main...HEAD`. Diff text reaches GitHub only as a comment body, through `gh()`'s body file (the lane's own `home/gh-body.md`, since `home` is per lane at :78).
+  - Lane state: `self.reviewed` is an instance attribute, and `run()` starts one process per lane (:899-901). `cycle()` sets it at :711 on the only path that reaches `land()` (:746), so no lane reads another lane's value or an earlier cycle's.
+  - Exception paths: `patch_lines` cannot raise. The new `pr_comment` goes through `gh()` and then `sh(timeout=120)`, so a gh call that hangs raises `TimeoutExpired` (`gh()`'s "Never raises" docstring does not cover this). `cycle()`'s `except` then closes the PR, `finally` removes the worktree and the branch, and `lane_loop` calls `recover()`. No ticket is left `in_progress`. The cost is redoing an approved ticket, which the `gh pr view`/`gh pr merge` calls in `pr_merge()` on the same path already risk.
+  - Cost: each comment is at most 6000 chars, with one log line of counts, and there are at most 3 per `land()` (`range(3)`). No GPU, no agent session, no quota spend.
+- low forge/forge.py:616 `self.reviewed = (sha, now)` makes every pass after the first diff against the previous pass's unreviewed landing patch. The header and labels still say the comparison is with the reviewed commit, so the second comment is false evidence. Reproduced on real git (throwaway script: `land()` makes two passes, each with a conflict session; pass 1 drops reviewed `+branch` and adds `U`, pass 2 restores `branch` and drops `U`). Comment 2 says `now, not reviewed: +branch`, but `+branch` is in rev0's patch. It also says `reviewed, gone: +U`, but no reviewer ever saw `U`. With the edit below, comment 2 reads `now, not reviewed: -main2 / reviewed, gone: -base`, which is correct. Repeat passes become more likely if sibling #48's `continue` lands. The new selftest check posts only once, so it does not cover this line.
+- low forge/README.md:83 "read by the owner or `reviewctl audit`" is false. The comment is posted on the project's PR (`self.gh_repo` comes from the project clone's origin, forge.py:105-107; base `main`). reviewctl lists only `ptlnextdoor/Crewship` PRs against base `forge` (reviewctl.py:29-30,57), so it never reads these comments. The PR body makes the same claim.
+- nit forge/forge.py:491 `ln[:1] in "+-"` is true for an empty line (`"" in "+-"`); harmless while git writes blank context lines as `" "`. Content lines that start with `--` or `++` are dropped from both sets when removed or added (repro: a removed `-- old sql comment` and an added `++i;` both vanish), so a conflict session's edit to such a line is invisible. Lines carry no file name and are sorted, so a delta that spans several files does not say where each line lives. These limits go beyond the ones the PR body lists. Not blocking, since the comment is information only.
+- nit (slop) forge/forge.py:605-608 The 4-line comment repeats the comment at :597-601 (29 reflex1 cycles, `git add -A`) and the README row. The edit below shortens it to two lines.
+- info forge/forge.py:614 The comment is posted before the gate (:617) and before the force-push (:621). On a gate failure, up to 6000 chars of the conflict session's lines are on the PR although that commit is never pushed. The builder's own work is pushed before any gate at `pr_open` (:679), so this is not a new kind of exposure.
+- info PR body: "#92 ... whose README row ends 'nothing consumes the SHA yet'" is false. That phrase is in SCOUT.md:1305 and in #92's body, not in the README row (README.md:82). It is a claim in the body only; the diff does not depend on it.
+- info verification: on the PR tree exported with `git archive`, `py_compile` and the full `forge/selftest.py` pass ("all checks passed", 6 s). Throwaway repro: a clean rebase with main editing a line two lines away in the same file posts 0 comments. The two-pass case above was run before and after the edit; with the edit applied in a scratch copy, the full selftest still passes.
+- sibling #84 (base `forge`; forge.py `land()` :617-619 gate block and `cycle()` near :708, README, selftest) wraps the landing gate in a skip. Both PRs touch the same lines, so this is a textual conflict only. They agree in meaning: #84 skips only when the tree outside `tickets/` is unchanged, which means the same patch, which means this PR posts nothing.
+- sibling #6 (stale base 4ee81ee3; forge.py review block) adds a review-repair round with a re-review. Rebased onto this PR, the re-reviewed patch would never refresh `self.reviewed`, and `land()` would report the approved repair as "not reviewed". #6 should change: set `self.reviewed` from the diff each review round sees.
+- sibling #48, #83 (forge.py `land()`): #48's extra `continue` passes and #83's trailers on the merge calls conflict only textually. #48 makes the multi-pass path above reachable more often, and the edit below covers that.
+- sibling #8 (stale; puts the revision in comment labels) overlaps #92, which is already in base, not this PR.
+- sibling #86, #85, #79, #47, #44, #42, #40, #39, #31, #28, #25, #23, #20, #19, #16, #7, #5: I grepped their `+`/`-` lines for `land`, `rebase_onto_main`, `reviewed`, `patch_lines` and `pr_comment`. None contradicts or duplicates this PR. The README rows sit next to each other, which is a textual conflict only. #19's union merge means fewer conflict sessions, so fewer deltas.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `land()`, insert `        posted = ""  # the last delta posted: each pass reports against the reviewed patch, once per change` directly before `        for _ in range(3):`, and replace lines 605-616 (the 4-line comment through `self.reviewed = (sha, now)  # a later pass ...`) with:
+```
+            # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
+            # patch (context shifts on any rebase, so a clean one posts nothing).
+            sha, lines = self.reviewed
+            now = self.patch_lines(self.sh("git diff origin/main...HEAD", cwd=wt).stdout)
+            delta = "\n".join(["now, not reviewed:", *sorted(now - lines), "reviewed, gone:", *sorted(lines - now)])
+            if lines and now != lines and delta != posted:
+                self.log(f"landing patch differs from the one reviewed at {sha[:9]}: +{len(now - lines)} -{len(lines - now)} lines")
+                self.pr_comment(self.pr, f"**landing patch differs from the one reviewed at {sha}** (the sync with main was "
+                                         f"resolved after the review; gated, not reviewed)\n\n```\n{delta[:6000]}\n```")
+                posted = delta
+```
+In forge/README.md:83, change "read by the owner or `reviewctl audit`, not a second review" to "read by the owner, not a second review".
+
+
 ## PR #92 · 2026-10-30T04:33:22Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
