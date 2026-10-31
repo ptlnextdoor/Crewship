@@ -2,6 +2,39 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #112 · 2026-10-31T16:44:31Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #112 forge: steward reads every lane's status tally, not lane 1's state.json
+What it changes: `steward()` now fills `{STATE}` with a new `status_text()` instead of `json.dumps(self.state)[-6000:]`. `status_text()` is the old `status()` body with `print` swapped for `out.append`, and `status()` now prints it. It covers every lane's totals, the building and open tickets, the last 8 attempts, merged/attempts per version and per model, the per-guard tally and 8 log lines. The PR also rewords line 3 of `steward.md`, adds README row 92 and adds one selftest check.
+Findings:
+- low forge/README.md:92 The evidence is overstated. The row says "the other three lanes' results and the per-guard tally reached nobody's `PROGRESS.md`". reflex1's `PROGRESS.md` at 82fd9edc ("Status 2026-10-24T13:30Z (steward, cycle 28)") does list merges from the other lanes as landed: 0109, 0081 and 0113 (lane 2), 0079 and 0074 (lane 3), 0106 and 0107 (lane 4). The steward got those from `git log` and `tickets/`. The damage I could trace is the block's line "Loop: 28 cycles, 18 merged, 9 not merged in the cycle log". That is lane 1's `state.json` at the 13:22:36Z steward turn (cycle 28, 18/9), while all four lanes' histories added up to 70 merged and 36 not. A row in this table is what later audits use to name what a layer prevented, so its "prevents" text must be accurate. The docstring at forge.py:1077-1079 ("the steward never saw the other 91") and selftest.py:219-220 overstate it the same way. Those two are nits.
+- info forge/forge.py:928,1073-1118 Gate, reviewer and protected paths are untouched. `gate.sh`, `touched_protected`, the reviewer prompt, `commit_docs` and `discard_strays` are unchanged, and the steward still runs in the project repo (`self.repo`), with its non-doc edits reset at :931. `status_text()` writes nothing. Its output reaches omp only through `prompt()`'s `str.replace` and the prompt file. No ticket text reaches a shell. There is no new agent session, GPU or quota path; the one extra subprocess is `omp --version` (`harness`, 30 s timeout, failures map to "?"). I ran `forge.py status --config ~/.config/forge/reflex1.toml` with the base and with the head forge.py and diffed the output: the only difference is the `now <version>` hash. On reflex1 the steward input is 1,888 bytes against 3,489 for lane 1's JSON.
+- info forge/forge.py:1076-1118 Concurrency: no shared state is written. The steward runs only on lane 1 (:1049, :1057). `status_text()` reads other lanes' `state.json`, which `save()` replaces atomically via tmp + `replace` and `all_states()` reads under `try (OSError, ValueError)`. It also reads lane 1's own `tickets/` (`errors="replace"`) and the append-only `forge.log`.
+- info forge/forge.py:928,1050,1058 Exception path. `status_text()` is evaluated before `agent()`, so a raise costs no session. The scheduled call at :1058 sits inside `lane_loop`'s `try`. A raise there logs "cycle error", runs `recover()` and backs off. The cycle's ticket is already finalized, so nothing is left `in_progress` and no worktree remains. The deadline call at :1050 is outside the `try`. A raise there exits lane 1 non-zero and `run()` restarts it; the base already behaves that way when `agent()` raises `QuotaExhausted`. I found no input that makes `status_text()` raise:
+  - history entries always carry `at`, `ticket` and `result` (`record()`, :924);
+  - lane files are read under `try`;
+  - the one strict read is `forge.log`, and only `log()` writes it, in the same encoding.
+- low forge/forge.py:928 The `[-6000:]` cap on `{STATE}` is deleted. The bound is now structural. Each line type has its own limit:
+  - 8 attempt lines;
+  - 8 physical log lines (the longest are `cycle error` at ≤500 chars of exception text and `push failed` at ≤300);
+  - tallies keyed by distinct version+harness, model and 3-word cause over at most 200 entries per lane (`record()` :924);
+  - one stem per open/retry ticket.
+
+  The size is bounded, not unbounded growth, and the PR body's "Not done" names the `open:` line. The prompt reaches omp through a file, so the 128 KiB argv limit does not apply.
+- info forge/prompts/steward.md:3 Deleted line: `Loop state (cycles, merges, failures):`. It labelled the data block and was not a rule, so it prevented nothing. The new label does its job. "cycles" is gone because `{STATE}` no longer carries `cycle` or `steward_cycle`. Only the previous status block's date in `PROGRESS.md` and `git log --oneline -40` (steps 1-2) now carry the "since the last status" anchor. The new label leaves out the `open:` line it also holds (nit). The diff deletes nothing from `forge/selftest.py` or the README safeguard table.
+- info forge/forge.py:1089 Coverage: the per-attempt list is the last 8 across lanes. Across reflex1's steward intervals there were 5, 19, 3, 15, 24, 19, 18 and 16 attempts, so in 6 of 8 intervals the list is a sample. The old input held only lane 1's roughly 4 attempts per interval, so this is still more. The prompt says "the last attempts", which is accurate. Per-attempt causes now come only from the ticket notes the steward reads in step 1 (`fail()` writes up to 7,000 chars), where before lane 1's history carried its 200-char `why` heads.
+- info forge/forge.py:1117 Injection surface: the log tail adds RETRY/BLOCKED heads (≤200 chars, the same strings the old input carried as lane 1's `why`), `cycle error` text and gh/push stderr, all at most a few hundred chars. The steward already reads `tickets/` whole, including full reviewer output. No new model-controlled channel of note.
+- info forge/selftest.py:219-233 I ran the full selftest on a `git archive` of dcc1bada: all checks passed. With the base forge.py and the PR's selftest, only the new check fails. It asserts on behaviour: another lane's attempt and the per-guard count appear in the steward prompt. The `s/lane2` fixture stays inside the 4d-4j tempdir, and the later exact tally checks (:972-975) use their own dir.
+- info siblings: I read the diffs of all 27 other open PRs on `forge`. None touches `steward()`, `status()`, `all_states()`, `record()` or `steward.md`.
+  - #111 (same base) conflicts with this PR only in the text of forge/README.md: both append a row after :91, and `git merge-tree` shows the conflict. Keep both rows; neither text contradicts the other.
+  - #99 edits the adjacent selftest 4i block and the note `fail()` writes; it neither contradicts nor duplicates this PR.
+- nit slop: the 31-of-122 anecdote appears three times (docstring, selftest comment, README row). That matches house style. Apart from the wording above, nothing else is slop: the forge.py change is a mechanical print-to-list refactor that keeps the CLI output.
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:92 (the new row, "prevents" column), replace `the other three lanes' results and the per-guard tally reached nobody's `PROGRESS.md`` with `reflex1's 2026-10-24T13:30Z status block reported "Loop: 28 cycles, 18 merged, 9 not merged", lane 1's file, when the four lanes stood at 70 merged and 36 not; lanes 2-4's merges reached it only through `git log` and `tickets/`, their attempt and failure counts and the per-guard tally not at all`. Nothing else changes.
+
+
 ## PR #111 · 2026-10-31T15:40:43Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
