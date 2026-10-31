@@ -643,8 +643,11 @@ class Forge:
             self.pr_comment(pr, f"**forge: not merged.**\n\n```\n{why[-6000:]}\n```\nThe ticket goes back to the queue with this evidence; the next attempt opens a new PR.")
             self.gh(f"pr close {pr}")
 
-    def pr_merge(self, pr: str, branch: str) -> bool:
-        """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge."""
+    def pr_merge(self, pr: str, branch: str, head: str) -> bool:
+        """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge.
+        `head` is the sha the gate just ran on: GitHub merges the remote head, which is that sha only if the push
+        before this call landed; `--match-head-commit` refuses anything else and the local merge of the gated tree
+        takes over (dsh-superagent's auto-merge rule; the push's exit code was never checked here)."""
         if not pr:
             return False
         # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
@@ -659,7 +662,7 @@ class Forge:
                 self.log(f"PR {pr} conflicts on GitHub; landing it locally instead of waiting")
                 return False
             time.sleep(3)
-        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch", timeout=180)
+        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch --match-head-commit {head}", timeout=180)
         if r.returncode:
             self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
             return False
@@ -698,10 +701,11 @@ class Forge:
                 return f"gate failed after updating from main.\n{gout[-2000:]}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
-            if self.pr_merge(self.pr, branch):
+            head = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()  # the tree the gate just passed
+            if self.pr_merge(self.pr, branch, head):
                 return ""
             self.sync_main()
-            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}").returncode == 0:
+            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {head}").returncode == 0:
                 self.push()
                 # `gh pr merge --delete-branch` cleans the remote branch; this fallback path never did, and 64 of
                 # reflex1's 106 remote forge branches are landed leftovers. Only once the tip is in origin/main,
