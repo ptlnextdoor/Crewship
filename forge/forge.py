@@ -421,6 +421,38 @@ class Forge:
             ok |= more
         return sorted(f"{n} {v}" for n, v in head if (n, v) not in base and (n, v) not in ok)
 
+    SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
+    TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
+
+    def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
+        """Tests the branch switches off or drops: an added `#[ignore]`/`pytest.skip` marker, or fewer test
+        functions than the branch point across the diff, unless the ticket says so. Builder rule 12 and reviewer
+        step 3 say this in prose and the review runs after the gate (8 to 25 min); here it costs seconds
+        (reflex1: 0 added `#[ignore]`, 0 removed `#[test]` in 627 commits on main, so the prose has held; an
+        agent that deletes the failing test instead of fixing the bug is the shape ImpossibleBench, arXiv
+        2510.20270, measures)."""
+        text = ticket_text.split("\n## forge")[0].lower()
+        skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
+        # shortcut: "remove the old test" anywhere in the ticket waives the count check; moving a test between
+        # files nets to zero and passes; delete one, add another nets to zero too, which step 3 still reads.
+        drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
+        out, f, net, gone = [], "", 0, 0
+        for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd).stdout.splitlines():
+            if line.startswith("+++ "):
+                f = line[6:]
+            elif m := self.SKIP_MARK.match(line):
+                if m[1] == "-":
+                    gone += 1
+                elif not skip_ok:
+                    out.append(f"{f}: adds {line.lstrip('+ ')[:24]}")
+            elif m := self.TEST_MARK.match(line):
+                net += 1 if m[1] == "+" else -1
+        if len(out) <= gone:
+            out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
+        if net < 0 and not drop_ok:
+            out.append(f"{-net} fewer test functions than the branch point")
+        return out
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -737,6 +769,9 @@ class Forge:
             deps = self.unrequested_deps(wt, ticket.read_text())
             if deps:
                 return self.fail(ticket, f"diff adds packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
+            bad = self.test_tampering(wt, ticket.read_text())
+            if bad:
+                return self.fail(ticket, f"diff skips or deletes tests the ticket does not name: {bad}. A test switched off or removed needs the ticket to say so (builder rule on tests); fix the code the test checks.")
             ok, gout = self.gate(wt)
             self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
             if not ok:
@@ -756,6 +791,9 @@ class Forge:
                 deps = self.unrequested_deps(wt, ticket.read_text())
                 if deps:
                     return self.fail(ticket, f"the repair added packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
+                bad = self.test_tampering(wt, ticket.read_text())
+                if bad:
+                    return self.fail(ticket, f"the repair skipped or deleted tests the ticket does not name: {bad}. A test switched off or removed needs the ticket to say so (builder rule on tests); fix the code the test checks.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
                 if not ok:
