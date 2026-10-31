@@ -196,9 +196,9 @@ with tempfile.TemporaryDirectory() as d:
     (bindir / "gh").chmod(0o755)
     f.env["PATH"] = f"{bindir}:{f.env.get('PATH', os.environ['PATH'])}"
     f.sync_main = lambda: None; forge.time.sleep = lambda s: None
-    merged = f.pr_merge("https://github.com/x/y/pull/1", "land")
+    merged = f.pr_merge("https://github.com/x/y/pull/1", "land", "abc123")
     calls = (bindir / "gh.log").read_text().splitlines()
-    check("pr_merge polls mergeability, then merges once", merged and calls.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable") == 3 and calls[-1].startswith("pr merge https://github.com/x/y/pull/1"), "\n".join(calls))
+    check("pr_merge polls mergeability, then merges once, pinned to the gated sha", merged and calls.count("pr view https://github.com/x/y/pull/1 --json mergeable --jq .mergeable") == 3 and calls[-1].startswith("pr merge https://github.com/x/y/pull/1") and "--match-head-commit abc123" in calls[-1], "\n".join(calls))
 
     # 4g. A prompt longer than Linux's 128 KiB per-argument cap still starts the agent (it goes through a file).
     (bindir / "omp").write_text('#!/bin/sh\nfor a; do case "$a" in @*) cat "${a#@}";; esac; done\n')
@@ -398,7 +398,7 @@ with tempfile.TemporaryDirectory() as d:
     f.gh = lambda args, cwd=None, body=None: (calls.append(args), "CONFLICTING")[1]
     f.sh = lambda cmd, cwd=None, timeout=600, check=False: (calls.append(cmd),
                                                             subprocess.CompletedProcess(cmd, 1, "", "conflicts"))[1]
-    merged = f.pr_merge("https://example.invalid/pull/7", "forge/l1-b")
+    merged = f.pr_merge("https://example.invalid/pull/7", "forge/l1-b", "abc123")
     forge.time.sleep = real_sleep
 check("a PR GitHub calls CONFLICTING is landed locally, not polled and merged",
       merged is False and len(calls) == 1 and not any("pr merge" in c for c in calls), str(calls)[:300])
