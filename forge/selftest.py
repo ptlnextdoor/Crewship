@@ -98,6 +98,22 @@ with tempfile.TemporaryDirectory() as d:
     check("a crate named only in a ## forge note is still refused", "evil 0.1.0" in f.unrequested_deps(repo, "x\n\n## forge t (retry)\n['evil 0.1.0']"))
     git("checkout -q main", repo); git("checkout -q -b work2", repo)
     check("no Cargo.lock change is no finding", f.unrequested_deps(repo, "") == [])
+    # 2d. A test switched off (`#[ignore]`, `pytest.skip`) or dropped is refused before the gate unless the ticket
+    # says so; a test moved between files nets to zero and passes.
+    (repo / "src").mkdir()
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
+    (repo / "t.py").write_text("def test_p(): pass\n")
+    git("add -A", repo); git("commit -qm tests", repo); git("push -q -f origin work2:main", repo)
+    (repo / "src/a.rs").write_text("#[test]\n#[ignore]\nfn one() {}\n")
+    (repo / "t.py").write_text("import pytest\n@pytest.mark.skip\ndef test_p(): pass\n")
+    git("add -A", repo); git("commit -qm skip", repo)
+    got = f.test_tampering(repo, "status: open\n# x\nFix the parser.\n")
+    check("ignored, skipped and deleted tests are refused", got == ["src/a.rs: adds #[ignore]", "t.py: adds @pytest.mark.skip", "1 fewer test functions than the branch point"], str(got))
+    check("the ticket naming the marker and the removal waives both", f.test_tampering(repo, "mark `#[ignore]` and `pytest.skip` the slow ones, remove the duplicate test") == [])
+    git("checkout -q -- .", repo); git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n"); (repo / "src/b.rs").write_text("#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm move", repo)
+    check("a test moved to another file is no finding", f.test_tampering(repo, "") == [])
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"
     f.set_status(t, "in_progress lane=2")
