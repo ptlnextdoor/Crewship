@@ -877,9 +877,8 @@ class Forge:
         time from claim to this entry: omp prints no token count, the lanes are plan-billed, and compute time
         is the usable proxy for cost when the meter is unreadable (arXiv 2610.39621); reflex1's 80 merges ran
         23 to 159 min (median 60) and only forge.log held that. `why` is the first line of a failed attempt's
-        cause, the guard that ended it: each one is logged where it fires so `status` can show which ones still
-        fire and which never do (the shim-cleanup rule from Cursor's harness team: a guard that stops firing is
-        the one to remove); before this, only the ticket notes held it and the live log's heads were PR urls."""
+        cause, the guard that ended it: status counts them per guard; a zero on the gate, reviewer, protected-path or dependency guards means
+        the layer in front held, not that the guard can go."""
         model = next((m for r, m in self.last_model.items() if r.startswith("builder")), None)
         self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
 
