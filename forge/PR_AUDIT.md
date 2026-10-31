@@ -2,6 +2,57 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #111 · 2026-10-31T15:40:43Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #111 forge: land() merges the sha the gate passed, not the branch ref
+What it changes: `land()` reads `head = git rev-parse HEAD` in the worktree right after the landing gate and push. It passes `head` to `pr_merge()`, which now runs `gh pr merge ... --match-head-commit {head}`. The local fallback runs `git merge ... {head}` where it used to run `git merge ... {branch}`. It also adds one README safeguard row and updates selftests 4f and 4r for the new argument.
+Findings:
+- ok forge/forge.py:704,708,665 I traced the change end to end on base 9a2158b8, which is current: since then `origin/forge` has only added SCOUT.md.
+  - Nothing between the gate (:699) and the new `rev-parse` (:704) moves HEAD. The only thing in between is the push (:703).
+  - `wt` comes from `git worktree add` on the lane repo (:747). The lane repo therefore has the sha, so the local `git merge {head}` resolves it.
+  - The merge subject is unchanged and the merge tree has the same shape, so `main_gated()` (:470) still recognises landings.
+  - `head` is the hex output of `rev-parse`. No ticket text reaches the command.
+  - It adds no shared state, no agent session, no quota or GPU spend, and no new exception path. `sh` is called with `check=False`. A timeout raise lands in the same `cycle()` except/finally as before, which closes the PR, removes the worktree and calls `recover()`.
+  - The Crewship gh guard's `check_write()`, loaded and called with the exact new argv, returns None. `pr` commands are not checked, and an unknown flag blocks only `issue`/`api` writes.
+- ok forge/forge.py:665,708 The PR closes a real way to bypass the protected paths. The probe ran on real git: a review session commits `gate.sh` = "weakened" on `{branch}` and then runs `git checkout --detach`. The reset at :839 then moves only the detached HEAD. `touched_protected` (:686) diffs HEAD, so it finds nothing.
+  - Base code: `land()` pushes `{branch}` and the GitHub path merges it, so `origin/main:gate.sh` ends up "weakened".
+  - This PR: the merge call carries `--match-head-commit <gated sha>`. A fake `gh` that copies GitHub's head check refuses the merge, and the local path lands `gate.sh` = "strict".
+  - With `pull_requests=false`, base lands `src.txt` = "old" (the review commit) and this PR lands "gated".
+  - Not exercised against GitHub itself: that GitHub refuses a mismatched merge is [INFERENCE] from `gh 2.103.0 pr merge --help` ("Commit SHA that the pull request head must match to allow merge").
+  - The cited source checks out: deepseek-ai/dsh-superagent-prototype `prompts/team/delivery.md` uses `pr merge <number> --auto --merge --match-head-commit <sha>`.
+- low forge/README.md:92 The row says "a rejected lease or a 120 s timeout leaves the old remote head, which GitHub then merges". The timeout half is false on this base.
+  - `sh()` (:205-207) calls `subprocess.run(timeout=)`, which raises `TimeoutExpired`. I confirmed this: `f.sh("sleep 3", timeout=1)` raised.
+  - So a push that times out at :703 never reaches `pr_merge`. It leaves `land()` for `cycle()`'s except (PR closed) and then `lane_loop`'s `recover()`.
+  - The PR body makes the same claim. A rejected lease or any push that exits non-zero does leave the old remote head and reach `gh pr merge`, so the row is right about those.
+- low forge/selftest.py:201 Nothing tests the local-path half of the change. I made a mutant of the PR tree with `{head}` reverted to `{branch}` at :708, and the full `selftest.py` still printed "all checks passed" with rc 0. The unmodified PR tree also passes.
+  - 4d drives `land()` with HEAD attached, so there `{branch}` == `{head}`.
+  - 4f only checks that `pr_merge` passes its argument through to `gh`. Nothing checks that `land()` passes the gated HEAD.
+  - This matters because sibling #83 rewrites this exact line with `{branch}`. A conflict resolved toward #83 would silently undo the fix, and no test would fail.
+  - A selftest built from the detach probe above would cover it. I do not block on it.
+- info PR body "a branch whose ref differs from what landed is kept for the owner" is false.
+  - In the detach probe, `git merge-base --is-ancestor land main` returns 1. `cycle()`'s finally block (:871-872) then deletes the remote branch, because the branch is not in local main and PRs are on.
+  - So when GitHub refuses the merge, or the push failed, the PR is closed unmerged while the ticket goes `done` with that PR link.
+  - Only forge.log records why (`gh pr merge failed: ...`). No PR comment says it.
+  - This affects visibility only. The tree that lands is the correct one.
+- info forge/selftest.py:199,201,401 No layer is removed.
+  - The three deleted lines are rewritten. The rewritten :201 check keeps all three old conditions (merged, 3 mergeability polls, last call is `pr merge`) and adds `--match-head-commit abc123`.
+  - 4r's check line is unchanged. The PR deletes nothing from the README safeguard table, and it touches no prompts.
+- nit forge/forge.py:647-650 The new docstring repeats the README row's rationale. Repo style tolerates this. `pr_merge`'s `branch` parameter was already unused before this PR and is still unused.
+- sibling #48 (base forge; touches forge.py, README.md, selftest.py) contradicts this PR on what proves a landing.
+  - #48 makes the local path return "" only when `is-ancestor {branch} origin/main` passes, and otherwise retries up to 3 times before failing the ticket.
+  - With this PR's `git merge {head}`, a branch ref that differs from HEAD (the detach case) is never an ancestor. The landed ticket would then be failed and queued again although `head` is already in origin/main.
+  - #48 should change: check `{head}` after it rebases. #48 is also on a stale base (hunks at ~:450).
+- sibling #83 (base forge; touches forge.py, README.md, selftest.py) rewrites the same three places: the `pr_merge` signature, the `gh pr merge` line, and the local `git merge ... {branch}` line, plus 4f and 4r.
+  - The two PRs do not conflict in intent. #83 should change: when it rebases it must keep `--match-head-commit {head}` and `{head}`.
+- sibling #84 (base forge; touches forge.py, README.md, selftest.py) fits with this PR. It reads `gated` in `cycle()` and skips the landing gate when the tree is unchanged outside tickets/. With both PRs, `head` would be a tree identical to the gated one outside tickets/, so neither weakens the other.
+  - The two PRs collide only as text, on the `land()` call line.
+
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:92 (the new row, "prevents" column), replace `(a rejected lease or a 120 s timeout leaves the old remote head, which GitHub then merges)` with `(a rejected lease or a failed connection leaves the old remote head, which GitHub then merges)`.
+
+
 ## PR #110 · 2026-10-31T08:30:04Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
