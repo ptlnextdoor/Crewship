@@ -866,19 +866,22 @@ class Forge:
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
-        self.record(tid, status)
+        self.record(tid, status, head)
         self.log(f"cycle {self.state['cycle']}: {status.upper()} {tid}: {head}")
 
-    def record(self, tid: str, result: str) -> None:
+    def record(self, tid: str, result: str, why: str = "") -> None:
         """One history entry per attempt. `model` is the builder that actually ran (its fallback after a
         quota refusal, not the configured one): arXiv 2610.37700 finds the saving in a planner-coder-reviewer
         pipeline is choosing the model per task, and the one tally that can show it here is merge rate per
         builder model, which the per-version tally hides when a lane falls back mid-day. `secs` is the wall
         time from claim to this entry: omp prints no token count, the lanes are plan-billed, and compute time
         is the usable proxy for cost when the meter is unreadable (arXiv 2610.39621); reflex1's 80 merges ran
-        23 to 159 min (median 60) and only forge.log held that."""
+        23 to 159 min (median 60) and only forge.log held that. `why` is the first line of a failed attempt's
+        cause, the guard that ended it: each one is logged where it fires so `status` can show which ones still
+        fire and which never do (the shim-cleanup rule from Cursor's harness team: a guard that stops firing is
+        the one to remove); before this, only the ticket notes held it and the live log's heads were PR urls."""
         model = next((m for r, m in self.last_model.items() if r.startswith("builder")), None)
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "secs": int(time.monotonic() - self.cycle_t0)}])[-200:]
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
@@ -1056,6 +1059,14 @@ class Forge:
         # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
         # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
         print("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts:", ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
+        # shortcut: a cause is keyed by its first three words ("builder produced no", "reviewer did not", "merge
+        # conflict landing"), which every fail() message in this file keeps distinct; split into a `cause` argument
+        # if two messages ever share a prefix. Entries written before `why` existed are not counted.
+        by_why: dict[str, int] = {}
+        for h in (h for s in states for h in s.get("history", []) if h.get("why")):
+            k = " ".join(h["why"].split()[:3])
+            by_why[k] = by_why.get(k, 0) + 1
+        print("failed attempts per cause, the guard that ended them:", ", ".join(f"{k} {n}" for k, n in sorted(by_why.items(), key=lambda kv: -kv[1])) or "-")
         if self.log_file.exists():
             print("".join(self.log_file.read_text().splitlines(True)[-8:]))
 
