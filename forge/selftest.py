@@ -975,7 +975,8 @@ with tempfile.TemporaryDirectory() as d:
 # 22. The reviewer is told to run the diff's tests against the old code by restoring a source file from
 # origin/main. A reviewer that forgets `git checkout HEAD -- .` left a dirty worktree for land(): the rebase
 # refuses unstaged changes, the merge too when main touched the file, and the conflict session's `git add -A`
-# commits the restored file - the fix undone in the landing commit. Forge resets the worktree after the review.
+# commits the restored file - the fix undone in the landing commit. Forge resets the worktree after the review,
+# to the commit the reviewer was handed: a review session that commits has moved HEAD past the reviewed tree.
 with tempfile.TemporaryDirectory() as d:
     origin, repo = Path(d) / "origin.git", Path(d) / "repo"
     git(f"init -q --bare -b main {origin}", Path(d))
@@ -995,6 +996,7 @@ with tempfile.TemporaryDirectory() as d:
 
     def build_then_messy_review(role, prompt, cwd, timeout_min=None):
         if role == "reviewer":
+            (cwd / "note.txt").write_text("probe\n"); git("add note.txt", cwd); git("commit -qm 'reviewer: probe'", cwd)  # a commit, moving HEAD
             git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
             (cwd / "probe.log").write_text("scratch\n")
             return 0, "VERDICT: APPROVE"
@@ -1003,10 +1005,10 @@ with tempfile.TemporaryDirectory() as d:
         return 0, ""
 
     f.agent = build_then_messy_review
-    f.land = lambda wt, branch, tid, builder: (at_land.append(git("status --porcelain", wt)), "")[1]
+    f.land = lambda wt, branch, tid, builder: (at_land.append((git("status --porcelain", wt), git("rev-parse HEAD", wt).strip(), (wt / "src.txt").read_text())), "")[1]
     f.cycle()
-    check("a reviewer's restored file and scratch do not reach land()",
-          at_land == [""], repr(at_land))
+    check("a reviewer's restored file, scratch and commit do not reach land()",
+          at_land == [("", f.reviewed[0], "new\n")], repr(at_land))
 
 # 23. `forge status` prints a 95% interval beside each version's merge rate. Agent pass rates move 2-6 points
 # between identical reruns (arXiv 2602.07150), so a bare 3/4 next to 10/16 reads as a difference it is not.
