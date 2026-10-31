@@ -498,12 +498,27 @@ class Forge:
             self.sh("git reset -q --hard origin/main")
             self.log(f"sync: local main conflicted with origin; reset to origin/main, local commits kept on {keep}")
 
+    @staticmethod
+    def touches(head: str) -> list[str]:
+        """Paths from a ticket's `touches:` line, each with one trailing slash so `src/a` and `src/a/` compare equal
+        and `src/a` is not a prefix of `src/ab`."""
+        m = re.search(r"^touches:\s*(.*)$", head, re.M)
+        return [p.strip().rstrip("/") + "/" for p in (m.group(1) if m else "").split(",") if p.strip()]
+
     def ready(self, t: Path) -> bool:
-        """A ticket can start when every ticket number in its `depends:` line is done."""
-        m = re.search(r"^depends:\s*(.*)$", t.read_text(errors="replace")[:600], re.M)
+        """A ticket can start when every ticket number in its `depends:` line is done and no in_progress ticket
+        declares a `touches:` path inside or above one of its own. Tickets without `touches:` are never held."""
+        head = t.read_text(errors="replace")[:600]
+        m = re.search(r"^depends:\s*(.*)$", head, re.M)
         for num in re.findall(r"\d{4}", m.group(1) if m else ""):
             dep = next(iter(self.tickets.glob(f"{num}-*.md")), None)
             if dep and not re.search(r"^status:\s*done", dep.read_text(errors="replace")[:600], re.M):
+                return False
+        mine = self.touches(head)
+        for p in self.tickets.glob("[!.]*.md") if mine else []:
+            other = p.read_text(errors="replace")[:600]
+            if re.search(r"^status:\s*in_progress", other, re.M) and any(
+                    a.startswith(b) or b.startswith(a) for a in mine for b in self.touches(other)):
                 return False
         return True
 

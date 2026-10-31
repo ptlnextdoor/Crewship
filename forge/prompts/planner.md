@@ -10,6 +10,7 @@ Then write at least {MIN_TICKETS} new tickets as `tickets/NNNN-short-slug.md`, n
 status: open
 difficulty: normal | hard
 depends: NNNN, NNNN        (ticket numbers that must be done first; omit the line when none)
+touches: path, path        (files or directories the builder will edit; a ticket waits while an in-progress ticket overlaps one of them, so keep paths narrow)
 ---
 # Title
 
@@ -28,7 +29,7 @@ What not to touch.
 
 Rules:
 - Each ticket fits one focused session (roughly under 400 changed lines). Split anything bigger.
-- Parallelism: tickets that can start now should own different crates or files (for example one in `reflex-serve`, one in `reflex-bench`, one in `tools/`, one in docs/tests), so lanes do not collide. Use `depends:` for real prerequisites instead of relying on order. Work ahead on later milestones (serve, vision preprocessing, training scripts, bench) whenever their inputs exist, rather than leaving lanes idle.
+- Parallelism: tickets that can start now should own different crates or files (for example one in `reflex-serve`, one in `reflex-bench`, one in `tools/`, one in docs/tests), so lanes do not collide. Declare them in `touches:`; forge holds a ticket whose `touches:` overlaps an in-progress ticket, so two tickets that must edit the same file should be one ticket or chained with `depends:`. Use `depends:` for real prerequisites instead of relying on order. Work ahead on later milestones (serve, vision preprocessing, training scripts, bench) whenever their inputs exist, rather than leaving lanes idle.
 - Order matters: the lowest-numbered open ticket runs first. Put prerequisites first.
 - A blocked ticket means the approach failed; read its forge notes and write a smaller or different ticket for the same goal rather than a copy.
 - Prefer tickets that move the roadmap's current milestone and leave a measurable result behind. The shortest path to a first closed-loop number beats a better architecture; get a policy driving, then improve it. Mark `difficulty: hard` for architecture, numerics, kernels, or anything a cheaper model already failed.
