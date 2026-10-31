@@ -823,13 +823,16 @@ class Forge:
                 # a review that stalls to its timeout without a verdict is a harness failure, not a finding:
                 # 4 of the first 22 reflex1 reviews did, and each cost the ticket a whole attempt. One rerun.
                 self.log(f"review of {tid} timed out with no verdict; rerunning once")
+                self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}` of {reviewed}**\n\n{review[-12000:]}")
             # The reviewer may restore files from origin/main to run the diff's tests against the old code (step 3).
             # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.
-            self.sh("git reset -q --hard HEAD && git clean -qfd", cwd=wt)
+            # Reset to `reviewed`, not HEAD: a review session that committed moved HEAD, and the verdict is for
+            # the tree the gate ran on (hivemill refuses a PASS whose sha is not the head it checked).
+            self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
             if not verdict or verdict[-1] != "APPROVE":
                 # The whole review, not its tail: a REJECT's PASS/FAIL ledger (which "Done when" line failed, on what
                 # input) sits at the head and the `Must change:` block at the end; the next attempt needs both. In
