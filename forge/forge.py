@@ -421,7 +421,7 @@ class Forge:
             ok |= more
         return sorted(f"{n} {v}" for n, v in head if (n, v) not in base and (n, v) not in ok)
 
-    SKIP_MARK = re.compile(r"^\+\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
+    SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
 
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
@@ -436,14 +436,19 @@ class Forge:
         # shortcut: "remove the old test" anywhere in the ticket waives the count check; moving a test between
         # files nets to zero and passes; delete one, add another nets to zero too, which step 3 still reads.
         drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
-        out, f, net = [], "", 0
+        out, f, net, gone = [], "", 0, 0
         for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
-            elif not skip_ok and self.SKIP_MARK.match(line):
-                out.append(f"{f}: adds {line.lstrip('+ ')[:24]}")
+            elif m := self.SKIP_MARK.match(line):
+                if m[1] == "-":
+                    gone += 1
+                elif not skip_ok:
+                    out.append(f"{f}: adds {line.lstrip('+ ')[:24]}")
             elif m := self.TEST_MARK.match(line):
                 net += 1 if m[1] == "+" else -1
+        if len(out) <= gone:
+            out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
         if net < 0 and not drop_ok:
             out.append(f"{-net} fewer test functions than the branch point")
         return out
