@@ -925,7 +925,7 @@ class Forge:
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
-        self.agent("steward", self.prompt("steward", STATE=json.dumps(self.state)[-6000:]), self.repo, timeout_min=30)
+        self.agent("steward", self.prompt("steward", STATE=self.status_text()), self.repo, timeout_min=30)
         self.state["steward_cycle"] = self.state["cycle"]
         self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
         self.discard_strays("steward")
@@ -1071,23 +1071,29 @@ class Forge:
             self.save()
 
     def status(self) -> None:
+        print(self.status_text())
+
+    def status_text(self) -> str:
+        """Every lane's totals, what is building, the last attempts and the per-version, per-model and
+        per-guard tallies: the `status` command, and the loop state the steward reads (`self.state` is one
+        lane's file; reflex1's lane 1 held 31 of the loop's 122 attempts, the steward never saw the other 91)."""
         states = self.all_states()
-        print(f"{self.cfg['name']}: {self.lanes} lane(s) · merged {sum(s.get('merged', 0) for s in states)} · failed {sum(s.get('failed', 0) for s in states)}")
+        out = [f"{self.cfg['name']}: {self.lanes} lane(s) · merged {sum(s.get('merged', 0) for s in states)} · failed {sum(s.get('failed', 0) for s in states)}"]
         busy = []
         for p in sorted(self.tickets.glob("[!.]*.md")):
             m = re.search(r"^status:\s*in_progress\s+lane=(\d+)", p.read_text(errors="replace")[:600], re.M)
             if m:
                 busy.append(f"{p.stem} (lane {m.group(1)})")
-        print("building:", ", ".join(busy) or "-")
-        print("open:", ", ".join(p.stem for p in self.open_tickets()) or "-")
+        out.append(f"building: {', '.join(busy) or '-'}")
+        out.append(f"open: {', '.join(p.stem for p in self.open_tickets()) or '-'}")
         for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"])[-8:]:
-            print(f"  {h['at']} {h['ticket']}: {h['result']}")
+            out.append(f"  {h['at']} {h['ticket']}: {h['result']}")
         by_version: dict[str, list[int]] = {}
         for h in (h for s in states for h in s.get("history", [])):
             t = by_version.setdefault(f"{h.get('version', 'pre')} {h.get('harness', 'pre')}", [0, 0])
             t[0] += h["result"] == "merged"
             t[1] += 1
-        print(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}):", ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
+        out.append(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}): " + ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
         by_model: dict[str, list[int]] = {}
         for h in (h for s in states for h in s.get("history", [])):
             t = by_model.setdefault(h.get("model") or "pre", [0, 0, 0, 0])  # merged, attempts, secs of every attempt carrying it, merged among those
@@ -1098,7 +1104,7 @@ class Forge:
                 t[3] += h["result"] == "merged"
         # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
         # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
-        print("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts:", ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
+        out.append("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts: " + ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
         # shortcut: a cause is keyed by its first three words ("builder produced no", "reviewer did not", "merge
         # conflict landing"), which every fail() message in this file keeps distinct; split into a `cause` argument
         # if two messages ever share a prefix. Entries written before `why` existed are not counted.
@@ -1106,9 +1112,10 @@ class Forge:
         for h in (h for s in states for h in s.get("history", []) if h.get("why")):
             k = " ".join(h["why"].split()[:3])
             by_why[k] = by_why.get(k, 0) + 1
-        print("failed attempts per cause, the guard that ended them:", ", ".join(f"{k} {n}" for k, n in sorted(by_why.items(), key=lambda kv: -kv[1])) or "-")
+        out.append("failed attempts per cause, the guard that ended them: " + (", ".join(f"{k} {n}" for k, n in sorted(by_why.items(), key=lambda kv: -kv[1])) or "-"))
         if self.log_file.exists():
-            print("".join(self.log_file.read_text().splitlines(True)[-8:]))
+            out.append("".join(self.log_file.read_text().splitlines(True)[-8:]))
+        return "\n".join(out)
 
 
 def main() -> None:

@@ -1,6 +1,6 @@
 You are the steward for {PROJECT}. The build loop runs unattended; the owner reads `PROGRESS.md` to see what happened without asking anyone. Keep it true and short. You are on `main` in the repo root.
 
-Loop state (cycles, merges, failures):
+Loop state, every lane (totals, what is building, the last attempts, merged/attempts per forge version and per builder model, failed attempts per guard, the log tail):
 {STATE}
 
 Do:
