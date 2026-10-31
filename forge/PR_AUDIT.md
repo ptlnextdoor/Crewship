@@ -2,6 +2,54 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #105 · 2026-10-31T01:16:18Z · REJECT · risk low · gate pass · closed: rejected
+
+Verdict: REJECT
+Risk: low
+
+## PR #105 forge: no sub-agents at the harness (--tools= minus task)
+What it changes: adds `TOOLS = "read,bash,edit,write,grep,glob,eval,wait,todo,web_search"` (forge.py:40-43) and passes `--tools={TOOLS}` in every `_agent_once` argv (forge.py:261), meant to stop every planner, builder, reviewer and steward session from spawning sub-agents. Adds README safeguard row 89 saying "no session can spawn sub-agents".
+Findings:
+- high forge/forge.py:43,261, forge/README.md:89 The control does not hold. Sessions can still spawn sub-agents through `eval`, which the allowlist keeps.
+  - How I checked: real omp 18.12.6, the PR's exact argv (`-p --no-session --model=anthropic/claude-fable-5-1 --thinking=off --tools=<TOOLS> --approval-mode=yolo @file`), in /tmp.
+  - Result: `task` is gone from the top-level tools, but eval's Python namespace still has `callable(agent)` and `callable(workpool)` True. Eval's tool description still tells the model "For 2+ independent items, use a named `workpool()`", and `xd://eval/agents` ("background subagents, DAG waves") is still mounted. A cell `h = agent("Reply with exactly the word PONG ..."); print(h.wait(120))` printed `RESULT: "PONG"`, so a sub-agent ran.
+  - Source: cli.js gives the eval tool `spawns: VD(task.maxRecursionDepth, taskDepth) ? getSessionSpawns() ?? "*" : false`. That depends on recursion depth, not on which tools are enabled. The enabled-tools gate (`getToolForEvalBridge`) covers only `tool.task(...)`, not `agent()`/`workpool()`.
+  - Effect: README:89 puts a safeguard in the table that the code does not provide. Later audits are told to trace "what now carries it alone" against that table. The PR body also says that if this lands, PR #3 (the prompt-sentence version) is redundant. Closing #3 on that premise would remove the only layer against eval's own `workpool()` nudge.
+- medium forge/forge.py:43,261 The hard-coded allowlist ties every session's startup to omp's current tool names, and a mismatch fails in a way that burns the queue.
+  - Test: `omp -p --tools=read,bash,nosuchtool ...` exits rc=2 with `Error: Unknown tool in --tools: nosuchtool.` before any model call.
+  - Trace when that happens: `_agent_once` returns rc 2. `agent()`'s quota regex (`usage_limit_reached|usage limit has been reached|rate_limit|quota`) does not match, so there is no fallback and no QuotaExhausted. `cycle()` sees no diff and calls `fail(ticket, "builder produced no diff (rc=2)")`, which charges an attempt. At `max_attempts` (3) the ticket is `blocked`.
+  - Scale: each such cycle takes seconds and raises no exception, so the circuit-breaker backoff never starts. Four lanes turn every open ticket `blocked` within minutes. The planner also exits 2, so nothing refills the queue.
+  - Trigger: an omp upgrade that renames or drops any of the 10 names. forge.py:126-128 says upgrades swap the `~/.local/bin/omp` symlink under running lanes. omp has renamed tools before: 18.12.6's own `--help` still lists `python`, `notebook` and `browser` as tools, while its registry (printed by the error above) has `eval` and none of those.
+  - Before this PR, a renamed tool could not stop a session from starting.
+- low forge/forge.py:40, forge/README.md:89 "omp's default set minus task" is inaccurate.
+  - Default `omp -p` on this box also mounts `xd://lsp`, `xd://ast_edit`, `xd://debug`, `xd://memory_edit`, `xd://retain`, `xd://recall` and `xd://reflect`. With the PR's flag none of them are present: I listed both sessions side by side, and omp's error output names all seven as built-in tools.
+  - `rust-analyzer` is installed at `~/.cargo/bin`, so builders on reflex1 lose LSP without anyone deciding to remove it.
+  - The PR body's smoke compared only top-level tool names.
+- info resubmission path, verified on omp 18.12.6: `--config=<overlay>` with `task:\n  maxRecursionDepth: 0\n`.
+  - `task` drops out of the top-level tools and `xd://eval/agents` is no longer mounted.
+  - `agent()` raises `RuntimeError: Cannot spawn another agent at task depth 0; maximum depth is 0.`
+  - `xd://lsp` and `xd://ast_edit` stay.
+  - It names no tool, so a tool rename cannot stop startup. If omp renames the setting, behaviour falls back to today's, not to the queue burn above.
+- info Traced clean:
+  - `TOOLS` is a constant, so no ticket text reaches the argv.
+  - No state is shared between lanes.
+  - Untouched: prompts, gate, `touched_protected`/protected paths, claim, `recover()`, `discard_strays()`, timeouts, the process-group kill, PR create/merge.
+  - No GPU or quota spend is added.
+  - I applied the diff to a `git archive` copy in /tmp (nothing checked out here): `python3 forge/selftest.py` rc=0, all checks pass.
+- info Deletions: the only `-` line is the argv line at forge.py:256-257, rewritten. Nothing is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+- info Siblings: I scanned the forge.py/README.md hunks of every open PR on `forge` for `_agent_once`, `cmd = [OMP`, `--tools`, `TOOLS`, sub-agent, `--approval-mode` and `--no-session`. None changes the omp argv or the tool set, so none contradicts or duplicates this PR.
+  - #47 and #39 stub `_agent_once` in selftest; the argv change does not affect those stubs.
+  - #7 prepends a clock paragraph inside `_agent_once`. Compatible.
+  - #20 sends reviewer_alt to `xai-oauth/grok-build` through the same `_agent_once`, so it gets the same flag. Compatible.
+  - The other README siblings append rows to the same table. That is a textual conflict only.
+  - #3 (builder.md, not a shared file) has the same intent as a prompt rule. See the first finding on the "redundant" claim.
+- nit forge/forge.py:40-42 The comment repeats README row 89's citations. It also stretches one repetition study (arXiv 2608.23651) to "a 'do not' sentence in a prompt is measured not to move what a harness setting removes outright".
+Change needed: none (REJECT). A resubmission should:
+- Drop `TOOLS` and the `--tools` argv element.
+- Ship `forge/omp.yml` containing `task:\n  maxRecursionDepth: 0\n`, and pass `f"--config={Path(__file__).with_name('omp.yml')}"` in the `_agent_once` cmd.
+- Word README row 89 as "the `task` tool and eval's `agent()`/`workpool()` are disabled (`task.maxRecursionDepth: 0`); a session can still start `omp` itself through bash".
+
+
 ## PR #104 · 2026-10-31T00:13:57Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
