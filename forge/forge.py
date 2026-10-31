@@ -37,6 +37,10 @@ import tomllib
 from pathlib import Path
 
 OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
+# omp's print-mode default set minus `task`: no role may spawn sub-agents. Sub-agents on bounded
+# tickets cost 1.4-3.3x tokens and lost resolution in matched runs (arXiv 2610.10263), and a "do
+# not" sentence in a prompt is measured not to move what a harness setting removes outright.
+TOOLS = "read,bash,edit,write,grep,glob,eval,wait,todo,web_search"
 UTC = dt.timezone.utc
 
 
@@ -254,7 +258,7 @@ class Forge:
         pfile = out.with_suffix(".prompt")
         pfile.write_text(prompt)
         cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
-               "--approval-mode=yolo", f"@{pfile}"]
+               f"--tools={TOOLS}", "--approval-mode=yolo", f"@{pfile}"]
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:
             # New session so a timeout kills the whole tree (cargo, rustc, test binaries), not just omp.
