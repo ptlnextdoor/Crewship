@@ -2,6 +2,66 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #106 · 2026-10-31T02:19:02Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #106 forge: no sub-agents via omp.yml (task.maxRecursionDepth: 0) on every session
+What it changes: adds `forge/omp.yml` (`task:\n  maxRecursionDepth: 0`) and one argv element, `--config=<absolute path of forge/omp.yml>`, to every `_agent_once` omp call (forge.py:45,263). Builder, reviewer, planner and steward sessions therefore lose the `task` tool and eval's `agent()`/`workpool()`. README gets a safeguard row (89) and a Files row (100).
+Findings:
+- info forge/forge.py:45,263, forge/omp.yml: the control holds on omp 18.12.6. I traced it in the source; I did not repeat the live tool-list run.
+  - Tool list: cli.js filters `task` with `if(w==="task")return VD(task.maxRecursionDepth, taskDepth??0)`, where `VD(e,t)=e<0||t<e`. VD(0,0) is false, so `task` is dropped at the top level.
+  - Eval: eval gets `spawns: VD(...) ? ... : false`. Both `agent()` and `workpool({op:"create"})` go through `sne()`, then the `Qac()` preflight, which throws `Cannot spawn another agent at task depth 0; maximum depth is 0.` That is the string the PR body quotes. #105's audit ran this same overlay live on 18.12.6: agent() raised, and `xd://lsp` and `xd://ast_edit` stayed.
+  - Precedence: settings merge global → project → configOverlay → overrides (`#He`), deep per key (`#Qe`).
+    - A worktree `.omp/config.yml` cannot re-enable spawning. HARNESS_CONFIG already blocks a builder from adding one.
+    - The global `task.maxConcurrency: 128` in ~/.omp/agent/config.yml is kept.
+  - Argv:
+    - Run with a bogus model, the PR's argv fails on `Model "bogusvendor/none" not found`, not on the overlay, so the path resolves and parses.
+    - `OMP_CONFIG` is a constant and an absolute path. `__main__.__file__` is absolute on Python ≥3.9, and tomllib needs ≥3.11. systemd runs `%h/Dev/Crewship/forge/forge.py`, and lanes start with `Path(__file__).resolve()`.
+    - The argv is a list with no shell, and no ticket text reaches it.
+- low forge/forge.py:263 A missing or malformed `forge/omp.yml` stops every session at startup. This is the same queue-burn path #105's audit traced for `--tools`.
+  - Checked: `--config=/nonexistent/omp.yml` exits rc=1 with `Config overlay not found`. An overlay containing `task: [` exits rc=1 with `Failed to parse config overlay`. Both stop before any model call.
+  - Trace when that happens:
+    - stderr matches none of the quota patterns at forge.py:231, so there is no fallback and no QuotaExhausted.
+    - `cycle()` calls `fail("builder produced no diff (rc=1)")`, which charges an attempt. At max_attempts 3 the ticket is `blocked`.
+    - The planner also exits 1, so nothing refills the queue.
+    - No exception is raised, so the circuit breaker never backs off.
+  - The trigger is narrower than #105's.
+    - The file ships in the same commit as the argv.
+    - An unknown key under `task:` is ignored. I checked `task: {noSuchSetting: 0}` and it started normally. So the PR body's "falls back to today's" holds if the setting is renamed.
+  - What it takes instead, any of:
+    - a later Crewship commit that breaks or deletes the file;
+    - an omp release that drops `--config` (`--nosuchflag` exits rc=1 `unknown flag`, the same as any argv flag today);
+    - a yolo session writing `~/Dev/Crewship/forge/omp.yml`. That path is outside every worktree, so touched_protected never sees it. `sne()` re-reads settings from disk before each spawn, so such an edit would also re-enable spawning for every lane. This path is pre-existing: the same session can rewrite forge.py or prompts/*.md there today.
+  - Not required in this PR. A selftest line that loads omp.yml and asserts `maxRecursionDepth == 0` would catch the bad-commit case before reviewctl lands it.
+- low forge/forge.py:127 (`version`): omp.yml is now an input to every session but is not part of the forge version stamp.
+  - The stamp hashes forge.py plus the four prompts, and selftest.py:1011 pins five segments.
+  - This PR's own forge.py edit moves the stamp, so this landing is traceable.
+  - A later omp.yml-only change moves nothing. Neither `status`'s per-version tally nor the PR body can then separate attempts before and after it, which is the gap README row 86 exists to close.
+  - Follow-up, not a blocker: add `OMP_CONFIG` to `files`, update the selftest count, and update row 86's `forge.py.planner.builder.reviewer.steward`.
+- nit forge/README.md:100 The Files row says "config overlay every session runs with". Scout (`systemd/forge-scout.service:9`) and reviewctl's audit and fix sessions (`reviewctl.py:89,155`) start omp without it. Row 89 limits the claim to builder, reviewer, planner and steward; row 100 should say "every forge.py role session".
+- nit forge/forge.py:40-44 The comment repeats row 89's citations (the 84% trace, Cloudflare's 57-76%). Only the last sentence (a setting, not an allowlist) explains something the code cannot show.
+- info Deletions: the only `-` line is base forge.py:257, the argv, rewritten to add one element. Nothing is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+- info Untouched:
+  - prompts, gate.sh handling, `touched_protected` and protected paths, the claim race, `recover()`, `discard_strays()`, PR create and merge;
+  - the timeout and process-group kill: omp is still the session leader, and sub-agents ran in-process anyway.
+  - State: the overlay is read-only shared state; no lane writes it.
+  - Spend: the change removes a spend path and adds no GPU or quota use. No prompt or log grows.
+- info Reviewer and gate: no reviewer.md step (1-7) uses sub-agents; every step is an in-session command, so nothing the reviewer is told to do is removed. The 264 kept session logs under ~/.local/state/forge/reflex1 mention no sub-agent, `agent://` or `workpool` in their final text. This is weak evidence, because `--no-session` keeps only the final text.
+- info Evidence:
+  - I extracted a `git archive` of the PR head (5a5d330c) into /tmp: `py_compile` passes, and `python3 forge/selftest.py` exits rc=0 with all checks passing.
+  - Cloudflare's post (blog.cloudflare.com/obsessive-inference-optimization) states the 57%-76% figure as cited. I did not check the X trace (84%).
+  - GitHub reports the PR as MERGEABLE.
+- info Siblings: all are open on `forge`. I searched the forge.py and README.md hunks of #99 #86 #85 #84 #83 #79 #48 #47 #44 #42 #40 #39 #31 #28 #25 #23 #20 #19 #16 #9 #8 #7 #6 #5 #3 #1 for `_agent_once`, the OMP argv, `--config`, sub-agent and workpool.
+  - #7 prepends a session-clock paragraph inside `_agent_once`. Different hunk, compatible.
+  - #39 and #47 stub `_agent_once` in selftest. The argv change does not reach those stubs.
+  - #20 routes reviewer_alt through the same `_agent_once`, so it gets the overlay too.
+  - The README siblings append rows to the same safeguard table. That is a textual conflict only.
+  - #3 touches only builder.md, which this PR does not. It adds "A read-only sub-agent that searches the repo is fine". Once #106 lands, that sentence names a capability the builder no longer has, which invites the wasted calls this PR cites. #3 is the side to change: drop that sentence or close the PR. It does not lower this verdict.
+Change needed: none.
+
+
 ## PR #105 · 2026-10-31T01:16:18Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
