@@ -216,13 +216,21 @@ with tempfile.TemporaryDirectory() as d:
         (repo / n).write_text("S1: ?\n")
     (repo / "main.rs").write_text("fn main() {}\n")
     git("add -A", repo); git("commit -qm score", repo); git("push -q origin main", repo)
+    # The steward's `{STATE}` is every lane's tally (the `status` text), not this lane's state.json: reflex1's
+    # lane 1 held 31 of the loop's 122 attempts, and the other 91 never reached the turn that writes "what failed".
+    (Path(d) / "s/lane2").mkdir(parents=True)
+    (Path(d) / "s/lane2/state.json").write_text(json.dumps({"cycle": 3, "merged": 0, "failed": 1, "history": [
+        {"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-31T00:00:00Z", "why": "reviewer did not approve: x"}]}))
+    seen_state: list[str] = []
     def steward_agent(role, prompt, cwd, timeout_min=0):
+        seen_state.append(prompt)
         (cwd / "SCORE.md").write_text("S1: 0.42 (3 seeds, `cargo run --release -- bench`, 2026-10-24)\n")
         (cwd / "main.rs").write_text("fn main() { panic!() }\n")
         return 0, ""
     f.agent = steward_agent
     f.steward()
     check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
+    check("steward sees every lane's attempts and the per-guard tally", "0099-other: failed" in seen_state[0] and "reviewer did not 1" in seen_state[0], seen_state[0][-600:])
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")
