@@ -2,6 +2,40 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #110 · 2026-10-31T08:30:04Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #110 forge: reset the worktree to the reviewed commit after the review
+What it changes: `cycle()` resets the worktree to `reviewed` (the sha from `git rev-parse HEAD` at forge.py:802, taken after the gate and repair and before the reviewer runs) after the review, where it used to reset to `HEAD`. It does the same reset before the one rerun after a timeout with no verdict. Selftest 22's reviewer stub now commits its restored file, and the check asserts a clean status, HEAD == reviewed and `src.txt == "new"`. The README row gains the matching words.
+Findings:
+- ok forge/forge.py:835 Traced end to end. Between :802 and :835 only reviewer sessions run (:820, :826-827). Builder commits come before :802 (:757, :785), and `land()` runs after (:842). So the reset throws away no legitimate commit, and a commit the reviewer made on the branch is gone before `rebase_onto_main`, `touched_protected`, `gate`, push and merge. `reviewed` is hex that git produced, so ticket text cannot inject into the command. If rev-parse came back empty, the command becomes `git reset --hard`, which is the old behaviour. Checked: the PR's full selftest passes (rc 0). The PR's selftest run against origin/forge's forge.py fails with `[('', <sha>, 'old\n')]`, meaning the reviewer's committed restore of the old code reached `land()`. The PR body's evidence holds.
+- ok forge/forge.py:826 The new reset before the rerun. The first session was killed at its timeout (`killpg` at :274-277) and may have left step 3's old-code source restored, so the rerun used to probe old code. If the reset fails (for example a stale index.lock left by a killed git), `sh()` does not raise and the rerun goes ahead on the old tree, as before. No new exception path, nothing left `in_progress`, no quota or GPU spend. No test runs this line; it repeats the :835 command.
+- medium forge/selftest.py:997-1011 A test layer is removed and the PR body does not name it. The old check 22 used a reviewer that left the restored file uncommitted in the index (`M  src.txt`), which is the case its own comment describes ("a reviewer that forgets `git checkout HEAD -- .`"). The PR has the stub commit that restore, so no test now runs an uncommitted restore. Only the `--hard` in forge.py:835 handles it, with no test behind it. Shown with a mutant: `git checkout -q -B {branch} {reviewed} && git clean -qfd` at :835 (a plausible refactor to pin the branch ref) passes the PR's full selftest (rc 0) and fails origin/forge's check 22 with `['M  src.txt\n']`. That is the restored old file reaching `land()`, where a conflict session's `git add -A` would commit it.
+- low forge/forge.py:835 Gap that predates this PR, not a regression. The reset moves the checked-out HEAD, not `{branch}`. A reviewer that commits and then runs `git checkout --detach` (or switches branch) leaves its commit on `{branch}`. `land()` gates HEAD (:696) but pushes `{branch}` (:700) and merges `{branch}` (`pr_merge` :701, or the local `git merge {branch}` at :704). Probe on the PR's code: HEAD == reviewed is True, `{branch}` != reviewed, and `{branch}:src.txt == "old\n"`. The old code behaves the same. `git checkout -q -f -B {branch} {reviewed} && git clean -qfd` closes it: in the probe the branch ref equals reviewed, and it passes the selftest edit below. Suggested as a follow-up, not required. README:80's new wording ("never reaches the landing rebase") is literally true, because the rebase acts on HEAD. The PR body's "The verdict is for one sha" claims more than that.
+- info forge/forge.py:802/835 `reviewed` now decides what lands. Any later code that commits between :802 and :835 must refresh it, or the reset reverts that commit. Sibling #6 (a repair round after a reviewer REJECT, on a base older than the post-review reset) does exactly this: a builder repair commit inside the review loop, with `reviewed` left unchanged. Rebased onto this PR, the reset would drop the repair and land the tree that was rejected. #6 is the side that should change: refresh `reviewed`/`self.reviewed` after its repair commit.
+- info siblings These are merge conflicts, not contradictions:
+  - #42 rewrites the rerun block (`if not verdict:` and a new log line) right next to the added :826 line. The two are compatible, and #42 should keep the reset when it rebases.
+  - #83 and #84 each edit the same `f.land = lambda ...` line in selftest 22 (adding `trailers` and `gated=""`). Whichever lands second rebases.
+  - #84 adds `gated = git rev-parse HEAD` at the same point where `reviewed` is taken, which duplicates `reviewed`. #84 should reuse `reviewed`.
+  - No sibling touches README row 80.
+- info slop The new comment at :832-834 is accurate. The hivemill parenthetical is a citation, not a claim about this code. The PR body's reflex1 figure ("0 of 112 review sessions ran `git commit`") is not checked here: session logs keep omp's stdout (:286), not a record of tool calls.
+- none No prompt files changed. The README safeguard row only gains words (checked with word-diff). The selftest comment at :975-979 is extended, not cut. Nothing weakens the gate, the reviewer or the protected paths.
+Change needed (only for MERGE WITH CHANGE): in forge/selftest.py `build_then_messy_review`, replace lines 999-1000
+
+```
+            git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
+            git("commit -qm 'reviewer: restored for the old-code run'", cwd)  # and committed, moving HEAD
+```
+with
+```
+            (cwd / "note.txt").write_text("probe\n"); git("add note.txt", cwd); git("commit -qm 'reviewer: probe'", cwd)  # a commit, moving HEAD
+            git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
+```
+Keep the check unchanged. One scenario then covers both a commit by the reviewer (HEAD must equal reviewed) and an uncommitted restore (status must be clean and src.txt "new"). Checked: it passes on the PR's forge.py; it fails on origin/forge's forge.py (HEAD != reviewed); it fails on the `checkout -B` mutant (`M  src.txt`, `old`).
+
+
 ## PR #109 · 2026-10-31T07:27:39Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
