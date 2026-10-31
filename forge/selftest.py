@@ -996,8 +996,8 @@ with tempfile.TemporaryDirectory() as d:
 
     def build_then_messy_review(role, prompt, cwd, timeout_min=None):
         if role == "reviewer":
+            (cwd / "note.txt").write_text("probe\n"); git("add note.txt", cwd); git("commit -qm 'reviewer: probe'", cwd)  # a commit, moving HEAD
             git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
-            git("commit -qm 'reviewer: restored for the old-code run'", cwd)  # and committed, moving HEAD
             (cwd / "probe.log").write_text("scratch\n")
             return 0, "VERDICT: APPROVE"
         (cwd / "src.txt").write_text("new\n")
