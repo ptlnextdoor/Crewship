@@ -2,6 +2,76 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #109 · 2026-10-31T07:27:39Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #109 forge: refuse ignored, skipped or dropped tests before the gate
+What it changes: adds `Forge.test_tampering()` (forge.py:424-449). It scans `git diff -U0 origin/main...HEAD -- '*.rs' '*.py'` for added `#[ignore]`/`@pytest.mark.skip`/`pytest.skip(`/`@unittest.skip` lines and for a net loss of `#[test]`/`def test_` lines. `cycle()` calls it after `unrequested_deps()` and before both the builder's and the repair's gate runs (:767, :789) and fails the attempt on a finding. The PR also adds README safeguard row 31 and selftest 2d. All 50 lines are additions.
+
+Findings:
+- info forge/forge.py:767,789 It does not weaken the gate, the reviewer or the protected paths.
+  - Both calls sit after `touched_protected(wt, "origin/main")`, which fetches origin, so `origin/main...HEAD` is fresh and is the branch's own work (merge-base semantics hold after the builder merges main).
+  - The shell command is a constant; no ticket text reaches a shell.
+  - On a finding it returns `self.fail()` inside the existing `try`. The PR is closed, the ticket goes to retry/blocked and the `finally` removes the worktree and branch. This is the same path as the dependency check.
+  - A `TimeoutExpired` from `sh()` goes to the existing except/finally handlers. A git error returns empty stdout and fails open: no finding, and the gate and review still run.
+  - Lanes share no state: each read is a git diff in the lane's own worktree.
+  - Output is bounded: the marker text is cut at 24 characters, `fail()` keeps `why[-7000:]`, `pr_close` keeps `[-6000:]` and the log keeps the head's first 200 characters.
+  - The reviewer prompt is unchanged and is not told that forge already checks this, so step 3 keeps its full scope.
+  - The new fail messages tell the builder to fix the code. Nothing in them reads as permission to edit `tickets/` or the gate.
+- info forge/README.md, forge/prompts/*.md, forge/selftest.py Nothing is deleted. `git diff --numstat` against the base gives README +1/-0, forge.py +33/-0, selftest.py +16/-0. The PR retires no layer.
+- low forge/forge.py:424,443-444 False positive: a test that is already ignored refuses the attempt when it moves or is re-indented.
+  - `SKIP_MARK` matches only `+` lines. Unlike `TEST_MARK`, it is never netted against `-` lines.
+  - I probed `test_tampering` from the PR's forge.py against throwaway repos in /tmp:
+    - moving an `#[ignore]`d test from `src/a.rs` to `src/b.rs` returned `['src/b.rs: adds #[ignore]']`;
+    - wrapping the same tests in `mod t { }` returned `['src/a.rs: adds #[ignore]']`.
+  - Selftest 2d is named "a test moved to another file is no finding", and README row 31 says "a test moved between files nets to zero". Both hold only for tests that carry no marker.
+  - This is latent on reflex1: `git grep '#\[ignore'` and pytest skip markers on origin/main return 0 hits. Any project with ignored tests, or a reflex1 ticket that later adds one with a waiver, loses a builder attempt on a pure refactor.
+- low forge/forge.py:438 The `drop_ok` waiver is a line regex, so its reading of the ticket can be inverted or missed.
+  - "Do not delete tests." in `## Out of scope` waives the count check: my probe returned `[]` for a diff that drops `test_b`.
+  - "Remove `test_b`" does not waive it: `\btests?\b` fails before `_`. The probe returned `['1 fewer test functions than the branch point']`.
+  - Measured exposure is small. Over reflex1's 140 tickets (text before `## forge`), the waiver matches exactly one, 0036 ("delete `reject_box` and its test"), which really asks for a deletion. The marker waiver matches none.
+- low PR body ("the planner names the removal on retry") This claim does not hold in the code.
+  - planner.md:33 tells the planner to rewrite only a *blocked* ticket, as a new ticket. A `retry` ticket is claimed again with the same text, and `tickets/` is protected from the builder.
+  - So a removal ticket worded without the waiver fails before the gate on each attempt until the builder keeps the test count. Keeping the count is an incentive to leave a dead or placeholder test behind; reviewer step 3 ("tests that assert nothing") is what catches that.
+  - The claim appears in the PR body only, not in README or code.
+- info forge/forge.py:424-446 Bypasses that the mechanical copy does not see; reviewer step 3 still carries all of them.
+  - `#[cfg_attr(..., ignore)]`, `pytestmark = pytest.mark.skip`, an early `return` in a test, and deleting one test while adding a trivial one all returned `[]` in my probes.
+  - README row 31 says "the reviewer's step 3 reads the rest", which matches. The `shortcut:` comment names the delete/add case.
+- low forge/README.md:133, forge/forge.py:913 (record docstring) The new guard is missing from the list of guards whose zero count means the layer in front held.
+  - The PR's own measurement says this guard will read zero: reflex1 has 0 added markers, 0 removed `#[test]` and 0 removed `def test_` in 627 commits. I verified this with `git log -p -U0`.
+  - Yet `diff skips or` and `the repair skipped` are not on that list. Those two three-word keys are distinct from every other `fail()` cause.
+  - This is documentation, not behavior.
+- info Verification:
+  - I ran the full `selftest.py` from a `git archive` export of the PR head: "all checks passed", including the three 2d checks.
+  - I checked the reflex1 history claims with `git log origin/main -p -U0` (0/0/0) and per-commit and per-landing-merge net test counts (0 negative).
+- info Siblings: none duplicates or contradicts this check, and this PR is not the side that should change.
+  - #6 (stale, base around 2026-10-23) adds a repair path after a reviewer REJECT that runs `gate()` without `touched_protected(origin/main)`, `unrequested_deps()` or `test_tampering()`. If #6 is revived, #6 should add these pre-gate checks.
+  - #8 rewrites the `gate after repair` comment line next to this PR's insertion at :789. #99 rewrites the repair prompt at base :749. Both are textual neighbours only, with no semantic overlap.
+
+Change needed:
+In forge/forge.py, net the skip markers the same way the test count is netted:
+- Line 424 becomes `    SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")`.
+- Replace lines 439-446 with:
+```
+        out, f, net, gone = [], "", 0, 0
+        for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd).stdout.splitlines():
+            if line.startswith("+++ "):
+                f = line[6:]
+            elif m := self.SKIP_MARK.match(line):
+                if m[1] == "-":
+                    gone += 1
+                elif not skip_ok:
+                    out.append(f"{f}: adds {line.lstrip('+ ')[:24]}")
+            elif m := self.TEST_MARK.match(line):
+                net += 1 if m[1] == "+" else -1
+        if len(out) <= gone:
+            out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
+```
+I applied this to a /tmp copy. The moved and re-indented ignored test both returned `[]`. A fresh `#[ignore]` was still refused. The full selftest still passed.
+
+
 ## PR #108 · 2026-10-31T05:23:55Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
