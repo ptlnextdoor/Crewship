@@ -2,6 +2,65 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #107 · 2026-10-31T04:24:08Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #107 forge: status tallies failed attempts by the guard that ended them
+What it changes: `fail()` passes its log head (the first line of the cause, capped at 200 chars and computed before the `PR:` prefix is added) to `record()`. `record()` stores it as `why` on each history entry (`""` on merged entries). `status` prints a new line that counts failed entries by the first three words of `why`. The PR also adds a README paragraph under "Watch and steer", a docstring paragraph, and two selftest checks (4i, 21).
+Findings:
+- medium forge/README.md:132, forge/forge.py:880-882 The new text turns the tally into a rule for deleting any `fail()` guard.
+  - README: "Every deterministic check in `cycle()` and `land()` is a guard added against a failure seen once; ... so a guard is retired or tightened on a number ... (Cursor's harness team ... opens a PR to delete one that stopped)".
+  - Docstring: "a guard that stops firing is the one to remove".
+  - The keys this covers include the gate (`gate still failing` :762, `gate failed after` :666), the cross-vendor reviewer (`reviewer did not` :800), the protected-path checks (`diff edits protected` :736, `the repair edited` :755, `resolving the conflict` :653) and the dependency checks (`diff adds packages` :739, `the repair added` :758).
+  - None of these is a shim added after one failure. The README safeguard rows for the protected gate, dependencies, the post-sync re-check and the pre-gate repair check (README:28, :29, :33, :68), plus the Sources line ("external gate the agent cannot edit"), make the oracle lock a founding rule.
+  - A protected-path guard reads zero because builder.md:11 ("A diff that touches them is rejected automatically") holds in front of it. That is the deletion-behind-a-working-layer case that README:87 and the audit prompt exist for.
+  - The cited source does not say this. I read the relayed Katz talk (x.com/SungJinIn2/status/2116348861400916103). It applies shim cleanup to "temporary hacks" that patch model behaviour, and it names permissions and "guardrails so no one wakes up to a catastrophic action" as infrastructure models "cannot natively absorb".
+  - forge.py and README.md are what the unattended scout reads before it writes forge PRs (prompts/scout.md:3-5). The sentence would be a standing citation for a PR that drops a `touched_protected` call because status shows zero firings for it.
+  - No runtime effect today. This is the one change needed.
+- low forge/forge.py:882 "before this, only the ticket notes held it" is false on this base. Since the 4i change, `fail()` logs the cause (:870 `RETRY <tid>: <head>`).
+  - The live reflex1 forge.log has 37 RETRY/BLOCKED lines: 34 have pre-4i `PR: https://` heads and 3 carry causes (2 `builder produced no`, 1 `reviewer did not`).
+  - The tally adds a bounded per-window view across lanes; it is not the only record. Fixed by the same docstring edit below.
+- info forge/forge.py:858,869 I traced `why` end to end.
+  - Its value is `head = why.splitlines()[0][:200]`, computed at :858 before `pr_close` and before the PR prefix, so it holds no PR url (4i asserts this).
+  - Every caller's first line is forge's fixed text. The only model-controlled part is the repr'd `bad` file list (:653/:736/:755), which is JSON-escaped in state.json.
+  - Readers: `status` prints only the three-word key. `board()` (:172-173) reads only at/ticket/result.
+  - The steward gets `json.dumps(self.state)[-6000:]` (:885), so it now also sees `why` heads. They are a subset of the ticket notes it already reads (steward.md:7).
+  - No shell, and no f-string command.
+- info Growth is bounded and nothing is shared. `why` is at most 200 chars, history stays `[-200:]` per lane, and each lane writes only its own state.json through `save()`.
+  - A failed entry grows 35-174 bytes, a merged one 11 bytes (`"why": ""`). The steward's fixed 6000-char window therefore holds a few fewer entries. Live entries are 101-104 bytes today, all from before `version` existed.
+- info No new exception or control path. `record()` adds one dict key after the retry/blocked push.
+  - Claim, worktree cleanup and `discard_strays()` are unchanged.
+  - `recover()` is unchanged and records nothing, so interrupted cycles and cycle errors stay out of this tally, as they stay out of `failed`.
+  - Also untouched: the gate, `touched_protected`, every prompt, reviewer selection and verdict parsing, PR create/merge, quota, `gpu.py`.
+- info forge/forge.py:1062-1069 All `fail()` keys are distinct.
+  - The 11 three-word prefixes on this base: `builder produced no`, `diff edits protected`, `diff adds packages`, `the repair edited`, `the repair added`, `gate still failing`, `reviewer did not`, `could not bring`, `resolving the conflict`, `gate failed after`, `merge conflict landing`. The PR body's list leaves out `could not bring`.
+  - Entries from before `why` are skipped by `h.get("why")`.
+- info forge/selftest.py:944 This is the only modified selftest line. The replacement keeps every field and value of the two injected entries and adds `why`. The assertion at :947 is unchanged and passes.
+  - Nothing is deleted from prompts, selftest or the safeguard table. The README change is an addition outside the table.
+- info I verified the selftests by exporting 691fb1d2 with `git archive` into /tmp. The full selftest prints "all checks passed".
+  - With base forge.py and the PR's selftest, exactly the two new checks fail: the 4i entry has no `why`, and 21 prints no tally line.
+  - Test 21's real `cycle()` ends in `fail()` ("builder produced no diff (rc=0)."), so it runs the actual `fail()`→`record()` path. Its status line printed `builder produced no 1, reviewer did not 1`.
+  - Running the PR head's `forge.py status --config ~/.config/forge/reflex1.toml` on live state prints `failed attempts per cause, the guard that ended them: -`, as the PR body says.
+- info siblings: I dry-ran `patch` for every open `forge` PR that shares a file, on base and on this head.
+  - #99 is the only PR this one adds a conflict to. #99's selftest 4i hunk replaces the check at :218, and #107 inserts its check right after it. #99 already fails its README hunk on base.
+  - The two are compatible: #99 keeps `head` as is, and its multi-line `why` still starts with the text #107 checks. Whichever lands second re-adds the other's check; neither text needs to change.
+  - #48 renames `merge conflict landing` to `could not land … after 3 tries`, which is still distinct from `could not bring`. Whichever lands second updates the example key in #107's comment (:1062-1063) and README:132.
+  - #8 adds `diff edits protected … after updating from main`, which would share a key with the pre-gate check (:736). #8 duplicates the post-sync check already at :651-653 and fails 3 of its 4 forge.py hunks on base, so #8 is the side to change.
+  - #6's messages (`reviewer did not approve after one repair round`, `gate failing after review repair`) stay distinct. #7, #31 and #79 apply cleanly over this head.
+- nit forge/selftest.py:951 `"reviewer did not 1" in out` would also match `reviewer did not 1x`. Fine for this fixture.
+- slop forge/forge.py:879-882 The docstring paragraph repeats README:132. This matches the file's existing style.
+Change needed (only for MERGE WITH CHANGE): drop the guard-retirement framing, in one edit across two places:
+1. forge/README.md:132, replace
+`Every deterministic check in `cycle()` and `land()` is a guard added against a failure seen once; this count says which ones still fire and which never do, so a guard is retired or tightened on a number rather than on reading it (Cursor's harness team logs each guardrail firing and opens a PR to delete one that stopped).`
+with
+`This count says which checks still end attempts and how often; it is not a case for deleting one: the gate (`gate still failing`, `gate failed after`), the reviewer (`reviewer did not`) and the protected-path and dependency checks (`diff edits protected`, `the repair edited`, `resolving the conflict`, `diff adds packages`, `the repair added`) read zero because the layers in front of them hold.`
+2. forge/forge.py:880-882, replace the docstring tail starting at `each one is logged where it fires` and ending at `the live log's heads were PR urls."""` with
+`status counts them per guard; a zero on the gate, reviewer, protected-path or dependency guards means
+        the layer in front held, not that the guard can go."""`
+
+
 ## PR #106 · 2026-10-31T02:19:02Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
