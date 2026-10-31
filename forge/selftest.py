@@ -216,6 +216,8 @@ with tempfile.TemporaryDirectory() as d:
     logged = f.log_file.read_text().splitlines()[-1]
     check("fail() logs the cause when there is a PR", "RETRY 0009-z: diff edits protected" in logged and "https://" not in logged, logged)
     check("ticket note still carries the PR url", "PR: https://example.invalid/pull/1\ndiff edits" in git("show origin/main:tickets/0009-z.md", repo))
+    check("a failed attempt's history entry carries the guard that ended it",
+          f.state["history"][-1].get("why", "").startswith("diff edits protected gate/ticket paths"), str(f.state["history"][-1]))
 
     # 4j. A project that does not have every path the steward stages still gets its turn committed:
     # `git add -A a b c` stages nothing when one path is missing, so discard_strays threw the turn away.
@@ -941,10 +943,12 @@ with tempfile.TemporaryDirectory() as d:
           isinstance(f.state["history"][-1].get("secs"), int) and 0 <= f.state["history"][-1]["secs"] < 3600, str(f.state["history"][-1]))
     # reflex1's 85 merges read median 60 min while its 37 failed cycles held 2,097 of 7,139 lane-minutes: 84 per merge.
     import contextlib, io
-    f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200), dict(f.state["history"][-1], model="g/h", result="merged", secs=600)]
+    f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200, why="reviewer did not approve."), dict(f.state["history"][-1], model="g/h", result="merged", secs=600, why="")]
     with contextlib.redirect_stdout(io.StringIO()) as out:
         f.status()
     check("status charges a model's failed attempts to its merged tickets", "g/h 1/2 (9-91%) 30 min/merge" in out.getvalue(), out.getvalue())
+    # Which guard ends attempts is the number behind retiring or tightening one; the live log's heads were PR urls.
+    check("status tallies failed attempts by the guard that ended them", "the guard that ended them:" in out.getvalue() and "reviewer did not 1" in out.getvalue(), out.getvalue())
     f.state["history"] = f.state["history"][:-2]
     forge.OMP = str(bindir / "missing")
     check("a history entry names the omp release that ran the cycle",
