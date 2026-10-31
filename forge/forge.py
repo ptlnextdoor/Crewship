@@ -37,6 +37,12 @@ import tomllib
 from pathlib import Path
 
 OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
+# Overlay for every session: `task.maxRecursionDepth: 0` removes the `task` tool and makes eval's
+# `agent()`/`workpool()` raise, so no builder, reviewer, planner or steward can spawn sub-agents (a
+# sub-agent took 84% of one prompt's cost in a per-agent trace, X 2026-10-30; Cloudflare's reviewers
+# tried a tool they could not use in 57-76% of sessions). A setting, not a tool allowlist: a tool
+# rename in a later omp cannot stop sessions from starting (PR #105's audit).
+OMP_CONFIG = Path(__file__).with_name("omp.yml")
 UTC = dt.timezone.utc
 
 
@@ -254,7 +260,7 @@ class Forge:
         pfile = out.with_suffix(".prompt")
         pfile.write_text(prompt)
         cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
-               "--approval-mode=yolo", f"@{pfile}"]
+               "--approval-mode=yolo", f"--config={OMP_CONFIG}", f"@{pfile}"]
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:
             # New session so a timeout kills the whole tree (cargo, rustc, test binaries), not just omp.
