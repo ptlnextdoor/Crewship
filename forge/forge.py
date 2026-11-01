@@ -259,7 +259,10 @@ class Forge:
         # (E2BIG, "failed to start agent", attempt charged to the ticket).
         pfile = out.with_suffix(".prompt")
         pfile.write_text(prompt)
-        cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
+        # --no-title: a `--no-session` run keeps no session list, but omp still asks a model for a title each
+        # time the session's `todo` list changes (claude-haiku-5-5, then sonnet, then the session's own model
+        # when haiku returns none): 182 requests, 201,874 tokens over 78 headless scout sessions, 27 on sonnet/fable.
+        cmd = [OMP, "-p", "--no-session", "--no-title", f"--model={model}", f"--thinking={thinking}",
                "--approval-mode=yolo", f"--config={OMP_CONFIG}", f"@{pfile}"]
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:

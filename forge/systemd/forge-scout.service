@@ -6,5 +6,5 @@ Type=oneshot
 WorkingDirectory=%h/Dev/Crewship-scout
 Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 # Own clone: branch switching here must never touch ~/Dev/Crewship, which the running forge lanes read.
-ExecStart=/bin/sh -c 'mkdir -p %h/.local/state/forge/scout; [ -d %h/Dev/Crewship-scout/.git ] || git clone -q -b forge https://github.com/ptlnextdoor/Crewship.git %h/Dev/Crewship-scout; cd %h/Dev/Crewship-scout && git checkout -q forge && git pull -q --rebase && timeout 1800 omp -p --no-session --model=anthropic/claude-fable-5-1 --thinking=high --approval-mode=yolo "$(sed s,~/Dev/Crewship/,~/Dev/Crewship-scout/,g forge/prompts/scout.md)" > %h/.local/state/forge/scout/$(date -u +%%Y%%m%%dT%%H%%M).log 2>&1; git checkout -q forge'
+ExecStart=/bin/sh -c 'mkdir -p %h/.local/state/forge/scout; [ -d %h/Dev/Crewship-scout/.git ] || git clone -q -b forge https://github.com/ptlnextdoor/Crewship.git %h/Dev/Crewship-scout; cd %h/Dev/Crewship-scout && git checkout -q forge && git pull -q --rebase && timeout 1800 omp -p --no-session --no-title --model=anthropic/claude-fable-5-1 --thinking=high --approval-mode=yolo "$(sed s,~/Dev/Crewship/,~/Dev/Crewship-scout/,g forge/prompts/scout.md)" > %h/.local/state/forge/scout/$(date -u +%%Y%%m%%dT%%H%%M).log 2>&1; git checkout -q forge'
 Nice=10
