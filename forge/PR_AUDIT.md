@@ -2,6 +2,72 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #116 · 2026-11-01T10:22:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #116 forge: test_tampering fails a net loss of assertion lines
+What it changes: `test_tampering()` adds `ASSERT_MARK` (`^([-+])[^-+].*\b(debug_)?assert\w*`). It nets those lines over the same `git diff -U0 origin/main...HEAD -- '*.rs' '*.py'` and appends "N fewer assertion lines than the branch point" when the total is negative. The waiver is a widened `drop_ok`, now `\b(remove|delete|drop)\b[^\n]*\b(tests?|assert\w*)\b`, shared with the test-function count. The PR also rewords both `fail()` messages and updates README row 32 and the docstring. It adds selftest 2e.
+
+Findings:
+- medium forge/forge.py:450,466 The widened `drop_ok` also waives the existing test-function count. Any ticket line with remove/delete/drop followed by `assert…` now turns off the mechanical refusal of a deleted `#[test]`/`def test_`.
+  - Probe on a temp repo with the base and head `Forge` classes: ticket "Remove the stale assert in check()." plus a diff that deletes `#[test] fn many()`. Base returns `['1 fewer test functions than the branch point']`; head returns `[]`.
+  - Real exposure: of reflex1's 140 tickets (text before `## forge`), the old regex matches only 0036. The new one also matches open ticket 0137, line 10: "`--drop-no-gas-start` … `load_episode`'s 16 ms grid assert and `stack_at` … are untouched". On 0137, a diff that deletes `def test_other()` is refused on base and passes on head.
+  - In those cases the only layers left for a deleted test are builder rule 12 and reviewer steps 3/4, all prose, and the review runs after the 8 to 25 min gate. The PR body does not name this retirement; it says "(or "... test", the existing waiver)". The code comment says "waives both counts" but gives no reason.
+- low forge/forge.py:450,468 The new count's own waiver uses `[^\n]*` across a paragraph-long line. On ticket 0137 it reads "drop" in a flag name and "assert" in "the grid assert … untouched" as permission to drop that assert.
+  - Probe: under 0137's text, deleting the grid assert returns `[]` on head.
+  - Fix: require the verb within three words of `assert`. That form matches 0 of the 140 reflex1 tickets and still waives the selftest's "drop the stale asserts in one()".
+- low forge/README.md:32 The new "prevents" text says a net-assertion count "is the mechanical gate for" OpenAI's 2026-10-06 incident (a test replaced with one asserting the monitor's absence). The code does not catch that.
+  - Probe: `assert!(monitor_present())` → `assert!(!monitor_present())` returns `[]` on head. A reversal nets to zero.
+  - The PR body itself says "reversed assertions, which no count sees". That case is still carried only by reviewer step 4 ("turn a test that guarded a behavior into one that asserts its absence"). The safeguard table is what later audits read to see which layer covers a case, so this row would credit the regex with step 4's job.
+  - The cited post (piyushmehta.com, read) describes the incident the same way the README does. It does not describe it the way the docstring at forge.py:443-444 does ("keeps the test but drops the assertion that fails is the OpenAI Astra incident"). The selftest.py:117 comment carries the same "Astra shape" label.
+- info forge/forge.py:435 Scope and accuracy of the count:
+  - It counts any `assert*` word on any changed `*.rs`/`*.py` line: comments, strings and production code. It skips `prop_assert!`, because there is no `\b` after `_`.
+  - Probes that are refused on head and pass on base: two `assert_eq!` merged into one tuple assert; production `assert!(x > 0)` rewritten as `if x <= 0 { return Err(..) }`; deleting `// assert: the buffer is aligned`. Each costs an attempt, and the ticket goes to `blocked` at `max_attempts`.
+  - Bypass: deleting an assert while adding a comment that says "assert" nets to zero.
+  - Measured history: I ran the regex over reflex1's 627 commits on main (first-parent diffs for the 104 merges). 8 commits remove an assert line and 0 are net-negative, matching the PR body, so there are 0 false positives on record.
+  - Verdict on this: a cheap tripwire in front of reviewer step 4, with no prompt changed. No layer is removed here.
+- info forge/forge.py:790,812 Placement and side effects are unchanged.
+  - The check still runs after `touched_protected` and `unrequested_deps`, before both gate runs, inside `cycle()`'s `try`. `fail()` therefore still closes the PR and moves the ticket to retry/blocked.
+  - Ticket text reaches only `re.search`; the fail message adds only fixed text to the repr'd `bad` list. There is no new shell or f-string path.
+  - No shared state or lane race. `recover()`, `discard_strays()`, the protected paths, quota, GPU and timeouts are untouched. The regex is linear per line.
+  - Cosmetic: the status tally key (forge.py:1122, first three words of `why`) changes from `diff skips or` to `diff skips, deletes` and from `the repair skipped` to `the repair skipped,`, so the guard's history splits across versions. The new finding names no file, and "fix the code the test checks" misdirects when the lost assert is production code.
+- info Deleted lines:
+  - README row 32 is reworded, not cut. A word diff keeps every old clause; "moved between files" became "moved or rewritten".
+  - selftest.py only gains lines. No prompt is touched.
+  - The one layer this PR retires is the test-count waiver widening in the first finding.
+- info Verification:
+  - `selftest.py` from a `git archive` export of the PR head (4f7bb6df): "all checks passed".
+  - I applied the change below to a copy. `selftest.py` passes there, and both added checks fail on the unmodified PR head.
+  - The probe on that copy: 0137 plus a deleted test is refused again, and 0137 plus the deleted grid assert is refused.
+- info Siblings: of the open PRs on `forge` that touch README.md, forge.py or selftest.py, no hunk touches `test_tampering`, row 32's text, `drop_ok` or the two fail messages. No contradiction or duplicate.
+  - #111's base has `test_tampering`, but it edits `land()` and its own README row.
+  - The bases of #99, #86, #84, #83, #79 and #5–#48 have no `def test_tampering`, and none of their diffs mention the test or skip markers.
+  - #99 edits the repair-prompt line just above the repair fail message, so the overlap is textual adjacency only.
+
+Change needed (only for MERGE WITH CHANGE): one edit. Each step lists its replacements and the line they go to.
+1. forge/forge.py:447-450 replace with:
+```
+        # shortcut: "remove the old test" anywhere in the ticket waives both counts, "drop the assert" (within three
+        # words) only the assertion count; moving a test between files nets to zero and passes; delete one, add
+        # another nets to zero too, which step 3 still reads; a line that says `assert` in a comment counts (0 false
+        # positives over reflex1's 627).
+        drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
+        assert_ok = drop_ok or re.search(r"\b(remove|delete|drop)\W+(\w+\W+){0,3}?(debug_)?assert", text)
+```
+   At forge/forge.py:468, change `if asserts < 0 and not drop_ok:` to `if asserts < 0 and not assert_ok:`.
+2. forge/selftest.py: insert two lines.
+   - After line 112: `    check("a ticket naming only an assert drop does not waive a deleted test", "1 fewer test functions than the branch point" in f.test_tampering(repo, "drop the stale assert in one()"))`
+   - After line 125: `    check("an assert the ticket keeps does not waive its removal", f.test_tampering(repo, "--drop-no-gas-start: the grid assert is untouched") == ["2 fewer assertion lines than the branch point"])`
+3. forge/README.md:32: two replacements.
+   - Replace `or "remove/delete/drop ... test" or "... assert", counts as saying so` with `or "remove/delete/drop ... test", counts as saying so, and "remove/delete/drop" within three words of "assert" does for the assertion count alone`.
+   - Replace `(OpenAI's 2026-10-06 incident: an agent replaced the test guarding a monitor with one asserting its absence and CI stayed green; a net-assertion diff count is the mechanical gate for it, piyushmehta.com 2026-10-31)` with `(a net-assertion count is a required CI job for agent PRs in piyushmehta.com 2026-10-31; the OpenAI 2026-10-06 incident it cites, a test rewritten to assert the monitor's absence, nets to zero here and stays reviewer step 4's)`.
+4. Fix the two mislabels.
+   - forge/forge.py:443-444: replace `and one that keeps the test but drops the assertion that fails is the OpenAI Astra incident of 2026-10-06` with `and one that keeps the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here`.
+   - forge/selftest.py:117: replace `(the Astra shape: the test stays, the check goes)` with `(the test stays, the check goes)`.
+
+
 ## PR #115 · 2026-11-01T08:16:09Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
