@@ -374,7 +374,16 @@ class Forge:
     def gate(self, cwd: Path) -> tuple[bool, str]:
         g = self.cfg.get("gate", "./gate.sh")
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
-        return r.returncode == 0, (r.stdout + r.stderr)[-5000:]
+        out = r.stdout + r.stderr
+        cut, tail = out[:-5000], out[-5000:]
+        # grep + tail, not tail alone: the stage header (`== fmt`) and the first error lines sit above a
+        # 5,000-character tail of fmt hunks or test output. reflex1 PR #2, the one gate failure on record:
+        # both tails were rustfmt diff with no stage line (its repair session hit Codex's usage limit, so it shows the cut, not its effect). Hybrid
+        # grep+tail routers lead the cost-quality frontier for LLM log diagnosis (LogDx-CI, arXiv 2605.28876).
+        keys = [l for l in cut.splitlines() if re.match(r"== |error(\[E\d+\])?:|test \S+ \.\.\. FAILED|thread '.*' panicked|gate: ", l)]
+        if keys:  # 900 + 5,000 characters: fits pr_close()'s 6,000-character comment with the failure line
+            tail = "\n".join(keys)[:900] + "\n... [lines the tail below cut; the full output is not kept]\n" + tail
+        return r.returncode == 0, tail
 
     # Files omp loads into every later session's context before its first turn (omp docs, context-files.md):
     # standalone CLAUDE.md/GEMINI.md and the editor rule files anywhere on the walk up, and the config
@@ -695,7 +704,7 @@ class Forge:
                 posted = delta
             ok, gout = self.gate(wt)
             if not ok:
-                return f"gate failed after updating from main.\n{gout[-2000:]}"
+                return f"gate failed after updating from main.\n{gout}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
             if self.pr_merge(self.pr, branch):
@@ -773,7 +782,7 @@ class Forge:
             if bad:
                 return self.fail(ticket, f"diff skips or deletes tests the ticket does not name: {bad}. A test switched off or removed needs the ticket to say so (builder rule on tests); fix the code the test checks.")
             ok, gout = self.gate(wt)
-            self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
+            self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
             if not ok:
                 # one repair pass before giving up. It is a fresh omp session (--no-session), so it gets the
                 # ticket as well as the gate output: spec beats test feedback for repair (arXiv 2610.28834).
@@ -795,9 +804,9 @@ class Forge:
                 if bad:
                     return self.fail(ticket, f"the repair skipped or deleted tests the ticket does not name: {bad}. A test switched off or removed needs the ticket to say so (builder rule on tests); fix the code the test checks.")
                 ok, gout = self.gate(wt)
-                self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout[-3500:]}\n```")
+                self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
                 if not ok:
-                    return self.fail(ticket, f"gate still failing after repair.\n{gout[-2500:]}")
+                    return self.fail(ticket, f"gate still failing after repair.\n{gout}")
             # The commit whose diff the reviewer gets, read before its yolo session can move HEAD; land() rewrites it.
             reviewed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
             diff = self.sh("git diff origin/main...HEAD", cwd=wt).stdout
