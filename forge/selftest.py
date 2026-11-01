@@ -110,10 +110,25 @@ with tempfile.TemporaryDirectory() as d:
     got = f.test_tampering(repo, "status: open\n# x\nFix the parser.\n")
     check("ignored, skipped and deleted tests are refused", got == ["src/a.rs: adds #[ignore]", "t.py: adds @pytest.mark.skip", "1 fewer test functions than the branch point"], str(got))
     check("the ticket naming the marker and the removal waives both", f.test_tampering(repo, "mark `#[ignore]` and `pytest.skip` the slow ones, remove the duplicate test") == [])
+    check("a ticket naming only an assert drop does not waive a deleted test", "1 fewer test functions than the branch point" in f.test_tampering(repo, "drop the stale assert in one()"))
     git("checkout -q -- .", repo); git("reset -q --hard origin/main", repo)
     (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n"); (repo / "src/b.rs").write_text("#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm move", repo)
     check("a test moved to another file is no finding", f.test_tampering(repo, "") == [])
+    # 2e. A test kept but stripped of its assertions is refused (the test stays, the check goes);
+    # the ticket naming the drop waives it; an assertion rewritten in place nets to zero.
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert_eq!(1, 1);\n    assert!(true);\n}\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm asserts", repo); git("push -q -f origin work2:main", repo)
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    let _ = 1;\n}\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm strip", repo)
+    check("a test stripped of its assertions is refused", f.test_tampering(repo, "Fix the parser.") == ["2 fewer assertion lines than the branch point"])
+    check("the ticket naming the dropped assert waives it", f.test_tampering(repo, "drop the stale asserts in one()") == [])
+    check("an assert the ticket keeps does not waive its removal", f.test_tampering(repo, "--drop-no-gas-start: the grid assert is untouched") == ["2 fewer assertion lines than the branch point"])
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert!(1 == 1);\n    debug_assert!(true);\n}\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm rewrite", repo)
+    check("an assertion rewritten in place is no finding", f.test_tampering(repo, "") == [])
     # 2f. gate() keeps the stage header and error lines a 5,000-character tail would cut (reflex1 PR #2: a
     # rustfmt failure whose tail was all hunks), and a short output passes through unchanged.
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'error: rustfmt diff'\nseq 1 2000 | sed 's/^/Diff in x.rs:/'\nexit 1\n")
