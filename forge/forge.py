@@ -432,20 +432,23 @@ class Forge:
 
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
+    ASSERT_MARK = re.compile(r"^([-+])[^-+].*\b(debug_)?assert\w*")
 
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
-        """Tests the branch switches off or drops: an added `#[ignore]`/`pytest.skip` marker, or fewer test
-        functions than the branch point across the diff, unless the ticket says so. Builder rule 12 and reviewer
-        step 3 say this in prose and the review runs after the gate (8 to 25 min); here it costs seconds
-        (reflex1: 0 added `#[ignore]`, 0 removed `#[test]` in 627 commits on main, so the prose has held; an
-        agent that deletes the failing test instead of fixing the bug is the shape ImpossibleBench, arXiv
-        2510.20270, measures)."""
+        """Tests the branch switches off, drops or strips: an added `#[ignore]`/`pytest.skip` marker, fewer test
+        functions, or fewer assertion lines than the branch point across the diff, unless the ticket says so.
+        Builder rule 12 and reviewer step 3 say this in prose and the review runs after the gate (8 to 25 min);
+        here it costs seconds (reflex1: 0 added `#[ignore]`, 0 removed `#[test]`, 0 commits with a net loss of
+        `assert` lines in 627 commits on main, so the prose has held; an agent that deletes the failing test
+        instead of fixing the bug is the shape ImpossibleBench, arXiv 2510.20270, measures, and one that keeps
+        the test but drops the assertion that fails is the OpenAI Astra incident of 2026-10-06)."""
         text = ticket_text.split("\n## forge")[0].lower()
         skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
-        # shortcut: "remove the old test" anywhere in the ticket waives the count check; moving a test between
-        # files nets to zero and passes; delete one, add another nets to zero too, which step 3 still reads.
-        drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
-        out, f, net, gone = [], "", 0, 0
+        # shortcut: "remove the old test" or "drop the assert" anywhere in the ticket waives both counts; moving
+        # a test between files nets to zero and passes; delete one, add another nets to zero too, which step 3
+        # still reads; a line that says `assert` in a comment counts (0 false positives over reflex1's 627).
+        drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\b(tests?|assert\w*)\b", text)
+        out, f, net, gone, asserts = [], "", 0, 0, 0
         for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
@@ -456,10 +459,14 @@ class Forge:
                     out.append(f"{f}: adds {line.lstrip('+ ')[:24]}")
             elif m := self.TEST_MARK.match(line):
                 net += 1 if m[1] == "+" else -1
+            elif m := self.ASSERT_MARK.match(line):
+                asserts += 1 if m[1] == "+" else -1
         if len(out) <= gone:
             out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
         if net < 0 and not drop_ok:
             out.append(f"{-net} fewer test functions than the branch point")
+        if asserts < 0 and not drop_ok:
+            out.append(f"{-asserts} fewer assertion lines than the branch point")
         return out
 
     def main_gated(self) -> str:
@@ -780,7 +787,7 @@ class Forge:
                 return self.fail(ticket, f"diff adds packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
-                return self.fail(ticket, f"diff skips or deletes tests the ticket does not name: {bad}. A test switched off or removed needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                return self.fail(ticket, f"diff skips, deletes or strips tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
             ok, gout = self.gate(wt)
             self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
             if not ok:
@@ -802,7 +809,7 @@ class Forge:
                     return self.fail(ticket, f"the repair added packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
-                    return self.fail(ticket, f"the repair skipped or deleted tests the ticket does not name: {bad}. A test switched off or removed needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                    return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
                 if not ok:
