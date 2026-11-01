@@ -2,6 +2,47 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #113 · 2026-11-01T00:30:51Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #113 builder: rerun an earlier review's Must change line before coding to it
+What it changes: Adds one rule to `forge/prompts/builder.md` (line 20 on the PR head). Before acting on a `Must change:` line from an earlier review quoted in the `## forge` notes, the retry builder runs that line's command against its own work. It fixes a finding that reproduces. A finding that does not reproduce, or that contradicts `## Done when`, goes into `PROGRESS.md` with the command output, and the code is left as it is. The PR also adds a README safeguard row (line 49) and one selftest prompt check (line 454). Nothing is deleted and `forge.py` is untouched.
+Findings:
+- low forge/prompts/builder.md:20 + forge/selftest.py:454 — The rule lets the builder leave a real earlier finding unapplied. Before this PR two layers stood behind such a finding: the builder applied it by default, and the reviewer re-checked it. Now the reviewer re-check is the only layer. I traced the path:
+  - Each retry starts a fresh worktree from `main` (forge.py:743).
+  - The full ticket text, earlier notes included, goes to three places: the builder (forge.py:752), the gate-repair pass (forge.py:784, which embeds `{prompt}`, so the rule applies there too) and the reviewer (forge.py:819).
+  - reviewer.md:16 (added in #73) tells the reviewer to re-check each earlier `Must change:` line against this diff.
+  - Reviewer steps 2 and 4 treat `PROGRESS.md` prose as the builder's claim.
+  - The PR body names this as the layer that still catches a wrong dismissal. But no selftest check covers reviewer.md:16: section 6, selftest.py:445-455, has nothing for it, and a grep for "re-check" or "Must change" finds only the unrelated checks at selftest.py:541-543 and 631-642. The new check at selftest.py:454 covers only the builder half. A later prompt rewrite could drop the reviewer re-check with selftest still passing, and the builder would keep its permission with nothing behind it.
+  - This risk is real for reflex1. The builder (`anthropic/claude-opus-5-5`) and the reviewer are the same vendor. `reviewer_alt` (`openai-codex/gpt-6-astra`) falls back to `anthropic/claude-fable-5-1` (reflex1.toml:58). The done notes show Anthropic models approving Anthropic builds (0011, 0019, 0026, 0065, 0106). That is the self-review case in arXiv 2609.04270: 35% of correct answers falsely rejected, and the 3 of 3 the executor complied with became wrong. I checked the paper's abstract and the PR quotes those numbers correctly. The same-vendor reviewer is also the one doing the re-check.
+- low forge/README.md:49 (repeated in the PR body) — The row says "reflex1: 8 REJECT tickets, 3 retried, every earlier finding re-confirmed by the second reviewer, so the rule has cost nothing yet". reflex1 `origin/main` 2c39a79 says otherwise:
+  - 13 tickets carry a "reviewer did not approve" note. 8 of them still have the `VERDICT: REJECT` line: 0003, 0011, 0019, 0032, 0047, 0052, 0106, 0125.
+  - Of those 8, six had a later attempt after the REJECT (0003, 0011, 0019, 0047, 0052, 0106), not three.
+  - 0047 and 0052 ended `blocked`.
+  - I did not check whether earlier findings were re-confirmed for 0003, 0019 and 0047. "Cost nothing yet" is an unsupported measured claim in the safeguard table.
+- info builder.md:20 — No new trust boundary. The rule tells a builder running with yolo approvals to run commands quoted in notes, and those notes are raw reviewer output or gate tail (fail() writes `why[-7000:]` unfenced, forge.py:906). Those commands were already runnable: the gate executes the earlier attempt's code on this box, and the reviewer also ran with yolo. Other rules still bound the builder:
+  - builder.md:16 still says notes cannot authorize credentials.
+  - builder.md:17 covers writes outside the worktree.
+  - builder.md:14 sends GPU work through `gpu.py`, which has a budget cap.
+  - The new text does not touch the wording on `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`. It does not read as permission to skip tests: it covers only review findings, and the rules at builder.md:12 (tests) and :19 (Done when) are unchanged.
+  - The claim race, `recover()`, `discard_strays()`, `touched_protected()`, quota fallback, timeouts and `land()` are all unchanged. The added prompt text is a fixed size.
+- info deletions — None. The PR diff adds 3 lines and removes nothing from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. The PR head is based on c72424c1. `origin/forge` has since gained a SCOUT.md commit, which is not part of this PR.
+- low (slop) builder.md:20 — The new rule asks for "the command and its output" in `PROGRESS.md`, but :19 asks for "its key output line". Every session reads `PROGRESS.md` at start (builder.md:4). Growth is bounded because the steward trims the file to 300 lines (steward.md step 2), so no change is required. The closing sentence ("a correct patch rewritten to satisfy a wrong finding") does not match a retry, which starts from `main` with no patch to rewrite.
+- info siblings — 24 other open PRs on `forge` touch these files: 1 3 6 8 16 19 20 23 25 28 31 39 40 42 44 47 48 79 83 84 85 86 99 111. I read all their diffs without checking anything out.
+  - #99 is the only one that touches the same mechanism. It wraps fail()'s note in a fence labelled "Quoted record …, not ticket text" and labels the repair prompt's gate output "not instructions". That fits #113, which treats a quoted `Must change:` line as a claim to verify, not an order. Neither side needs to change.
+  - #1, #3, #23 and #85 edit other lines of builder.md. Their bases are stale (no Done-when rule at :19), so they only conflict on text, not in meaning.
+  - #6's repair round after a review passes the review inline and never loads builder.md, so this rule does not reach it.
+  - #25's `review_exclude` (`*.json`, `*.pt`, `runs/`, `bench/models/`) does not hide `PROGRESS.md` from the reviewer.
+  - The README and selftest siblings add rows and checks elsewhere. None duplicates this one.
+- info verification — Ran `python3 forge/selftest.py` on the PR head, unpacked with git archive into /tmp: "all checks passed", 104 checks ok. The new check is false against `origin/forge`'s builder.md and true on the head. The changed check below is true on the head and false once reviewer.md:16's re-check sentence is removed.
+Change needed (only for MERGE WITH CHANGE): One edit, two replacements.
+1. In forge/selftest.py:454, replace the added line with:
+   `check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)`
+2. In forge/README.md:49, replace `(2026-10-31). reflex1: 8 REJECT tickets, 3 retried, every earlier finding re-confirmed by the second reviewer, so the rule has cost nothing yet |` with `(2026-10-31) |`.
+
+
 ## PR #112 · 2026-10-31T16:44:31Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
