@@ -451,7 +451,7 @@ check("reviewer removes each added guard and requires a test to fail", "remove t
 check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it for each file" in r and "quotes the entry" in r)
 check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in b and "existing code takes precedence" in b)
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
-check("builder reruns an earlier Must change line before coding to it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b)
+check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
 
