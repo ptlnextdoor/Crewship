@@ -378,11 +378,11 @@ class Forge:
         cut, tail = out[:-5000], out[-5000:]
         # grep + tail, not tail alone: the stage header (`== fmt`) and the first error lines sit above a
         # 5,000-character tail of fmt hunks or test output. reflex1 PR #2, the one gate failure on record:
-        # both tails were rustfmt diff with no stage line, and the repair failed the same way. Hybrid
+        # both tails were rustfmt diff with no stage line (its repair session hit Codex's usage limit, so it shows the cut, not its effect). Hybrid
         # grep+tail routers lead the cost-quality frontier for LLM log diagnosis (LogDx-CI, arXiv 2605.28876).
         keys = [l for l in cut.splitlines() if re.match(r"== |error(\[E\d+\])?:|test \S+ \.\.\. FAILED|thread '.*' panicked|gate: ", l)]
-        if keys:  # 1,500 + 5,000 characters: fits fail()'s 7,000-character ticket note with its PR line
-            tail = "\n".join(keys)[:1500] + "\n... [lines the tail below cut; the full output is not kept]\n" + tail
+        if keys:  # 900 + 5,000 characters: fits pr_close()'s 6,000-character comment with the failure line
+            tail = "\n".join(keys)[:900] + "\n... [lines the tail below cut; the full output is not kept]\n" + tail
         return r.returncode == 0, tail
 
     # Files omp loads into every later session's context before its first turn (omp docs, context-files.md):
