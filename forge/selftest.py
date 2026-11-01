@@ -114,6 +114,15 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n"); (repo / "src/b.rs").write_text("#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm move", repo)
     check("a test moved to another file is no finding", f.test_tampering(repo, "") == [])
+    # 2f. gate() keeps the stage header and error lines a 5,000-character tail would cut (reflex1 PR #2: a
+    # rustfmt failure whose tail was all hunks), and a short output passes through unchanged.
+    (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'error: rustfmt diff'\nseq 1 2000 | sed 's/^/Diff in x.rs:/'\nexit 1\n")
+    (repo / "gate.sh").chmod(0o755)
+    ok, gout = f.gate(repo)
+    check("gate output leads with the cut stage header and error line", not ok and gout.startswith("== fmt\nerror: rustfmt diff\n...") and gout.endswith("Diff in x.rs:2000\n") and len(gout) < 5200, gout[:120])
+    (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'gate: PASS'\n")
+    check("a short gate output is untouched", f.gate(repo) == (True, "== fmt\ngate: PASS\n"))
+    git("checkout -q -- gate.sh", repo)
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"
     f.set_status(t, "in_progress lane=2")
