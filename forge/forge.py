@@ -441,13 +441,15 @@ class Forge:
         here it costs seconds (reflex1: 0 added `#[ignore]`, 0 removed `#[test]`, 0 commits with a net loss of
         `assert` lines in 627 commits on main, so the prose has held; an agent that deletes the failing test
         instead of fixing the bug is the shape ImpossibleBench, arXiv 2510.20270, measures, and one that keeps
-        the test but drops the assertion that fails is the OpenAI Astra incident of 2026-10-06)."""
+        the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here)."""
         text = ticket_text.split("\n## forge")[0].lower()
         skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
-        # shortcut: "remove the old test" or "drop the assert" anywhere in the ticket waives both counts; moving
-        # a test between files nets to zero and passes; delete one, add another nets to zero too, which step 3
-        # still reads; a line that says `assert` in a comment counts (0 false positives over reflex1's 627).
-        drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\b(tests?|assert\w*)\b", text)
+        # shortcut: "remove the old test" anywhere in the ticket waives both counts, "drop the assert" (within three
+        # words) only the assertion count; moving a test between files nets to zero and passes; delete one, add
+        # another nets to zero too, which step 3 still reads; a line that says `assert` in a comment counts (0 false
+        # positives over reflex1's 627).
+        drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
+        assert_ok = drop_ok or re.search(r"\b(remove|delete|drop)\W+(\w+\W+){0,3}?(debug_)?assert", text)
         out, f, net, gone, asserts = [], "", 0, 0, 0
         for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd).stdout.splitlines():
             if line.startswith("+++ "):
@@ -465,7 +467,7 @@ class Forge:
             out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
         if net < 0 and not drop_ok:
             out.append(f"{-net} fewer test functions than the branch point")
-        if asserts < 0 and not drop_ok:
+        if asserts < 0 and not assert_ok:
             out.append(f"{-asserts} fewer assertion lines than the branch point")
         return out
 
