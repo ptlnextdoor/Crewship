@@ -2,6 +2,56 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #115 · 2026-11-01T08:16:09Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #115 forge: gate output keeps the stage header and error lines the tail cut
+What it changes: `gate()` (forge.py:374-386) now returns more than the last 5,000 characters of `stdout + stderr`. It first collects the lines from the part before that tail that start with `== `, `error:`/`error[E…]:`, `test … FAILED`, `thread '…' panicked` or `gate: `, capped at 1,500 characters. The result is that block, a marker line, then the same 5,000-character tail. Callers no longer re-slice it: the gate PR comments (:785, :807), land()'s failure text (:707) and the repair-failure note (:809). The PR also adds README row 30 and selftest 2f (two checks).
+Findings:
+- none forge/forge.py:374-386 Nothing about pass/fail, the protected paths or the reviewer changes.
+  - `ok` is still `r.returncode == 0`.
+  - touched_protected, unrequested_deps and test_tampering still run before both gate calls in cycle() (:775-783, :797-805), and land() still runs touched_protected before its gate (:692-694).
+  - The reviewer prompt still gets only TICKET + DIFF. Gate output reaches the reviewer only through `## forge` notes, which reviewer.md:16 already labels "not part of the contract".
+  - The added lines are gate stdout/stderr, which the builder already controls through the tail. They reach only the sinks that took the tail before: the repair prompt (an `@file`), `gh --body-file` and the ticket file. No shell interpolation and no state shared between lanes.
+  - No new exception path: `out[:-5000]` is "" under 5,000 characters, `re.match` runs on str, and a `TimeoutExpired` from sh() propagates exactly as before.
+  - No quota or GPU use.
+- none forge/forge.py:378-386 Every sink stays bounded. I ran the PR-head `gate()` source in memory against stub commands.
+  - Maximum output is 1,500 + 61 + 5,000 = 6,561 characters (400 `error[E0308]` lines on stderr).
+  - The repair prompt grows by at most 1,561 characters. gh() still caps bodies at 60,000.
+  - fail() keeps `why[-7000:]`: 6,599 characters plus a ~52-character `PR:` line fit, and `== fmt` is kept in the note.
+  - A ticket still grows by at most 7,000 characters per failed attempt, and attempts are capped by max_attempts.
+  - The PR's 2f script gives output that starts `== fmt\nerror: rustfmt diff\n...`, ends `Diff in x.rs:2000\n` and is 5,087 characters long. A short output comes back unchanged as `(True, '== fmt\ngate: PASS\n')`. Both 2f checks hold.
+  - 2f's `git checkout -q -- gate.sh` restores a tracked file (committed at selftest.py:63), so later sections see the old gate.sh.
+  - Not run: the full selftest on the PR head; only gate() was run, in memory.
+- low forge/forge.py:707 with :652, README.md:30 On the land() path, the PR's only copy of the gate output is pr_close's `why[-6000:]`, and that slice cuts the block this PR adds.
+  - `why` there is the 38-character "gate failed after updating from main." line plus gout (up to 6,599 characters in all), so the slice drops the first ~600 characters: the header/error block this PR puts in front.
+  - Measured with 400 clippy-style errors: `== fmt` and `== clippy` are missing from `why[-6000:]` but present in the 7,000-character ticket note.
+  - The not-merged comment at :809 loses them the same way. On that path the "gate after repair" comment (:807) still carries them whole.
+  - README row 30 says the PR comment gets the stage headers.
+  - Fix: a 900-character cap gives 38 + 900 + 61 + 5,000 = 5,999, which fits; measured, both headers are kept.
+- low forge/forge.py:380-382, README.md:30 The evidence overstates the incident: "the repair failed the same way" implies the cut header caused the failure, and it did not.
+  - Checked and true: reflex1 PR #2's gate comments (04:01:10Z and 04:01:18Z, via gh) are rustfmt hunks with no `== fmt`, and 0005 is the only `gate still failing after repair` note in reflex1's tickets (git grep: 1).
+  - The repair session itself never worked the failure. It started at 04:01:10Z, forge.log records RETRY at 04:01:21Z, and ~/.local/state/forge/reflex1/sessions/00006-builder.log is 100 bytes ending `Codex error event: The usage limit has been reached (code=usage_limit_reached)`. PR #104's audit (PR_AUDIT.md:469) and sibling #16's own docstring say the same.
+  - The not-merged comment's tail also named the file (`Diff in …/weights.rs:152:`).
+  - So the record shows the header was cut; it does not show the cut misleading a repair.
+  - The LogDx-CI citation exists (arXiv 2605.28876, "Benchmarking Log Reduction Tools for LLM Root-Cause Diagnosis"). I did not check its numbers.
+- info deletions Nothing is deleted from forge/prompts/*.md, forge/selftest.py or the README safeguard table.
+  - The forge.py `-` lines are the per-call slices: `[-3500:]` at :785 and :807, `[-2000:]` at :707, `[-2500:]` at :809.
+  - The size bound they held now comes from gate() itself (at most 6,561 characters), plus fail()'s `why[-7000:]`, pr_close's `why[-6000:]` and gh()'s `body[:60000]`, all traced above.
+- info forge/forge.py:383 The line pattern is cargo/libtest shaped. pytest's `FAILED tests/x.py::t` and `E   ` lines do not match, so the PR body's "pytest shaped" is wrong. README row 30 names only the cargo shapes, which is accurate.
+- sibling #79 (forge.py gate(), README, selftest) replaces gate()'s body: `Popen` with `stderr=STDOUT`, and on timeout it returns `out[-4500:]` plus a marker. That is a textual conflict on the same lines, but the two do not contradict: this PR's line block applies to #79's `out`, its timeout return included. Whichever lands second must carry the other's logic; this PR's text need not change.
+- sibling #8, #6, #84 each keep a slice that cuts the block this PR prepends. #8 adds a merged-revision gate comment and renames two comments, all with `gout[-3500:]`. #6's review-repair round adds `gout[-3500:]` and `gout[-2500:]`. #84 keeps `gout[-2000:]` on the land() line it re-indents, which conflicts textually with :705-707. Those PRs should drop the slices if they land after this one.
+- sibling #99 fences `why[-7000:]` in fail() and the repair prompt's gout. Compatible: 6,599 characters fit, and #99 moves the `PR:` line out of the slice.
+- sibling #16 (autofix `cargo fmt --all` before the gate) cites the same incident (0005) and removes its fmt cause. It overlaps this PR's motivation, not its code. #16's docstring ("its repair session died on quota") is the accurate account, so this PR's evidence wording is the side to change (Change needed, edits 2 and 3).
+- nit (slop) forge/forge.py:379-382 The four-line comment repeats README row 30's incident and citation, and selftest.py:117-118 repeats them a third time.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:384-385 Change `"\n".join(keys)[:1500]` to `"\n".join(keys)[:900]`. Replace the comment `# 1,500 + 5,000 characters: fits fail()'s 7,000-character ticket note with its PR line` with `# 900 + 5,000 characters: fits pr_close()'s 6,000-character comment with the failure line`.
+2. forge/forge.py:381 Replace `both tails were rustfmt diff with no stage line, and the repair failed the same way.` with `both tails were rustfmt diff with no stage line (its repair session hit Codex's usage limit, so it shows the cut, not its effect).`
+3. forge/README.md:30 Replace `posted two tails of rustfmt hunks with no `== fmt` line and the repair failed the same way` with `posted two tails of rustfmt hunks with no `== fmt` line (its repair session died on Codex's usage limit, so the record shows the cut header, not a repair it misled)`.
+
+
 ## PR #114 · 2026-11-01T05:38:13Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
