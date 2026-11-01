@@ -2,6 +2,50 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #117 · 2026-11-01T20:45:54Z · MERGE WITH CHANGE · risk low · gate pass · left open: touches ['forge/systemd/forge-scout.service'] (owner decides)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #117 forge: pass --no-title to every headless omp -p call (lanes, reviewctl, scout unit)
+What it changes: adds `--no-title` to the omp argv in `_agent_once` (forge.py:265, used by every lane role), to both `reviewctl.py` sessions (audit :89, fix :155) and to the scout unit's `ExecStart`. Also adds a 3-line comment and one README safeguard row (README:95). Head bf80fb4f, one commit on 8389485e.
+Findings:
+- low forge/README.md:95, forge/forge.py:262-264 The trigger is wrong in both places. The text says omp asks for a title "each time the session's `todo` list changes". It asks only on a `todo` `init`. A list change alone (start, done, append) asks nothing.
+  - Source, omp 18.12.6 cli.js: `#Gs()` (the title refresh) runs only when `onTodoResultDetails` returns true, and that function returns `op==="init"`.
+  - Reproduced in this audit's own session, a reviewctl `omp -p --no-session` run without the flag (`~/.omp/logs/omp.2026-11-01.3753875.log`). About 30 tool calls and no `todo`: 0 `title-generator` requests. Within 8 s of the first `todo` `init`: 2 haiku requests, 2,203 tokens, one a title ("Audit forge PR 117 before merge"), one an icon title ("nf-oct-git_pull_request ⤴️ PR117"). After a `todo` `done` it was still 2.
+  - Production logs agree: 77 of the 78 sessions have exactly 2 haiku title starts. All of them fall 4-18 s after the session starts, and none comes later in sessions that run up to 571 s with mid-run todo nudges. The cost is per `init` (in practice once per session), not per change.
+  - The measured numbers check out exactly against `~/.omp/logs`: 182 requests (155 haiku, 20 sonnet, 7 fable), 201,874 tokens, 123,730 cache-write, 78 pids. The haiku → sonnet → session-model fallback after "model-returned-none" shows up in the per-pid sequences.
+- info forge/forge.py:265, reviewctl.py:89,155, systemd/forge-scout.service:9 The flag is real and only affects titles.
+  - The flag: `omp --help` (18.12.6, the only omp on PATH; `~/.local/bin/omp` symlink) lists `--no-title`. The parser maps `--no-title` to `noTitle`, and `noTitle` sets `Bun.env.PI_NO_TITLE="1"`.
+  - Scope: the other four `PI_NO_TITLE` reads all guard title paths: replan refresh, first-message title, the replied/declined title, and the interactive title-model prewarm. No other behaviour depends on it.
+  - Argv shape: the exact lane argv (`-p --no-session --no-title --model --thinking --approval-mode=yolo --config=forge/omp.yml @file`) parses; a nonexistent model got as far as model lookup, rc 1 "Model not found". A haiku smoke with that argv returned `ok`, rc 0.
+  - Stdout: none of 231 scout stdout logs contains a generated title, though 78 of those sessions made one. So reviewer VERDICT parsing and audit output are unaffected.
+- low forge/forge.py:265 One more flag ties session startup to omp's flag set (no change needed). An unknown flag exits rc 2 with `Error: unknown flag: ...`, which I tested. If a later omp drops `--no-title`:
+  - `agent()`'s quota regex (forge.py:231) does not match, so there is no fallback.
+  - `cycle()` hits "builder produced no diff (rc=2)" (forge.py:777), and `fail()` charges an attempt. After `max_attempts` the ticket is `blocked` (forge.py:923).
+  - reviewctl audits and the scout fail too.
+  - `-p`, `--no-session`, `--thinking`, `--approval-mode` and `--config` already carry the same exposure, and `--no-title` is a documented public flag. It adds to an existing risk class rather than creating a new one.
+- info Pass 1 surface checked; none of it is touched:
+  - The diff does not change the gate, `touched_protected`/protected paths, any prompt, reviewer selection or verdict parsing, claim, `recover()`, `discard_strays()`, PR create/merge, or `gpu.py`.
+  - The flag is a constant literal. No ticket text is newly interpolated, and the reviewctl f-strings gain only that literal; `$(cat {pf})` is unchanged.
+  - No new state, no new exception path, no growth beyond 3 comment lines and 1 README row.
+  - The change only removes model calls. It adds no new spend.
+  - Every `omp -p` session site is covered. `omp usage` (forge.py:293) and `omp --version` (:136) are not sessions.
+- info Deletions: the only `-` lines are the three argv lines and the `ExecStart` line, each rewritten with the one added flag. Nothing is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+- info Siblings: 27 other open PRs target `forge`.
+  - None touches `reviewctl.py` or `forge-scout.service`.
+  - No added or removed line in any of them contains `cmd = [OMP`, `--no-session`, `title`, `reviewctl` or `forge-scout`.
+  - #7 and #47 have hunks in `agent()`/`_agent_once` at other lines, with no context on the argv line, so they are compatible.
+  - Several append rows to the same README table, which can cause a textual conflict at the table end. None contradicts this PR or duplicates it.
+- info Checks: on the PR head (extracted to /tmp), `py_compile forge/forge.py forge/reviewctl.py` is clean and `python3 forge/selftest.py` passes all checks. Since 8389485e, origin/forge has changed only `forge/SCOUT.md`.
+- info Deploy: the installed `~/.config/systemd/user/forge-scout.service` is the base copy (diff empty), so the unit edit waits for a reinstall, as the PR body says. `forge-review.service` runs reviewctl from `~/Dev/Crewship-scout`, so that edit goes live on the next pull. Lanes run `~/Dev/Crewship/forge/forge.py`.
+- nit slop: the forge.py comment repeats the README row's numbers. That matches the file's existing style (e.g. :40-44), so no change. The PR body's "a builder that uses `todo` pays the same per change" has the same per-change error, but it is not in the repo.
+- Worth it: the logs' own cost field puts the 182 calls at about $0.21 over 4 days on plan quota. Small, but complexity is near zero and nothing is weakened.
+Change needed (only for MERGE WITH CHANGE): correct the trigger in both places.
+  - In forge/README.md:95, replace "omp asks `claude-haiku-5-5` for one each time the session's `todo` list changes" with "omp asks `claude-haiku-5-5` for one, plus an icon title, each time the session runs `todo` `init` (once per session in the 78 measured)".
+  - In forge/forge.py:262-263, replace "but omp still asks a model for a title each\n        # time the session's `todo` list changes" with "but omp still asks a model for a title and an\n        # icon title each time the session runs `todo` `init`".
+
+
 ## PR #116 · 2026-11-01T10:22:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
