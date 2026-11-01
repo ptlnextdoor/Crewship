@@ -86,7 +86,7 @@ def audit(pr: dict) -> dict:
     log(f"PR #{n}: audit with {MODEL}:{THINKING}")
     pf = STATE / f"pr{n}.prompt.md"
     pf.write_text(prompt)
-    p = sh(f"timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
+    p = sh(f"timeout 2400 {OMP} -p --no-session --no-title --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
     (STATE / f"pr{n}.omp.log").write_text(f"exit={p.returncode}\n--- stdout\n{p.stdout}\n--- stderr\n{p.stderr}")
     text = out.read_text() if out.exists() else (p.stdout or "")
     if p.returncode or not text.strip():
@@ -152,7 +152,7 @@ def fix(pr: dict, v: dict) -> tuple[bool, str]:
             "made within those files, change nothing and say why.\n\n"
             "Commit with a message that says what the audit asked for and why. Do not push; the caller pushes and runs the gate.\n"
         )
-        p = sh(f"timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
+        p = sh(f"timeout 1200 {OMP} -p --no-session --no-title --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
                cwd=wt, timeout=1300)
         (STATE / f"pr{n}.fix.log").write_text(f"exit={p.returncode}\n{p.stdout}\n{p.stderr}")
         if sh("git status --porcelain", cwd=wt).stdout.strip():
