@@ -2,6 +2,53 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #118 · 2026-11-02T19:30:28Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #118 forge: keep each session's omp file beside its log
+What it changes: `_agent_once` runs `omp -p --session-dir=<home>/sessions/<cycle>-<role>[-k]` in place of `--no-session`, so each session's omp jsonl (every turn, tool call and result) is kept next to its `.log` and `.prompt`. It also rewords the repair comment at forge.py:800 and adds one README safeguard row (README.md:56).
+Findings:
+- none forge/forge.py:266 Argv traced end to end; nothing new can be injected.
+  - The path is `out.with_suffix('')`, so `00032-builder_hard-2.log` becomes `00032-builder_hard-2`. `out` is built from `self.home` (absolute via `expanduser`), the int cycle and the config role name.
+  - The argv is a list with no shell, so ticket text never reaches it.
+  - omp 18.12.6 cli.js: `if(e.sessionDir)return wn.create(t,e.sessionDir)` creates a new session. That line is reached only after the fork/resume/continue branches, and forge passes none of those flags. The autoResume check (default false, and not set in ~/.omp/agent/config.yml) comes after it.
+  - The session writer runs `ensureDirSync(dirname(...))`, so the missing per-session directory gets created. I found this by reading the code and did not run it; the PR body reports a haiku run that wrote the jsonl.
+- none forge/forge.py:241-251,735,888 Concurrency and restarts are safe.
+  - Lane 1 writes `base_home/sessions` and lane k writes `base_home/lane{k}/sessions`, one directory per (cycle, role, k). No two lanes or sessions share a directory.
+  - `state["cycle"]` is saved only in `finally`. A lane killed mid-cycle therefore reuses cycle n, and if its `.log` was never written it reuses the directory too. That directory then gets a second `<ts>_<uuid>.jsonl` with a new id; the old one is not resumed.
+- none gate/reviewer/protected paths: not weakened.
+  - The session directories sit under `self.home` beside `wt/`, outside every worktree and the repo. `git add -A` (forge.py:775,803), `touched_protected`, `discard_strays` (planner and steward run in `self.repo`) and `recover()` (which globs only `self.home/wt`) never see them.
+  - The verdict is still parsed from stdout (`rout`). In cli.js, `isSessionOnDisk()` only gates interactive fork, restart and cost-hydration paths, and I found no print-mode session line or resume hint.
+  - Nothing reads `sessions/`: I grepped forge.py, reviewctl.py and prompts/.
+- none quota/GPU: I traced no new model call.
+  - Title generation depends only on `PI_NO_TITLE`, not on `--no-session` (sibling #117's measurement and audit).
+  - mnemopi memory writes already happen under `--no-session`: ~/.omp/agent/memories/mnemopi/banks holds 205 banks named after lane worktrees (`00001-0009-serve-http-*` …).
+  - gpu.py is not touched.
+- low forge/forge.py:266, README.md:56 New unbounded growth.
+  - Nothing ever prunes `sessions/`. `prune_target()`, which `disk_ok()` calls, only clears CARGO_TARGET_DIR.
+  - With the session on disk, omp's `saveArtifact` writes spilled tool output (long bash and gate output) under the session's artifact directory. Under `--no-session` it went to an in-memory Map. So a session's footprint is the jsonl plus the full output of every long command.
+  - reflex1 ran 264 sessions in ~40 h (10-23T02:59 to 10-24T18:43). `/` has 16 GB free against the default 10 GB `min_free_gb`. No one has measured the size of a 40-90 min lane session; the PR body says so.
+  - It fails safe: `disk_ok()` at forge.py:1070 makes the lane sleep 15 min instead of building into ENOSPC. But that sleep cannot reclaim `sessions/`, so the loop stalls until someone deletes them. Follow-up: prune old `sessions/*/` when `disk_ok` fails. Not blocking.
+- low README.md:56 (slop) The row's evidence overstates what this change delivers.
+  - The arXiv 2610.41433 "+12.2 points" applies to a retry that is given the transcript. The abstract says "the transcript resolved 12.2 points more failures than the notice for gpt-5.4-mini … not significant for gpt-5.4". This PR gives no retry a transcript; `fail()` still writes only the tail to the ticket.
+  - "12-184 KB" matches the five interactive jsonl files in ~/.omp/agent/sessions (12,491 to 183,921 B, checked). It is not a lane session's size, and it leaves out spilled artifacts.
+  - Trimming both is optional.
+- info PR body "Nothing the agent sees changes": nearly true.
+  - `local://` now resolves under the session's artifacts directory instead of `$TMPDIR/omp-local`, and `artifact://` reads from disk instead of memory. The content the agent gets is the same.
+  - Later builders in the same lane can read earlier reviewers' full traces under `$FORGE_STATE_DIR/sessions` (exported at forge.py:270). What is new is the reviewer's exact probe commands and inputs; a REJECT's text already reaches the next builder through the ticket note and the PR comment. No prompt points builders there.
+- nit forge/forge.py:262-265 The comment repeats the README row's evidence (264 logs, TraceElephant 76%), as is house style. The new wording at forge.py:800, "(no resume)", is accurate.
+- info deletions: the diff deletes nothing from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+  - Its `-` lines are the argv (`--no-session` replaced) and the comment at forge.py:800.
+  - No README row or selftest check names `--no-session` as a safeguard. README:80 mentions it only to describe the old repair session.
+- sibling #117 (base `forge`; forge.py, README.md) Both PRs rewrite the same line, forge.py:262 `cmd = [OMP, "-p", "--no-session", …`. That is a textual conflict, not a contradiction.
+  - Whichever lands second must keep both flags: `[OMP, "-p", f"--session-dir={out.with_suffix('')}", "--no-title", …]`. Resolving the conflict by taking #118's line silently drops `--no-title`, which #117 measured at 2 haiku title calls per session.
+  - #117 is the side to change: its comment ("a `--no-session` run keeps no session list, so the title is dropped") and its README row ("Every headless `omp -p --no-session` call (lanes, …)") stop describing the lanes once #118 lands.
+  - No other of the 28 open `forge` PRs touches the argv or the `sessions/` naming. #99's repair f-string hunk starts three lines below forge.py:800's comment and does not overlap it.
+- info checks: the patched forge.py compiles (in memory, no files written). I did not run selftest; its fake omp (selftest.py:228) ignores flags, and no check reads the argv. I did not run omp, since this is a read-only audit.
+
+
 ## PR #117 · 2026-11-01T20:45:54Z · MERGE WITH CHANGE · risk low · gate pass · left open: touches ['forge/systemd/forge-scout.service'] (owner decides)
 
 Verdict: MERGE WITH CHANGE
