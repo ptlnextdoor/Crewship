@@ -259,7 +259,11 @@ class Forge:
         # (E2BIG, "failed to start agent", attempt charged to the ticket).
         pfile = out.with_suffix(".prompt")
         pfile.write_text(prompt)
-        cmd = [OMP, "-p", "--no-session", f"--model={model}", f"--thinking={thinking}",
+        # The omp session file (each model turn, tool call and result) goes to a directory beside the log:
+        # `out` holds only stdout, the final reply, so with `--no-session` a failed attempt's trace was gone
+        # (reflex1 keeps 264 such logs and no trace; full traces lift failure attribution up to 76%,
+        # TraceElephant). `-p` never resumes from the directory: two runs into one dir got two session ids.
+        cmd = [OMP, "-p", f"--session-dir={out.with_suffix('')}", f"--model={model}", f"--thinking={thinking}",
                "--approval-mode=yolo", f"--config={OMP_CONFIG}", f"@{pfile}"]
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
         try:
@@ -793,7 +797,7 @@ class Forge:
             ok, gout = self.gate(wt)
             self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
             if not ok:
-                # one repair pass before giving up. It is a fresh omp session (--no-session), so it gets the
+                # one repair pass before giving up. It is a fresh omp session (no resume), so it gets the
                 # ticket as well as the gate output: spec beats test feedback for repair (arXiv 2610.28834).
                 # It gets the builder prompt whole: the inline version carried none of its rules (credentials,
                 # dependencies, files outside the worktree, the formatter), and never said that the branch's
