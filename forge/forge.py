@@ -388,9 +388,9 @@ class Forge:
         if keys:  # 900 + 5,000 characters: fits pr_close()'s 6,000-character comment with the failure line
             tail = "\n".join(keys)[:900] + "\n... [lines the tail below cut; the full output is not kept]\n" + tail
         ok = r.returncode == 0
-        # A green test stage in which every `test result:` line reads `0 passed` ran nothing (a members list
-        # that dropped the crate, a cfg that compiles no tests): README row 29's rule, applied to the gate's own
-        # run. A gate that reports PASS on checks it never ran needs a third value (Silent Success, arXiv 2609.30307).
+        # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
+        # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
+        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307).
         passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
         if ok and passed and not any(int(n) for n in passed):
             ok, tail = False, "gate: exit 0 but every test result line reads 0 passed; no test ran\n" + tail
