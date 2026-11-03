@@ -236,19 +236,24 @@ class Forge:
             return rc, text
         raise QuotaExhausted(role)
 
-    def _agent_once(self, role: str, model: str, thinking: str, prompt: str, cwd: Path, timeout_min: int) -> tuple[int, str]:
-        timeout = 60 * timeout_min
+    def log_path(self, name: str) -> Path:
+        """`sessions/<cycle>-<name>.log`, `-2`, `-3` when the name ran before this cycle: the builder repairs
+        after a gate failure and again to resolve a merge, a stalled review is rerun, the steward runs once
+        more at the deadline, the gate runs again after a repair. One name per (cycle, role) let the second
+        session overwrite the first, and the lost one was the session that wrote the diff (reflex1 lane 1
+        cycle 32 kept only the 1.5 KB merge run of a 63-minute builder)."""
         logdir = self.home / "sessions"
         logdir.mkdir(exist_ok=True)
-        # A role can run twice in one cycle: the builder repairs after a gate failure and again to resolve
-        # a merge, a stalled review is rerun, the steward runs once more at the deadline. One name per
-        # (cycle, role) let the second session overwrite the first, and the lost one is the session that
-        # wrote the diff (reflex1 lane 1 cycle 32 kept only the 1.5 KB merge run of a 63-minute builder).
-        out = logdir / f"{self.state['cycle']:05d}-{role}.log"
+        out = logdir / f"{self.state['cycle']:05d}-{name}.log"
         k = 1
         while out.exists():
             k += 1
-            out = logdir / f"{self.state['cycle']:05d}-{role}-{k}.log"
+            out = logdir / f"{self.state['cycle']:05d}-{name}-{k}.log"
+        return out
+
+    def _agent_once(self, role: str, model: str, thinking: str, prompt: str, cwd: Path, timeout_min: int) -> tuple[int, str]:
+        timeout = 60 * timeout_min
+        out = self.log_path(role)
         steer = self.repo / "STEERING.md"
         if steer.exists() and steer.read_text().strip():
             # The owner's standing instructions come first in every session (borrowed from
@@ -379,14 +384,20 @@ class Forge:
         g = self.cfg.get("gate", "./gate.sh")
         r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
         out = r.stdout + r.stderr
+        # The whole output goes to a file beside the session logs and the tail below names it, so the repair
+        # session reads the lines the cut dropped instead of rerunning the gate: the full output behind a
+        # placeholder, restored on demand (DTOC, Chaturvedi et al. 2026: fewer steps, higher solve rate on
+        # DeepSWE for the models that followed the pointer), and a tool result that names its own cut.
+        log = self.log_path("gate")
+        log.write_text(out)
         cut, tail = out[:-5000], out[-5000:]
         # grep + tail, not tail alone: the stage header (`== fmt`) and the first error lines sit above a
         # 5,000-character tail of fmt hunks or test output. reflex1 PR #2, the one gate failure on record:
         # both tails were rustfmt diff with no stage line (its repair session hit Codex's usage limit, so it shows the cut, not its effect). Hybrid
         # grep+tail routers lead the cost-quality frontier for LLM log diagnosis (LogDx-CI, arXiv 2605.28876).
         keys = [l for l in cut.splitlines() if re.match(r"== |error(\[E\d+\])?:|test \S+ \.\.\. FAILED|thread '.*' panicked|gate: ", l)]
-        if keys:  # 900 + 5,000 characters: fits pr_close()'s 6,000-character comment with the failure line
-            tail = "\n".join(keys)[:900] + "\n... [lines the tail below cut; the full output is not kept]\n" + tail
+        if cut:  # 800 + a 150-character note + 5,000: fits pr_close()'s 6,000-character comment with the failure line
+            tail = ("\n".join(keys)[:800] + "\n" if keys else "") + f"... [{len(cut):,} characters above cut; the full output is at {log}]\n" + tail
         ok = r.returncode == 0
         # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
         # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
