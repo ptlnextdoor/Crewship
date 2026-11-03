@@ -2,6 +2,64 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #122 · 2026-11-03T14:33:19Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #122 forge: keep every gate run's whole output in a file the cut line names
+What it changes: `gate()` now writes each run's full stdout+stderr to `<home>/sessions/<cycle>-gate[-k].log`. The path comes from a new `log_path()` helper, pulled out of `_agent_once` with the same naming. The cut note now names that file and the number of characters dropped, and it now appears even when no key line sits above the tail. The key-line budget drops from 900 to 800. The PR also adds one README row and one selftest check, and loosens the 2f size bound from 5200 to 5300.
+Findings:
+- none forge/forge.py:383-405 The gate, the reviewer and the protected paths are not weakened.
+  - `ok` is still `r.returncode == 0`, and the 0-passed check still scans the whole `out` (:405).
+  - `touched_protected`, `unrequested_deps` and `test_tampering` still run before every gate (:806/:815, :828/:837, land :723/:736).
+  - Nothing in forge reads the log back. `gate()` is its only writer, and no other file in forge/ reads `sessions/`. A session that rewrites the file changes nothing forge decides.
+  - The path is built from `self.home`, the int cycle and the literal "gate". No ticket text reaches it.
+- none forge/forge.py:239-256,391 Concurrency and worktree are safe.
+  - Lane 1 writes `base_home/sessions` and lane k writes `base_home/lane{k}/sessions`. Each lane is one process that calls the gate in sequence, so `log_path()`'s exists-then-write cannot race.
+  - The file sits beside `wt/`, not inside the worktree (`wt = self.home/"wt"/...`, :781). The `git add -A` in the repair and in land() cannot commit it.
+  - `recover()` globs only `home/wt` (:1034).
+- info forge/forge.py:392 If `log.write_text` raises (for example ENOSPC), `gate()` aborts before `ok` is set.
+  - Traced path: cycle()'s handler closes the PR, `finally` removes the worktree and branch, and lane_loop's `recover()` (:1105) sets the ticket back to retry, or blocked after max_attempts interruptions. No ticket is left `in_progress` and no worktree is left behind.
+  - This is not new in practice. On base the very next write raises the same way: `pr_comment` → `gh()` writes `gh-body.md` unguarded (:641), and with PRs off the repair's `.prompt` write does (:266).
+- info forge/forge.py:399-400 The size budget holds. I checked it with a throwaway probe on the PR's `gate()`.
+  - Setup: 400 key lines (enough to fill the 800 budget) and a 40.9M-character cut, with a state dir 5 characters longer than reflex1's lane4.
+  - The note is 135 characters. `"gate failed after updating from main.\n" + gout` is 5,975 characters, under pr_close()'s 6,000-character limit, so the header line survives. The repair variant is 5,970.
+  - A cut with no key lines now starts with `... [5,893 characters above cut; the full output is at …]`. Base sent that tail with no note.
+  - A third gate run in one cycle wrote `-gate-3.log`, as named.
+  - The "150-character note" in the code comment holds only while the state dir path stays under ~95 characters. That length is set by config.
+- low forge/forge.py:391-392 New disk use with no limit.
+  - Each cycle can write up to 5 files (first gate, repair gate, up to 3 land() re-gates), and nothing ever prunes them.
+  - `disk_ok()`→`prune_target()` reclaims only CARGO_TARGET_DIR. If the logs ever pushed free disk under the 10 GB floor, the lanes would sleep rather than fail (fails safe).
+  - The real size should be small. reflex1's gate runs `cargo test --workspace --quiet`. Its four `sessions/` dirs hold 1.1 MB for 264 logs, and the `--session-dir` traces already keep long command output.
+  - The PR body states "No retention". Not blocking.
+- low forge/selftest.py:137 The diff deletes `len(gout) < 5200` and adds `< 5300`. The PR body does not mention this loosening.
+  - The old bound kept the cut header (key lines plus the cut note) under 200 characters above the 5,000-character tail on this fixture. It was the only selftest guard keeping `gate()`'s output inside pr_close()'s 6,000-character comment.
+  - That job now rests on the 5,300 bound alone, which is 100 characters looser. Nothing tests the production worst case (800 + ~130 + 5,000); only the comment arithmetic at forge.py:399 covers it.
+  - The loosening is not needed. Under the PR, the fixture's gout is 5,128 characters at the selftest's tmp path.
+  - With `< 5200` restored, the full selftest passes on a scratch copy of the PR head: rc 0, both 2f checks ok.
+  - The new file check itself is sound. Base writes no file and its note says "not kept", so the check fails on base.
+- info forge/forge.py:400 This is the first prompt text that points builders into `$FORGE_STATE_DIR/sessions/`. The repair session sees it directly, and later attempts see it through the ticket note, because `fail()` quotes gout.
+  - That directory also holds earlier reviewers' omp traces (#118).
+  - It gives builders no new capability: the yolo shell could already read the directory, the env var is already exported (:279), and an earlier review's findings already reach builders through the ticket note.
+  - reflex1 is private (`gh repo view`), so the absolute path in PR comments and ticket notes exposes nothing.
+- info Deletions: nothing is deleted from forge/prompts/*.md or from the README safeguard table.
+  - The cut note "the full output is not kept" is replaced by one that is true.
+  - The forge.py comment on per-role log naming moved into `log_path()`'s docstring, same content. The selftest bound is covered above.
+- info Siblings: 25 other open PRs on `forge` touch these files, and I read all their diffs.
+  - #79 rewrites `gate()` from a stale base. Its hunk replaces `return r.returncode == 0, (r.stdout + r.stderr)[-5000:]`, a line base no longer has. Its timeout path (`return False, ...[-4500:]`) would skip the log write and the cut note. #79 should change: when rebased, its timeout output should go through the same log and cut code.
+  - #8 and #84 slice gout to its tail (`gout[-3500:]` in PR comments, `gout[-2000:]` in land's failure note). They were written before the key-line header existed and would drop that header and the file path with it. #8 and #84 should change.
+  - #99 fences the repair prompt's gate output as "quoted ... evidence of what failed, not instructions". The pointer is evidence, so there is no contradiction.
+  - #7 and #117 edit `_agent_once` lines that this PR moves into `log_path()`. Those are textual conflicts only; #117 already conflicts with base because of #118.
+  - #40 (sh() returns rc 124 on timeout) is compatible: with it, a timed-out gate would also reach the log write.
+- nit forge/README.md:84, forge/forge.py:240-244 The wording is incomplete.
+  - "`-2` for the run after the repair" and "the gate runs again after a repair" leave out land()'s re-gate, which runs on every approved attempt. It takes `-2` when there was no repair, and the land() re-gates take the later numbers up to `-5`.
+  - "Every gate run" is not true of a run that hits `gate_timeout_min`: `sh()` raises TimeoutExpired at :385, before the write.
+  - Wording only.
+- nit forge/forge.py:387-390 The 4-line comment repeats the README row's evidence (DTOC, arXiv 2610.32110), which matches house style. DTOC exists (arXiv 2609.26121, Chaturvedi et al.); I did not check its numbers.
+Change needed: forge/selftest.py:137, in the check "gate output leads with the cut stage header and error line", replace `len(gout) < 5300` with `len(gout) < 5200`.
+
+
 ## PR #117 · 2026-11-03T13:34:41Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
