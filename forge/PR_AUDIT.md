@@ -2,6 +2,60 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #124 · 2026-11-03T17:37:55Z · MERGE · risk low · gate pass · left open: touches ['forge/gpu.py'] (owner decides)
+
+Verdict: MERGE
+Risk: low
+
+## PR #124 gpu: move to RunPod REST v2 before v1 retires on 2026-11-15
+What it changes: only `forge/gpu.py`. `API` moves from `rest.runpod.io/v1` to `api.runpod.io/v2`. `forge_pods()` unwraps `{"pods": [...]}`. The create body uses the nested v2 shape, and `run()` now tries each `--gpu` candidate in turn, moving on only after a 400 or 403. The fields `cost`, `status` and `gpu.id` replace `costPerHr`, `desiredStatus` and `gpu.displayName`. `ssh_target()` reads `ssh.direct` and returns `user@host` and the port. `--spot` is gone.
+Findings:
+- none forge/gpu.py:32,80,87,147,190. I checked the v2 mapping against the live `api.runpod.io/v2/openapi.json` (OpenAPI 3.1, version 2.0.0):
+  - The paths `/v2/pods` (GET/POST) and `/v2/pods/{id}` (GET/DELETE) exist. DELETE returns 204 with no body, and `call()` returns None for that.
+  - A live read-only `GET /v2/pods` returned keys `pagination, pods` (0 pods, `hasNextPage: false`). `gpu.py list` on the extracted PR tree printed `forge spend so far: $14.88`.
+  - `Pod.cost` is documented as "the pod's hourly compute rate in USD". It is in Pod's `required` list, and it appears on the 201 example while the pod is still `PROVISIONING`. `status` is also required.
+  - Every create-body key (`name, image, cloud, disk, ports, env, gpu`) is a declared property of `CreatePodRequest`/`ContainerConfig`, which sets `unevaluatedProperties: false`. `cloud` is the enum `SECURE|COMMUNITY`, `gpu` is `{id, count}`, and `ports` are `port/protocol` strings.
+  - All three default GPU ids are in the live `GET /v2/catalog/gpus`.
+  - The schema has 0 matches for `interruptible`, `spot`, `supportPublicIp` or `publicIp`. So the dropped `--spot`, `interruptible` and `supportPublicIp` have no v2 counterpart. The dropped `volumeInGb: 0` has none either: no `mounts` is sent.
+- none forge/gpu.py:137-145. I ran the candidate loop with `call`, `balance`, `ssh` and `rsync` stubbed. Results:
+
+  | POST responses | POSTs sent | Outcome |
+  |---|---|---|
+  | 400, 403, 201 | 3 | one pod; `DELETE /pods/p1` in `finally` |
+  | 402 | 1 | `exit("gpu: no pod created")`; no DELETE, no ledger row |
+  | 422 | 1 | same as 402 |
+  | 400, 400, 400 | 3 | exit, nothing created |
+  | 201 with `cost: 20` | 1 | over budget: terminate, rc 3 |
+
+  - The loop continues only on 400 and 403. RunPod's retry table in the `createPod` description says both mean "not placed".
+  - A timeout, URLError or 5xx propagates without trying the next candidate. So a POST whose response was lost cannot create a second pod. The first is still named `forge-<name>-<deadline>` and reaped by the timer, as before.
+  - 402, 422, 429 and 5xx all stop the run. For 429 and 5xx that is more cautious than the table's retry advice: it can cost a builder attempt, never money.
+  - `pod` is always bound after the loop. The last candidate either breaks or exits, and argparse's append never yields an empty `--gpu` list.
+- low forge/gpu.py:102-110,133-134. The SSH path has not been tested against a live pod; the PR body says so. Each way it could fail is bounded, and none leaks a pod:
+  - The schema says `ssh.direct` is null "unless `22/tcp` is in `ports` and the running pod has been assigned a public port". v1's `supportPublicIp: True` has no v2 equivalent. If a COMMUNITY host never gets a public port, `ssh_target` waits 900 s and raises TimeoutError. The handler at :162 catches it and `finally` at :164 terminates. Cost: up to 15 min at the pod's rate and one failed job.
+  - The body sets `env.PUBLIC_KEY` but not `startSsh`. The schema's `startSsh` text says it only injects `PUBLIC_KEY` "unless the request already sets one", and that images start sshd from that variable. That is the mechanism the v1 body already relied on for the ledger's past jobs. [INFERENCE] v2 behaves the same.
+  - If sshd does not come up, ssh and rsync fail and `finally` terminates the pod.
+- info forge/gpu.py:87,147. The budget guard and the ledger both depend on `float(pod.get("cost") or 0)`. This is the same fail-open shape v1 had with `costPerHr`: a missing field reads as $0, passes `cost * hours > left`, and is booked as $0.
+  - It is not blocking, because `cost` is required in the schema.
+  - If RunPod ever dropped the field, `GPU_MIN_BALANCE=3` (projects/reflex1.toml:22) would cap the loss, against the $5.03 balance the PR reports.
+  - Changing it to `pod["cost"]` would be worse: it would raise before the `try`/`finally` and leave the pod running until the reaper.
+- info forge/gpu.py:80. `forge_pods()` reads only the first page. v2's default limit is 1000 and results come newest first, so `reap` misses a forge pod only on an account with more than 1000 pods.
+- info forge/gpu.py:108,115. The ssh and rsync destination now starts with the API's `username` instead of a literal `root@`. Only RunPod's TLS response can set it; no ticket text reaches it. A leading `-` there would need a compromised RunPod API. Not blocking.
+- none safety surface:
+  - The diff touches only gpu.py. It does not touch any prompt, selftest.py, README row, `gate.sh`, the protected-path check, claim, `recover()`, `discard_strays()`, reviewer selection or verdict parsing, or PR create/merge.
+  - Every caller still parses: forge.py:1086-1088 (`reap --all` at the deadline), systemd/forge-gpu-reap.service (`reap`), and prompts/builder.md:14 (`run --name --hours --push --pull --cmd`).
+  - `--spot` has 0 hits in ~/Dev/reflex1, ~/code/reflex and Crewship. A stray `--spot` would now get an argparse exit 2 before any API call.
+  - `record()` and the ledger line format are unchanged, so forge.py `gpu_left()` (:526-536, PR #123) reads the ledger the same way.
+  - The diff deletes nothing from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+  - `py_compile` passes on gpu.py and forge.py. `python3 selftest.py` on the extracted PR tree: "forge selftest: all checks passed" (section 5's gpu string checks still hold).
+- none siblings. None of the 28 other open PRs on `forge` touches `forge/gpu.py`.
+- info PR body claims:
+  - Verified: the v1 retirement date and the new base URL (docs.runpod.io migration guide), the retry table, the live list shape, and the `--spot` grep.
+  - Not reproduced: the `jsonschema` validation, because the `referencing` module is missing here. I checked each body key against the schema by hand instead (first finding).
+- nit forge/gpu.py:30-31. The new comment is a v1-to-v2 changelog. After merge it describes code that no longer exists ("has no spot flag"); it belongs in the commit message. Not blocking.
+- nit forge/gpu.py:174. `--gpu` help still says "RunPod gpuTypeId". v2 calls the field `gpu.id`, but the strings are the same.
+
+
 ## PR #123 · 2026-11-03T15:33:12Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
