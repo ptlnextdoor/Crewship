@@ -2,6 +2,76 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #121 · 2026-11-03T13:30:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #121 forge: a green gate whose every test result line reads 0 passed is a FAIL
+What it changes: `gate()` (forge.py:390-397) now reads the full gate output, not only the tail, for libtest `test result: <x>. N passed` lines. When the gate exits 0, at least one such line exists, and every N is 0, it returns FAIL and puts `gate: exit 0 but every test result line reads 0 passed; no test ran` first in the output text. The PR also adds selftest 2g (two checks) and README row 30.
+Findings:
+- none forge/forge.py:390-397 The check can only fail closed, and it creates no new side-effect path.
+  - `ok` starts as `r.returncode == 0`, and the new branch can only set it to False. It cannot produce a PASS, start a review, or land anything the exit code had not already passed.
+  - The only text it adds is a constant 68-character line. No ticket text gets into it, nothing goes to a shell, and no state is shared between lanes.
+  - `re.findall` on a `str` and `int()` of a `\d+` capture cannot raise. So there is no new exception path that could leave a ticket `in_progress` or a worktree behind.
+  - A FAIL from this check takes the existing paths:
+    - At :797-798 it posts `**gate: FAIL**` with the cause first, then runs the single existing repair session (:806).
+    - If the repair also fails, :822 calls `fail()`, and the logged cause is "gate still failing".
+    - In `land()` at :718-720 it returns "gate failed after updating from main."; :866 calls `fail()`, which closes the PR, and `finally` removes the worktree and the branch.
+  - The quota cost is the same as for any gate FAIL: one repair session per attempt, and at most `max_attempts` attempts. No GPU is used.
+- info forge/prompts/reviewer.md:1, forge/prompts/builder.md (Done-when rule) The PR body's "no equivalent" claim checks out.
+  - The reviewer is told to write `PASS (forge)` for the `{GATE}` line and not to rerun it.
+  - The builder's 0-passed rule covers the other "Done when" lines ("the `{GATE}` line counts as run by the step above").
+  - So before this PR, nothing looked at test counts on the gate's own run. This PR makes the PASS the reviewer trusts stricter.
+  - The builder's own `./gate.sh` run still prints `gate: PASS` in this case. The builder only learns the cause from the repair prompt, where it is the first line (2g pins `startswith`).
+- none evidence: I re-ran the PR's measurement with `gh api --paginate repos/ptlnextdoor/reflex1/issues/comments`.
+  - 110 gate comments: 108 `gate: PASS`, 1 `gate: FAIL`, 1 `gate after repair: FAIL`.
+  - 964 `0 passed` lines across the 110 gate comments.
+  - 0 PASS comments with no `test result:` line, and 0 PASS comments whose lines are all zero.
+  - Every `test result` line in them matches the new regex.
+  - A tail is a substring of the full output, so a line with at least 1 passed in the tail means the check would not have fired on that run. That is 0 false positives on the record.
+  - reflex1's `gate.sh` sets `CARGO_TERM_COLOR=never`. If colour codes or a runner that is not libtest (nextest, pytest) appear, the regex matches nothing and the result falls back to the exit code, which is the old behaviour.
+- low forge/README.md:30, forge/forge.py:391-392 The README row and code comment claim more coverage than the check gives.
+  - The check fires only when every test binary in the whole run reads 0.
+  - reflex1 has 5 workspace members (`~/Dev/reflex1/Cargo.toml:3`). I ran the PR's regex on an output with one binary at 12 passed and one at 0 passed, which is what dropping one crate from `members`, or cfg-ing out one crate's tests, produces. It does not fire.
+  - The row's "a workspace members list or a `cfg` that drops the crate's tests" and the comment's "a members list that dropped the crate" both read as if they cover that case. They do not: it stays with the reviewer.
+- low forge/README.md:30 ("like row 29"), forge/forge.py:392 ("README row 29's rule") "Row 29" is a line number in the file. README line 29 is the 4th row of the table.
+  - Neither file referred to rows by number before this PR.
+  - Sibling #6 adds 2 lines to the flowchart at README:14, which moves that row to line 31.
+  - This PR is the side that should change: refer to the row by its name.
+- nit forge/forge.py:388 The comment's size bound ("900 + 5,000 ... fits pr_close()'s 6,000-character comment") no longer holds in the worst case.
+  - On the `land()` path the worst case is now 38 + 900 + 61 + 68 + 5,000 = 6,067 characters, so `pr_close`'s `why[-6000:]` would cut the two cause lines at the head.
+  - That case cannot occur when this check fires. An exit-0 run that ran no test has no `error:`/`panicked`/`FAILED` lines to fill the 900-character key block.
+  - The ticket note (`why[-7000:]`) keeps everything either way.
+- nit forge/forge.py:393, forge/README.md:30 Both cite more than they need.
+  - "needs a third value" describes the paper's fix. The code turns the case into a FAIL, which is what that third value did in the paper ("turned those silent passes into failures"), so the comment is right but says more than the code does.
+  - The README row's Aïdasso clause (11% reruns, ignored exit codes) is about a different failure than a green exit with no tests, so it is padding. Optional to fix.
+- none deletions: The diff deletes one line in forge.py, `return r.returncode == 0, tail`.
+  - `return ok, tail` replaces it, and `ok` starts from the same value.
+  - Nothing is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table (README +1 row, selftest +6 lines), so no safety layer is removed.
+- none forge/selftest.py:140-145 The new selftest is sound and the suite passes.
+  - 2g pins the all-zero FAIL and the PASS when 0-passed lines sit beside a line that ran.
+  - The case with no `test result:` line stays pinned by the existing check at :139, "a short gate output is untouched", which expects `(True, ...)`.
+  - `gate.sh` keeps the mode 0o755 set at :135, and :146 restores the file with `git checkout`.
+  - I ran `py_compile` and `python3 forge/selftest.py` on the PR tree (exported with `git archive` into /tmp): 0 FAIL lines, "all checks passed", and both 2g checks ok.
+- info siblings: I read the diffs of all 27 other open PRs on `forge`. None adds a test-count check, and none touches the text of README rows 29 or 30 (I grepped every diff for `test result` and `0 passed`).
+  - #79 rewrites `gate()`'s body (Popen with `stderr=STDOUT`, and an early `return False` on timeout). That is a textual conflict on these same lines, and whichever PR lands second has to carry the other's logic. Its timeout path returns before this check runs, which is correct.
+  - #40's rc 124 on timeout also skips the check, because `ok` is False.
+  - #84 skips `land()`'s re-gate only for a tree that already passed this check, so the two fit together.
+  - #6 adds a `gate()` call after its review-repair round, and that call gets this check for free.
+  - #6 (`gout[-3500:]`, `gout[-2500:]`), #8 (`gout[-3500:]`, `gout[-2000:]`, `gout[-2500:]`) and #84 (`gout[-2000:]`) keep tail slices that would drop the cause line this PR puts at the head of `gout`. Those PRs should drop the slices when they rebase. This PR's text does not need to change for them.
+  - #28 rewrites the gate-oracle row, which is now README:31. The rows are only next to each other; they do not conflict in meaning.
+Change needed (only for MERGE WITH CHANGE): Fix the coverage claim and replace the line-number references, in two files:
+1. forge/README.md:30: replace ``a workspace members list or a `cfg` that drops the crate's tests, which`` with ``a workspace members list or a `cfg` that drops every crate's tests (one that drops only some leaves another binary above `0 passed` and is not caught here), which``.
+2. forge/README.md:30: in the same row, replace `like row 29;` with `like the "Done when" no-test row above;`.
+3. forge/forge.py:391-393: replace the three comment lines with:
+```
+        # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
+        # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
+        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307).
+```
+
+
 ## PR #120 · 2026-11-03T09:22:18Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
