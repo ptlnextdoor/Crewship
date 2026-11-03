@@ -134,7 +134,7 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'error: rustfmt diff'\nseq 1 2000 | sed 's/^/Diff in x.rs:/'\nexit 1\n")
     (repo / "gate.sh").chmod(0o755)
     ok, gout = f.gate(repo)
-    check("gate output leads with the cut stage header and error line", not ok and gout.startswith("== fmt\nerror: rustfmt diff\n...") and gout.endswith("Diff in x.rs:2000\n") and len(gout) < 5300, gout[:120])
+    check("gate output leads with the cut stage header and error line", not ok and gout.startswith("== fmt\nerror: rustfmt diff\n...") and gout.endswith("Diff in x.rs:2000\n") and len(gout) < 5200, gout[:120])
     glog = f.home / f"sessions/{f.state['cycle']:05d}-gate.log"
     check("the whole gate output is kept in a file the cut line names", f"the full output is at {glog}]" in gout and glog.read_text().count("Diff in x.rs:") == 2000, gout[:200])
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'gate: PASS'\n")
