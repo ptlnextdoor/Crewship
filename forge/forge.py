@@ -527,9 +527,12 @@ class Forge:
         """(dollars gpu.py would still allow, budget). GPU_BUDGET_USD comes from the lane's env, the variable
         gpu.py itself reads; the ledger is read here rather than through gpu.py so no RunPod request is made."""
         budget = float(self.env.get("GPU_BUDGET_USD", 15))
-        spent = 0.0
-        if GPU_LEDGER.exists():
-            spent = sum(json.loads(l).get("usd", 0) for l in GPU_LEDGER.read_text().splitlines() if l.strip())
+        try:
+            spent = sum(json.loads(l).get("usd", 0) for l in GPU_LEDGER.read_text().splitlines() if l.strip()) if GPU_LEDGER.exists() else 0.0
+        except (ValueError, TypeError, AttributeError) as e:
+            # gpu.py's spent() raises on the same ledger, so no GPU job can run; say so rather than stall the planner
+            self.log(f"gpu ledger {GPU_LEDGER} unreadable ({type(e).__name__}: {e}); planner told $0 GPU budget left")
+            return 0.0, budget
         return max(0.0, budget - spent), budget
 
     def plan(self) -> None:

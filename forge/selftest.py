@@ -419,6 +419,7 @@ with tempfile.TemporaryDirectory() as d:
     check("a lane with nothing to claim refills the queue itself", turns == ["planner"], str(turns))
     check("the planner is told the GPU budget gpu.py would still allow", "$2.25 left of $10" in prompts[0],
           next((l for l in prompts[0].splitlines() if "GPU_LEFT" in l or "left of $" in l), "no budget line"))
+    forge.GPU_LEDGER.write_text('{"usd": 0.'); check("an unreadable ledger leaves no GPU budget, not a dead planner", f.gpu_left() == (0.0, 10.0), str(f.gpu_left()))
     forge.GPU_LEDGER.unlink()
     check("no ledger means the whole budget is left", f.gpu_left() == (10.0, 10.0), str(f.gpu_left()))
     forge.GPU_LEDGER = real_ledger
