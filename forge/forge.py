@@ -424,7 +424,10 @@ class Forge:
         if base.startswith("origin/"):
             # A stale remote-tracking ref puts main's own commits on this branch's side of the diff.
             self.sh("git fetch -q origin", cwd=cwd, timeout=120)
-        files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd).stdout.split()
+        # `check=True` on the three guard diffs: a `git diff` that fails (bad ref, broken worktree) prints nothing,
+        # and nothing matches, so the guard passed with nothing checked. A check that cannot fail is the one an
+        # agent loop finds (Copilot Cowork, 2026-11-02: a changed-file list that came back empty passed for weeks).
+        files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd, check=True).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
 
     def unrequested_deps(self, cwd: Path, ticket_text: str) -> list[str]:
@@ -435,7 +438,7 @@ class Forge:
         dependency no ticket names, so the prose has held; the lock is the surface the LiteLLM 1.107.0
         stealer came through)."""
         import tomllib
-        if "Cargo.lock" not in self.sh("git diff --name-only origin/main...HEAD -- Cargo.lock", cwd=cwd).stdout:
+        if "Cargo.lock" not in self.sh("git diff --name-only origin/main...HEAD -- Cargo.lock", cwd=cwd, check=True).stdout:
             return []
         def lock(rev: str) -> dict[tuple[str, str], list[str]]:
             try:
@@ -477,7 +480,7 @@ class Forge:
         drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
         assert_ok = drop_ok or re.search(r"\b(remove|delete|drop)\W+(\w+\W+){0,3}?(debug_)?assert", text)
         out, f, net, gone, asserts = [], "", 0, 0, 0
-        for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd).stdout.splitlines():
+        for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd, check=True).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
             elif m := self.SKIP_MARK.match(line):
