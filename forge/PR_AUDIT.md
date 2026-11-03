@@ -2,6 +2,44 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #125 · 2026-11-03T18:40:11Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #125 builder: read PROGRESS/LEARNINGS by rg for the ticket's terms, not end to end
+What it changes: builder.md rule 1 stops telling the builder to read `PROGRESS.md` and `LEARNINGS.md` whole. It now reads `PROGRESS.md`'s top status block, runs `rg` over both files for what the ticket names plus its `depends:` ids, and repeats the `rg` before any later tool it uses. The PR also adds one README safeguard row. It changes no code, gate, reviewer prompt or selftest.
+Findings:
+- medium forge/prompts/builder.md:4, forge/README.md:100: the new text says "The reviewer greps the same entries against your diff" (README: "the reviewer already greps the same entries"). That is false. Reviewer step 5 (reviewer.md:8) greps only `LEARNINGS.md` on `origin/main`, and only for the files, tools, commands and figures the diff touches. No reviewer step reads existing `PROGRESS.md` entries against a diff; row 94 covers only lines the diff adds. The PR body names the risk "a process pitfall that names no file the ticket names" and calls the reviewer's grep "the second net". But a step taken during the session leaves no trace in the diff, so a grep keyed to the diff cannot catch it. Example: reflex1 LEARNINGS.md:52, "Do not edit crate sources while `./gate.sh` runs". So the prompt tells a yolo builder there is a backstop that does not exist, for exactly the residual risk the PR accepts.
+- low forge/prompts/builder.md:4 (deleted layer: "Read `AGENTS.md`, `PROGRESS.md`, `LEARNINGS.md`"):
+  - What the whole read prevented: (a) a builder missing a `LEARNINGS.md` lesson keyed to nothing the ticket names; (b) a builder missing `PROGRESS.md` standing instructions and planner notes keyed by the ticket's own id.
+  - Example of (b) on reflex1 origin/main: the `## Landing anchors` section ("builders replace their own line, add nothing at the top of this file"). It exists because doc conflicts lost attempts (0047 twice, 0062 twice), and 36 builder logs cite it. Another example is the planner note "0128 (...; rebases over 0126's `drive.py` hunks)".
+  - What carries (a) now: the builder's own `rg` for ticket terms and for later tools, plus reviewer step 5, which covers only `LEARNINGS.md` entries the diff's terms hit.
+  - What carries (b) now: nothing in the reviewer. Only the ticket text, which on all 13 open/retry reflex1 tickets restates "replace the `- NNNN: not landed` line ... nothing at the top of the file". For the conflicts themselves, `land()` re-syncs and re-gates up to 3 times (README row 43).
+  - The `rg` list adds `depends:` ids but not the ticket's own id, which is what the anchor line and the planner notes are keyed by.
+  - The PR body names the retired layer (the whole read) and the `LEARNINGS.md` residual. It does not name the `PROGRESS.md` one.
+- info forge/forge.py:145-148, 810-813, 842, 646: `prompt()` fills placeholders with plain `str.replace`. The new line has no `{...}` placeholder, and ticket text still enters only through `{TICKET}`. The same text reaches the repair session, because forge.py:842 embeds the whole builder prompt. It does not reach the merge-resolve session, whose prompt is inline at forge.py:646. Gate, protected paths (`gate.sh`, `tickets/`, `.forge/`, `STEERING.md`, instruction files), the reviewer prompt, quota and GPU paths are untouched. selftest checks 490-497 do not depend on line 4. Reading less of two files any lane can append to puts less unvetted text in the builder's context, which is a plus against the threat in README row 94.
+- info (claims checked on ~/Dev/reflex1 origin/main):
+  - File sizes: PROGRESS.md 50,555 B; LEARNINGS.md 75,595 B; AGENTS.md 4,950 B.
+  - LEARNINGS.md has 128 `- ` entries, 82 of them over 400 characters, and 0 match `^- NNNN ` (no entry is keyed by ticket id).
+  - LEARNINGS.md grew from 72,733 B to 75,595 B over its last 8 commits.
+  - All of these match the PR body.
+- nit forge/README.md:100: "read by 127 builder sessions" counts every `*-builder*.log` under ~/.local/state/forge/reflex1: 89 first sessions plus 38 `-2`/`-3` logs. The `-2`/`-3` logs include merge-resolve sessions, whose inline prompt (forge.py:646) has no rule 1, so 127 overcounts.
+- Siblings:
+  - #1 (base c37c1829) inserts a sub-line under the same rule-1 line that #125 rewrites, so the two conflict textually. #1's rule (existing code over stale docs) is already on base as builder.md:22, so #1 should change (rebase or close), not #125.
+  - #85, #23 and #3 edit other builder.md lines and contradict nothing here. #85 says "keep both `PROGRESS.md`/`LEARNINGS.md` entries", which is compatible.
+  - The 23 README siblings each append one table row. None edits this row or covers read scope (#19 is the union driver; #23 duplicates base row 94). They may conflict textually at the end of the table, but not in meaning.
+- Slop: none beyond the false reviewer claim above.
+Change needed (only for MERGE WITH CHANGE):
+In forge/prompts/builder.md:4:
+- replace "and for each id under `depends:`" with "and for this ticket's own id and each id under `depends:`";
+- replace "The reviewer greps the same entries against your diff." with "The reviewer greps only `LEARNINGS.md`, for what your diff touches; nothing after you checks a `PROGRESS.md` entry or a process pitfall you skipped."
+
+In forge/README.md:100:
+- replace "`depends:` ids" with "the ticket's own and `depends:` ids";
+- replace "; the reviewer already greps the same entries" with "; the reviewer greps only `LEARNINGS.md`, for what the diff touches (step 5), so `PROGRESS.md` and process pitfalls rest on the builder's `rg` alone".
+
+
 ## PR #124 · 2026-11-03T17:37:55Z · MERGE · risk low · gate pass · left open: touches ['forge/gpu.py'] (owner decides)
 
 Verdict: MERGE
