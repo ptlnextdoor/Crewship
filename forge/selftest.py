@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -503,6 +504,7 @@ check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it fo
 check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in b and "existing code takes precedence" in b)
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
 check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
+check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
 
@@ -910,8 +912,9 @@ with tempfile.TemporaryDirectory() as d:
     check("a repair that edits the gate is rejected before that gate is run again",
           "gate.sh" in note and runs.read_text().count("run") == 1 and "reviewer" not in turns,
           f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
-    check("the repair session gets the builder's rules, the branch as the earlier patch and the gate output",
-          len(prompts) > 1 and "Credentials:" in prompts[1] and "git diff origin/main...HEAD" in prompts[1] and "\n\nGate output:\n" in prompts[1],
+    check("the repair session gets the builder's rules, the branch as the earlier patch, the gate output and its own kill time",
+          len(prompts) > 1 and "Credentials:" in prompts[1] and "git diff origin/main...HEAD" in prompts[1] and "\n\nGate output:\n" in prompts[1]
+          and "{KILL}" not in prompts[1] and re.search(r"killed at \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\d+ minutes", prompts[1]),
           prompts[1][-400:] if len(prompts) > 1 else str(turns))
 
 # 19. A builder that brings main into its branch (merge or rebase - both are normal git hygiene, and the

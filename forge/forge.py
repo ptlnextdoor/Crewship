@@ -810,11 +810,19 @@ class Forge:
             if self.attempts(ticket) >= 2:
                 builder = "builder_hard"  # escalate after repeated failure
             gated = self.main_gated()
-            prompt = self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)),
-                                 GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
-                                             if gated else
-                                             f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
-            rc, out = self.agent(builder, prompt, wt)
+            def bprompt() -> str:
+                # Rendered per session: the repair pass starts after the gate and gets its own kill time.
+                # The time is in the prompt because omp -p gives the agent no timing feedback mid-session
+                # (arXiv 2610.10833: a budget the harness exposes is kept, one only stated is not).
+                # shortcut: agent() reuses this render for a quota fallback, so a fallback after a long first session is told an earlier kill than its own; render KILL in _agent_once if mid-session builder fallbacks show up in forge.log.
+                tm = self.cfg["roles"][builder].get("timeout_min", 60)
+                kill = dt.datetime.now(UTC) + dt.timedelta(minutes=tm)
+                return self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)),
+                                   KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm),
+                                   GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
+                                               if gated else
+                                               f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
+            rc, out = self.agent(builder, bprompt(), wt)
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
@@ -842,7 +850,7 @@ class Forge:
                 # dependencies, files outside the worktree, the formatter), and never said that the branch's
                 # commits are the earlier session's patch - the thing to fix, not to redo (conversational
                 # repair keeps the failed patch next to its feedback so the next one is not the same patch).
-                rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff origin/main...HEAD` is its work; local `main` sits at the branch point) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end, so skip the starting gate run. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. Every rule below still holds.\n\n{prompt}\n\nGate output:\n{gout}", wt)
+                rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff origin/main...HEAD` is its work; local `main` sits at the branch point) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end, so skip the starting gate run. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. Every rule below still holds.\n\n{bprompt()}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
