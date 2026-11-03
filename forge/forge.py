@@ -814,10 +814,11 @@ class Forge:
                 # Rendered per session: the repair pass starts after the gate and gets its own kill time.
                 # The time is in the prompt because omp -p gives the agent no timing feedback mid-session
                 # (arXiv 2610.10833: a budget the harness exposes is kept, one only stated is not).
+                # shortcut: agent() reuses this render for a quota fallback, so a fallback after a long first session is told an earlier kill than its own; render KILL in _agent_once if mid-session builder fallbacks show up in forge.log.
                 tm = self.cfg["roles"][builder].get("timeout_min", 60)
                 kill = dt.datetime.now(UTC) + dt.timedelta(minutes=tm)
                 return self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)),
-                                   KILL=kill.strftime("%H:%M UTC"), TIMEOUT_MIN=str(tm),
+                                   KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm),
                                    GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
                                                if gated else
                                                f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
