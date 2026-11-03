@@ -2,6 +2,62 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #117 · 2026-11-03T13:34:41Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #117 forge: pass --no-title to every headless omp -p call (lanes, reviewctl, scout unit)
+What it changes: adds `--no-title` to the lane argv in `_agent_once` (forge.py:265, every role), to both reviewctl sessions (audit :89, fix :155) and to the scout unit's `ExecStart`, plus a 3-line forge.py comment and one README safeguard row (README:95). Head bf80fb4f, one commit on 8389485e; origin/forge is now f35dc0b8.
+Findings:
+- medium forge/forge.py:262-265 The PR no longer merges, and the obvious way to resolve it undoes #118.
+  - GitHub reports `mergeable: CONFLICTING`. `git merge-tree origin/forge pr/117` conflicts in forge.py only.
+  - The cause is #118 (27c81fa4, merged after this PR's base). It replaced `--no-session` in that same argv with `f"--session-dir={out.with_suffix('')}"`, so each lane session's jsonl is kept in `sessions/<cycle>-<role>/`.
+  - The PR side of the conflict is `[OMP, "-p", "--no-session", "--no-title", ...]`. Taking it puts `--no-session` back and silently drops every lane's session trace.
+  - Nothing catches that. No check in forge/selftest.py reads the argv (grep for `session-dir|no-session|no-title` hits only forge.py:263,266), so base's gate passes either resolution.
+  - reviewctl cannot land the PR as it stands. `gate()` returns "does not merge into forge cleanly" (reviewctl.py:112-114). `fix()` cannot rebase either: base's commits would show up as files outside the PR and trip its stray-file check (reviewctl.py:162-164). The PR also touches `systemd/`, which reviewctl leaves to the owner (reviewctl.py:36,222). The rebase has to be done by hand.
+- low forge/forge.py:262-264, forge/README.md:95 (98 after the merge) The text describes the wrong flags and the wrong trigger.
+  - Wrong flags: the row says "Every headless `omp -p --no-session` call (lanes, ...)" and "a `--no-session` run keeps no session list, so the title is dropped". Lanes now run `--session-dir`. After the merge, README:58 (#118: "`--session-dir` in place of `--no-session`") and this row would contradict each other.
+  - Lane titles are now persisted, not dropped. omp 18.12.6 cli.js: the title refresh `#Ks` calls `sessionManager.setSessionName(r,"auto","replan")`, which pushes a `title` entry into the session log. Nothing in forge.py, selftest.py, reviewctl.py or gpu.py reads session titles; forge finds a session by its directory. So the change is still worth making, but the stated reason is wrong.
+  - Wrong trigger: the text says omp asks for a title "each time the session's `todo` list changes". In cli.js, `#Gs()` runs only when `onTodoResultDetails(...)` returns true, and that function returns `r==="init"`. So it fires on `todo` `init`, not on start/done/append. It sends a title and an icon-title request, per the earlier reviewctl run's log on this PR; I did not re-run that.
+- info forge/forge.py:265, reviewctl.py:89,155, systemd/forge-scout.service:9 The flag is real and affects only titles.
+  - `omp --help` (18.12.6, the omp on PATH) lists `--no-title`. In cli.js, `r.noTitle` sets `Bun.env.PI_NO_TITLE="1"`.
+  - All 5 `PI_NO_TITLE` reads guard title paths: `#Gs` replan refresh, `#qs` first-message title, the replied/declined title, the interactive tiny-model prewarm, and the setter.
+  - The rebased lane argv parses. `omp -p --session-dir=/tmp/x --no-title --model=anthropic/no-such-model-117 --thinking=high --approval-mode=yolo --config=forge/omp.yml @file` got as far as model lookup ("not found", rc 1). A misspelled flag exits rc 2 ("unknown flag").
+  - If a later omp drops the flag, every session exits rc 2. That surfaces as forge.py:788 "builder produced no diff (rc=2)", and `fail()` charges an attempt; after `max_attempts`, forge.py:934 marks the ticket `blocked`. Every other flag in the argv already carries this risk.
+- info Spend: the change only removes model calls. `~/.omp/logs` now holds 245 `title-generator: start` lines across 96 logs (55 "no title returned", which fall through to the next model). These are sessions not yet run with the flag. No GPU or new quota path.
+- info Pass 1 surface: none of it is touched.
+  - No prompt, gate, `touched_protected`/protected path, claim, `recover()`, `discard_strays()`, reviewer selection or verdict parsing, PR create/merge, or gpu.py.
+  - The flag is a constant literal: no ticket text reaches a command, and the reviewctl f-strings gain only that literal.
+  - No new state, exception path or growth.
+- info Deletions: the only `-` lines are the three argv lines and the `ExecStart` line, each re-added with the flag. Nothing is removed from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+- info Siblings: I scanned the 26 other open `forge` PRs that share a file with this one.
+  - None changes the argv, `--no-session`/`--session-dir`, title, reviewctl.py or forge-scout.service.
+  - #7, #47, #83, #111 and others have hunks in `agent()`/`_agent_once` or around them, but none on the argv line.
+  - Several add rows at the end of the README table, which is a textual conflict only.
+  - The only contradicting change was #118, already merged. This PR is the side that must change (above).
+- info Deploy: the installed `~/.config/systemd/user/forge-scout.service` matches base, so the unit edit waits for a reinstall, as the PR body says.
+- nit slop: the forge.py comment repeats the README row's numbers. That matches the file's existing style, so no change.
+Change needed (only for MERGE WITH CHANGE): rebase onto origin/forge. Leave reviewctl.py and forge-scout.service as they are.
+- forge/forge.py, `_agent_once`:
+  - Keep base's 4-line `--session-dir` comment.
+  - Replace the PR's 3-line comment with:
+    ```
+    # --no-title: when a session runs `todo` `init`, omp asks claude-haiku-5-5 (then sonnet, then the session's own model) for a title and an icon title; forge finds a session by its sessions/<cycle>-<role>/ path and never reads the title.
+    ```
+    Wrap it to the file's comment width.
+  - Make the argv:
+    ```
+    cmd = [OMP, "-p", f"--session-dir={out.with_suffix('')}", "--no-title", f"--model={model}", f"--thinking={thinking}",
+    ```
+    The second line stays as it is.
+- forge/README.md, the added row:
+  - Replace the first cell with: "Every headless `omp -p` call (lanes with `--session-dir`; `reviewctl` and the scout unit with `--no-session`) passes `--no-title`".
+  - In the second cell, replace "omp asks `claude-haiku-5-5` for one each time the session's `todo` list changes" with "omp asks `claude-haiku-5-5` for a title and an icon title when the session runs `todo` `init`".
+  - Replace "a `--no-session` run keeps no session list, so the title is dropped" with "a `--no-session` run drops it on exit and forge finds a lane's session file by its `sessions/<cycle>-<role>/` path, never by its title".
+  - Replace "`-p` and `--no-session` do not imply it" with "`-p`, `--no-session` and `--session-dir` do not imply it".
+
+
 ## PR #121 · 2026-11-03T13:30:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
