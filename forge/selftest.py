@@ -137,6 +137,12 @@ with tempfile.TemporaryDirectory() as d:
     check("gate output leads with the cut stage header and error line", not ok and gout.startswith("== fmt\nerror: rustfmt diff\n...") and gout.endswith("Diff in x.rs:2000\n") and len(gout) < 5200, gout[:120])
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'gate: PASS'\n")
     check("a short gate output is untouched", f.gate(repo) == (True, "== fmt\ngate: PASS\n"))
+    # 2g. A green gate whose test stage ran nothing is a FAIL; one binary at 0 passed beside one that ran is not.
+    (repo / "gate.sh").write_text("#!/bin/sh\necho '== test'\necho 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out'\necho 'gate: PASS'\n")
+    ok, gout = f.gate(repo)
+    check("a gate that ran no test is a FAIL", not ok and gout.startswith("gate: exit 0 but every test result line reads 0 passed"), gout[:120])
+    (repo / "gate.sh").write_text("#!/bin/sh\necho 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\necho 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n")
+    check("a doc-test binary at 0 passed beside one that ran is a PASS", f.gate(repo)[0])
     git("checkout -q -- gate.sh", repo)
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"
