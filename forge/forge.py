@@ -44,6 +44,10 @@ OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 # rename in a later omp cannot stop sessions from starting (PR #105's audit).
 OMP_CONFIG = Path(__file__).with_name("omp.yml")
 UTC = dt.timezone.utc
+# gpu.py appends one line per terminated pod here and refuses a run whose estimated cost exceeds
+# GPU_BUDGET_USD minus this sum; the planner is told the same number so it stops writing GPU tickets
+# the builder cannot run (reflex1: $14.88 of $15 spent, 85 of 140 tickets name a GPU).
+GPU_LEDGER = Path.home() / ".local/state/forge/gpu-ledger.jsonl"
 
 
 class QuotaExhausted(Exception):
@@ -519,6 +523,18 @@ class Forge:
         """Open tickets a lane could claim now: every `depends:` ticket is done."""
         return [t for t in self.open_tickets() if self.ready(t)]
 
+    def gpu_left(self) -> tuple[float, float]:
+        """(dollars gpu.py would still allow, budget). GPU_BUDGET_USD comes from the lane's env, the variable
+        gpu.py itself reads; the ledger is read here rather than through gpu.py so no RunPod request is made."""
+        budget = float(self.env.get("GPU_BUDGET_USD", 15))
+        try:
+            spent = sum(json.loads(l).get("usd", 0) for l in GPU_LEDGER.read_text().splitlines() if l.strip()) if GPU_LEDGER.exists() else 0.0
+        except (ValueError, TypeError, AttributeError) as e:
+            # gpu.py's spent() raises on the same ledger, so no GPU job can run; say so rather than stall the planner
+            self.log(f"gpu ledger {GPU_LEDGER} unreadable ({type(e).__name__}: {e}); planner told $0 GPU budget left")
+            return 0.0, budget
+        return max(0.0, budget - spent), budget
+
     def plan(self) -> None:
         """Refill the ticket queue. Any lane that runs dry may call this, so one lane at a time: the lock in
         the shared state dir is held for the turn, and the lane that takes it re-checks the queue first."""
@@ -535,10 +551,12 @@ class Forge:
             ready, need = len(self.startable()), self.cfg.get("min_queue", 3)
             if ready >= need:
                 return  # another lane filled it while we waited for the lock
-            self.log(f"queue low: planner turn ({ready} of {need} tickets can start now)")
+            left, budget = self.gpu_left()
+            self.log(f"queue low: planner turn ({ready} of {need} tickets can start now; GPU budget ${left:.2f} left of ${budget:.0f})")
             self.board("planner is writing the next tickets")
             rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
-                                                        READY=str(ready), NEED=str(max(self.lanes, need - ready))), self.repo)
+                                                        READY=str(ready), NEED=str(max(self.lanes, need - ready)),
+                                                        GPU_LEFT=f"{left:.2f}", GPU_BUDGET=f"{budget:.0f}"), self.repo)
             self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
             self.discard_strays("planner")
             self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
