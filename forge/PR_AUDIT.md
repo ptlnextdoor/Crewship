@@ -2,6 +2,59 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #123 · 2026-11-03T15:33:12Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #123 planner: prompt carries the GPU budget gpu.py would still allow
+What it changes: adds `GPU_LEDGER` and `Forge.gpu_left()` to forge.py. `gpu_left()` returns `GPU_BUDGET_USD` from the lane env minus the sum of `usd` in `~/.local/state/forge/gpu-ledger.jsonl`, floored at 0. `plan()` logs that number and passes it to planner.md:35 as `GPU_LEFT`/`GPU_BUDGET`. planner.md:35 now tells the planner to write CPU-only tickets when the remainder is below a job's cost. The PR also adds selftest 4q checks and a README row.
+Findings:
+- medium forge/forge.py:529-533 (called from :551). A bad ledger line now stops the whole planner, not just GPU jobs. `gpu_left()` parses every ledger line with no guard, and `plan()` calls it at :551, before the planner session starts. I fed it a truncated line (`{"usd": 0.`), a string `usd`, and a JSON list. It raised JSONDecodeError, TypeError and AttributeError. The trace from there:
+  - The exception leaves `cycle()` at :778, before `claim()`.
+  - `lane_loop` catches it at :1118, runs `recover()` and backs off up to 1800 s (:1123).
+  - Lane 1 plans whenever fewer than `min_queue` tickets are startable (:777), so it stops claiming while 1-2 are left. Once the queue is empty, all 4 lanes fail every cycle.
+  - Nothing refills the queue until a person fixes the file.
+  - Before this PR, the same file only broke `gpu.py run`: its `spent()` (gpu.py:64-67) raises on the same lines.
+  How a bad line gets there:
+  - gpu.py's `record()` hits ENOSPC partway through a line. Disk-full is a known failure here (README CARGO_TARGET_DIR row), and `disk_ok()` frees the loop afterwards but the bad line stays.
+  - Or any yolo session edits the file. `~/.local/state/forge/` is outside every protected path and outside the repo diff that `discard_strays`/the protected-path check inspect.
+  Returning $0 is the true answer here, because gpu.py cannot run a job on that ledger either.
+- none forge/forge.py:526-556, forge/prompts/planner.md:35. Security trace, nothing found:
+  - The gate, reviewer, protected paths, `discard_strays("planner")` (:558) and the planner's edit rule (planner.md:37) are unchanged.
+  - The two substituted values are float-formatted numbers through `prompt()`'s `str.replace` (:145-149). No ticket text enters them, and `plan()`:554 is the only caller of `prompt("planner")`, so neither placeholder is ever left unfilled.
+  - `gpu_left()` runs under `plan.lock` and only reads the ledger. No lane writes it at the same time; gpu.py appends one `json.dumps` line per pod.
+  - No new session, GPU call or retry. The prompt grows by a fixed ~480 characters, plus one log line per planner turn.
+  - The budget source matches gpu.py: `self.env` is the env every agent subprocess gets (:283), and the ledger path is the same as gpu.py:32.
+  - The ledger undercounts pods booked by `reap` at $0 (gpu.py:81-85, see the earlier audits). That is a gpu.py problem from before this PR; `gpu_left()` mirrors it, so it still reports what gpu.py would allow.
+- none deletions. No safeguard layer is removed:
+  - planner.md:35: the deleted sentence ("GPU work is allowed ... keep it under 2 hours.") is kept word for word as the start of the new line.
+  - selftest.py:417: the replaced `f.agent` lambda still appends to `turns`, and the `turns == ["planner"]` check at :418 is unchanged.
+  - forge.py:552: the replaced log line is extended, not shortened.
+  - README: one row added, none removed.
+- none forge/selftest.py:407-424. Selftest passes: I ran `python3 selftest.py` on an extracted PR tree and got "forge selftest: all checks passed". The new checks fail if the prompt does not get the number or if `gpu_left()` mishandles a missing ledger. The module global is restored at :424.
+- low forge/README.md:50. The evidence column checks out partly:
+  - Verified: the live ledger has 43 lines summing to $14.876 against `GPU_BUDGET_USD = "15"` (projects/reflex1.toml:20).
+  - Verified: 84 of 140 reflex1 ticket files mention "gpu" at HEAD 2c39a79 (the PR says 85).
+  - Not verified: the r/ClaudeCode "228 orgs / 214" citation, which has nothing to do with the failure this row prevents.
+  - The row says it prevents "a queue of GPU tickets". 10 of the 12 open reflex1 tickets already mention GPU, and the new text only governs tickets the planner writes from now on. Not blocking.
+- nit forge/forge.py:552,556. `budget:.0f` rounds the budget: `GPU_BUDGET_USD="7.5"` renders "$6.50 left of $8" (measured). `:.2f` would match `GPU_LEFT`.
+- nit forge/prompts/planner.md:35. "(pods run so far cost about $1 per GPU-hour)" is a fixed number in a prompt used by every project, sitting next to live figures. On this ledger it holds: $0.89/h (0.576 $ / 0.647 h, 0.398 $ / 0.448 h). It is the planner's only way to estimate "a job's cost", but it will not follow the ledger.
+- nit forge/forge.py:50,532. The ledger path and parse expression duplicate gpu.py:32 and :67. If gpu.py's path changes, forge reads a missing file and reports the full budget, silently.
+- none siblings. #31 is the only other open PR on `forge` that touches planner.md. It edits the ticket template (:12-13) and the Parallelism rule (:31), not the GPU rule at :35: no contradiction and no duplicate. The other open PRs share forge.py, README.md and selftest.py (117, 111, 99, 86, 84, 83, 79, 48, 47, 44, 42, 40, 39, 28, 25, 20, 19, 16, 8, 7, 6, 5). None of their added or removed lines mention gpu/GPU, `"planner"`, `def plan`, `plan.lock` or `MIN_TICKETS`. The overlap is textual only (neighbouring README rows and selftest hunks).
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `gpu_left()`, replace lines 530-532 (`spent = 0.0` through the `sum(...)` line) with:
+```python
+        try:
+            spent = sum(json.loads(l).get("usd", 0) for l in GPU_LEDGER.read_text().splitlines() if l.strip()) if GPU_LEDGER.exists() else 0.0
+        except (ValueError, TypeError, AttributeError) as e:
+            # gpu.py's spent() raises on the same ledger, so no GPU job can run; say so rather than stall the planner
+            self.log(f"gpu ledger {GPU_LEDGER} unreadable ({type(e).__name__}: {e}); planner told $0 GPU budget left")
+            return 0.0, budget
+```
+Also add this line in forge/selftest.py right before `forge.GPU_LEDGER.unlink()` (:422):
+`forge.GPU_LEDGER.write_text('{"usd": 0.'); check("an unreadable ledger leaves no GPU budget, not a dead planner", f.gpu_left() == (0.0, 10.0), str(f.gpu_left()))`
+
+
 ## PR #122 · 2026-11-03T14:33:19Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
