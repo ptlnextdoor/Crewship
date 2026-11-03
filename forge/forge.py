@@ -387,7 +387,14 @@ class Forge:
         keys = [l for l in cut.splitlines() if re.match(r"== |error(\[E\d+\])?:|test \S+ \.\.\. FAILED|thread '.*' panicked|gate: ", l)]
         if keys:  # 900 + 5,000 characters: fits pr_close()'s 6,000-character comment with the failure line
             tail = "\n".join(keys)[:900] + "\n... [lines the tail below cut; the full output is not kept]\n" + tail
-        return r.returncode == 0, tail
+        ok = r.returncode == 0
+        # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
+        # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
+        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307).
+        passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
+        if ok and passed and not any(int(n) for n in passed):
+            ok, tail = False, "gate: exit 0 but every test result line reads 0 passed; no test ran\n" + tail
+        return ok, tail
 
     # Files omp loads into every later session's context before its first turn (omp docs, context-files.md):
     # standalone CLAUDE.md/GEMINI.md and the editor rule files anywhere on the walk up, and the config
