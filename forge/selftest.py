@@ -70,6 +70,12 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered again\n")
     git("add -A", repo); git("commit -qm t2", repo)
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
+    # A diff the guard cannot list (a base ref that does not exist) is an error, not an empty finding.
+    try:
+        f.touched_protected(repo, "no-such-ref"); raised = False
+    except RuntimeError:
+        raised = True
+    check("a guard whose git diff fails raises instead of passing empty", raised)
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not.
     for p in ("crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json", "docs/omp.md"):
