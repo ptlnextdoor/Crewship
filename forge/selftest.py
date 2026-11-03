@@ -404,14 +404,24 @@ with tempfile.TemporaryDirectory() as d:
     git("commit -qm base --allow-empty", repo); git("push -q origin main", repo)
     cfg = Path(d) / "c.toml"
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nlanes=4\nmin_queue=3\npull_requests=false\n'
+                   f'[env]\nGPU_BUDGET_USD="10"\n'
                    f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n[roles.planner]\nmodel="e/f"\n')
     sleeps, real_sleep = [], forge.time.sleep
     forge.time.sleep = lambda s: sleeps.append(s)
     turns: list[str] = []
+    prompts: list[str] = []
+    # The planner sees what gpu.py would still allow: budget from the lane's env minus the ledger gpu.py writes.
+    real_ledger, forge.GPU_LEDGER = forge.GPU_LEDGER, Path(d) / "gpu-ledger.jsonl"
+    forge.GPU_LEDGER.write_text('{"usd": 6.5, "why": "job done rc=0"}\n\n{"usd": 1.25, "why": "job done rc=0"}\n')
     f = forge.Forge(cfg, 2)  # lane 2 gets its own clone
-    f.agent = lambda role, prompt, cwd, timeout_min=None: (turns.append(role), (0, ""))[1]
+    f.agent = lambda role, prompt, cwd, timeout_min=None: (turns.append(role), prompts.append(prompt), (0, ""))[2]
     f.cycle()
     check("a lane with nothing to claim refills the queue itself", turns == ["planner"], str(turns))
+    check("the planner is told the GPU budget gpu.py would still allow", "$2.25 left of $10" in prompts[0],
+          next((l for l in prompts[0].splitlines() if "GPU_LEFT" in l or "left of $" in l), "no budget line"))
+    forge.GPU_LEDGER.unlink()
+    check("no ledger means the whole budget is left", f.gpu_left() == (10.0, 10.0), str(f.gpu_left()))
+    forge.GPU_LEDGER = real_ledger
 
     held = (Path(d) / "s" / "plan.lock").open("w")
     fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)  # another lane is mid planner turn

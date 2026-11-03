@@ -32,6 +32,6 @@ Rules:
 - Order matters: the lowest-numbered open ticket runs first. Put prerequisites first.
 - A blocked ticket means the approach failed; read its forge notes and write a smaller or different ticket for the same goal rather than a copy.
 - Prefer tickets that move the roadmap's current milestone and leave a measurable result behind. The shortest path to a first closed-loop number beats a better architecture; get a policy driving, then improve it. Mark `difficulty: hard` for architecture, numerics, kernels, or anything a cheaper model already failed.
-- GPU work is allowed via `~/Dev/Crewship/forge/gpu.py` but costs real money; only plan it when a CPU result cannot answer the question, and keep it under 2 hours.
+- GPU work is allowed via `~/Dev/Crewship/forge/gpu.py` but costs real money; only plan it when a CPU result cannot answer the question, and keep it under 2 hours. The shared budget has ${GPU_LEFT} left of ${GPU_BUDGET} (pods run so far cost about $1 per GPU-hour). `gpu.py` refuses a job the remainder cannot cover, so a ticket whose `## Do` or `## Done when` needs one fails at the builder's first run and costs an attempt: when the remainder is under the job's cost, write only tickets a CPU can finish and put the GPU step under `## Out of scope` with `GPU budget: $X left`, so the owner sees what the budget is holding back.
 - If the current milestone is done, mark it done in `ROADMAP.md` and plan the next one.
 - You may edit only `tickets/`, `ROADMAP.md`, and `PROGRESS.md`. Do not write code.
