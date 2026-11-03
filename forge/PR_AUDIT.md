@@ -2,6 +2,65 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #126 · 2026-11-03T20:16:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #126 forge: the three pre-gate guards fail closed when their git diff fails
+What it changes: adds `check=True` to the `git diff` in `touched_protected()` (forge.py:430), `unrequested_deps()` (:441) and `test_tampering()` (:483). A non-zero exit now raises `RuntimeError` from `Forge.sh()` (:212-213) instead of returning an empty finding list. It also adds a selftest check that covers `touched_protected` only (selftest.py:73-78) and README safeguard row 89. Line numbers below are the PR head's.
+Findings:
+- ok forge/forge.py:430,441,483 The PR closes a real guard bypass that a yolo session can trigger. I verified it end to end.
+  - When HEAD shares no history with origin/main, `git diff origin/main...HEAD` exits 128 with empty stdout (`fatal: origin/main...HEAD: no merge base`). All three guards then returned `[]`.
+  - On the builder path, the unchecked `git diff --stat main...HEAD` "no diff" check (:819) already caught this by accident. The repair path (:849-855) has no such check.
+  - I ran a throwaway `cycle()` whose repair stub rewrites gate.sh to `exit 0` on an orphan commit under the same branch name. Base: the rewritten gate runs (two gate runs, the second passes, so a PASS comment is posted) and a reviewer session starts. PR head: it raises at :849 after one gate run and starts no reviewer session.
+  - With a stub reviewer that approves, base was still stopped at `land()`: the rebase of unrelated history conflicted, and after a resolve the post-rebase `touched_protected` (:744) has a merge base. So the PR moves the stop to before the rewritten gate runs. Landing was already blocked downstream.
+- ok forge/forge.py:430,441,483 Healthy lanes see no change. I probed git 2.43 (this box's version).
+  - These cases all exit 0: name-only diffs with changes, pathspecs that match nothing (`-- Cargo.lock` with no lock, `-- '*.rs' '*.py'`), and a criss-cross with two merge bases (a warning on stderr only).
+  - Without `--exit-code`, `git diff` does not signal differences through its exit code.
+  - All four reflex1 lane clones (`~/Dev/reflex1`, `-lane2` to `-lane4`) are full clones (`rev-parse --is-shallow-repository` is false) and have `origin/main`.
+- ok forge/forge.py:914-921,1010-1060,1124-1126 I traced and ran the exception path.
+  - The `RuntimeError` leaves `cycle()`. The except block closes the PR with `cycle error: RuntimeError: <cmd> -> 128 ...`, which is git stderr only, capped by `pr_close`'s `why[-6000:]`.
+  - `finally` removes the worktree and the branch.
+  - `lane_loop` logs `str(e)[:500]`, calls `recover()` and backs off 120·2^n s (cap 1800).
+  - In the probe the ticket was `in_progress lane=1` after `cycle()` and `retry` with one `## forge-recover` note after `recover()`. The `max_attempts`-th interruption blocks it (README row 40), so a ticket that keeps tripping this spends at most `max_attempts` uncharged builder sessions.
+  - The call in `land()` (:744) raises inside the same `try`, before that pass pushes or merges, so nothing is half landed.
+- ok Rest of pass 1: no ticket text reaches a new command. The three commands are literals, and `base` is the literal "origin/main" at every caller. The diff adds no state and no write that two lanes share. It does not touch any prompt, the gate, the reviewer, the protected list, `claim()`, `discard_strays()`, GPU or quota code. The fetch at :426 stays unchecked, as before.
+- info Deletions: the diff's only `-` lines are the three forge.py `self.sh(...)` calls, each re-added with `check=True`. Nothing is removed from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+- low forge/selftest.py:73-78 Two of the three changes have no test.
+  - The new check calls only `touched_protected(repo, "no-such-ref")`. On a PR-head copy I removed `check=True` from `unrequested_deps()` or from `test_tampering()`, and the full selftest still printed "all checks passed".
+  - So either one can be dropped later with the suite green. That fails README row 88's guard-removal standard applied to forge itself, and the rule the PR cites ("every new check comes with a test that makes it fail on purpose").
+  - At that point in section 2 the test repo has no `origin` remote yet (it is added at :89-90), so both functions' hardcoded `origin/main...HEAD` already fails there. The edit below uses that.
+- info PR body, not code: the claim that a failed fetch "puts more files on the branch's side, not fewer" is false in one case.
+  - Probe: a branch from S merges a newer main N that changed gate.sh, then restores S's gate.sh. `git diff --name-only S...HEAD` lists only `a.txt`; `N...HEAD` lists `a.txt gate.sh`.
+  - So an unchecked fetch failure, combined with a builder that merged main by URL (which leaves `refs/remotes/origin/main` where it was), can still hide a revert of an owner's gate.sh change.
+  - This predates the PR, is outside this diff, and does not change the verdict. A separate change could add `check=True` to the fetch at :426.
+- nit (slop) forge/forge.py:427-429, forge/README.md:89 The Copilot Cowork citation says more than the source does.
+  - The article (commandline.microsoft.com, 2026-11-02, Lesson 3) says the instruction-file size check "stayed green the whole time" because its output went through `| tail`.
+  - "A list of changed files that came back empty as soon as the work was committed" is a separate item with no duration. It is also an empty list from a command that succeeded, which `check=True` would not catch.
+  - "For weeks" is not in the article.
+  - The forge.py comment also repeats the README row. This is wording only.
+- info Siblings:
+  - #8 and #28 edit the same `files = self.sh(...)` line (base :427). The `forge` branch already has both changes (the `base` parameter, and callers passing origin/main since #63/#66), so the two PRs will conflict textually with #126. #8 and #28 should be rebased or closed; #126 does not need to change.
+  - #40 makes `sh()` return rc 124 with "TIMEOUT..." in stdout instead of raising `TimeoutExpired`. With #126, a timed-out guard diff then raises through `check=True`. With #40 alone, the TIMEOUT words would be split as file names and the guard would pass. The two PRs work together; no contradiction.
+  - #6's `touched_protected(wt)` is stale context only.
+  - I grepped every other open `forge`-base diff (#1 to #124) for `touched_protected`, `unrequested_deps`, `test_tampering`, `check=True` and `--name-only`. None touches a guard line; the README and selftest overlaps are adjacent lines only.
+- info Checks run: on a PR-head copy, `py_compile` and `selftest.py` pass. Base forge.py run with the PR's selftest fails exactly the new check.
+
+Change needed (only for MERGE WITH CHANGE): in forge/selftest.py, replace PR-head lines 73-78 (from `    # A diff the guard cannot list` through `    check("a guard whose git diff fails raises instead of passing empty", raised)`) with:
+```
+    # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
+    raised = []
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, "")):
+        try:
+            guard(); raised.append(False)
+        except RuntimeError:
+            raised.append(True)
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True, True, True], str(raised))
+```
+I checked this on a PR-head copy. The full selftest passes. Removing `check=True` from any one guard fails the check: touched_protected gives [False, True, True], unrequested_deps [True, False, True], test_tampering [True, True, False]. Base forge.py gives [False, False, False].
+
+
 ## PR #125 · 2026-11-03T18:40:11Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
