@@ -23,10 +23,13 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
-API = "https://rest.runpod.io/v1"
+# REST v1 (rest.runpod.io/v1) is retired on 2026-11-15; v2 wraps lists ({"pods": [...]}), nests the create
+# body (gpu: {id, count}), reports the hourly rate as `cost` and SSH as `ssh.direct`, and has no spot flag.
+API = "https://api.runpod.io/v2"
 # RunPod's edge rejects Python's default urllib User-Agent with 403; send our own.
 HEADERS = {"Content-Type": "application/json", "User-Agent": "crewship-forge/1.0"}
 LEDGER = Path.home() / ".local/state/forge/gpu-ledger.jsonl"
@@ -74,14 +77,14 @@ def record(entry: dict) -> None:
 
 
 def forge_pods() -> list[dict]:
-    return [p for p in (call("GET", "/pods") or []) if str(p.get("name", "")).startswith("forge-")]
+    return [p for p in (call("GET", "/pods") or {}).get("pods", []) if str(p.get("name", "")).startswith("forge-")]
 
 
 def terminate(pod: dict, why: str) -> None:
     started = pod.get("_started") or time.time()
     call("DELETE", f"/pods/{pod['id']}")
     hrs = max(0.0, (time.time() - started) / 3600)
-    usd = round(hrs * float(pod.get("costPerHr") or 0), 3)
+    usd = round(hrs * float(pod.get("cost") or 0), 3)
     record({"at": time.time(), "pod": pod["id"], "name": pod.get("name"), "hours": round(hrs, 3), "usd": usd, "why": why})
     print(f"gpu: terminated {pod['id']} ({why}), ~${usd}")
 
@@ -97,19 +100,19 @@ def reap(all_pods: bool) -> None:
 
 
 def ssh_target(pod_id: str, wait_s: int = 900) -> tuple[str, int]:
+    """(user@host, port) of the pod's direct sshd; the proxy variant cannot carry rsync."""
     t0 = time.time()
     while time.time() - t0 < wait_s:
-        p = call("GET", f"/pods/{pod_id}")
-        ip, ports = p.get("publicIp"), p.get("portMappings") or {}
-        if ip and ports.get("22"):
-            return ip, int(ports["22"])
+        d = (call("GET", f"/pods/{pod_id}").get("ssh") or {}).get("direct")
+        if d:
+            return f"{d['username']}@{d['host']}", int(d["port"])
         time.sleep(10)
     raise TimeoutError("pod never exposed SSH")
 
 
-def ssh(ip: str, port: int, cmd: str, timeout: int) -> int:
+def ssh(target: str, port: int, cmd: str, timeout: int) -> int:
     base = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=30",
-            "-p", str(port), f"root@{ip}"]
+            "-p", str(port), target]
     return subprocess.call(base + [cmd], timeout=timeout)
 
 
@@ -127,27 +130,35 @@ def run(a) -> int:
         sys.exit(f"gpu: balance ${bal:.2f} too low, refusing")
     left = budget - spent()
     deadline = int(time.time() + hours * 3600)
-    body = {"name": f"forge-{a.name}-{deadline}", "imageName": IMAGE, "gpuTypeIds": a.gpu, "gpuCount": 1,
-            "gpuTypePriority": "custom", "cloudType": a.cloud, "containerDiskInGb": 40, "volumeInGb": 0,
-            "ports": ["22/tcp"], "supportPublicIp": True, "interruptible": a.spot,
+    body = {"name": f"forge-{a.name}-{deadline}", "image": IMAGE, "cloud": a.cloud, "disk": 40, "ports": ["22/tcp"],
             "env": {"PUBLIC_KEY": (Path.home() / ".ssh/id_ed25519.pub").read_text().strip()}}
-    pod = call("POST", "/pods", body)
+    # v2 places one GPU type per call and never falls back; 400 is "no capacity or bad body", 403 "pool not
+    # allowed" (RunPod's retry table), so walk the candidates in order and stop on anything else.
+    for i, gpu_id in enumerate(a.gpu):
+        try:
+            pod = call("POST", "/pods", {**body, "gpu": {"id": gpu_id, "count": 1}})
+            break
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:300]
+            print(f"gpu: {gpu_id}: HTTP {e.code} {detail}")
+            if e.code not in (400, 403) or i == len(a.gpu) - 1:
+                sys.exit("gpu: no pod created")
     pod["_started"] = time.time()
-    cost = float(pod.get("costPerHr") or 0)
-    print(f"gpu: pod {pod['id']} {pod.get('gpu', {}).get('displayName', a.gpu)} ${cost}/h, deadline {hours}h")
+    cost = float(pod.get("cost") or 0)
+    print(f"gpu: pod {pod['id']} {(pod.get('gpu') or {}).get('id', gpu_id)} ${cost}/h, deadline {hours}h")
     if cost * hours > left:
         terminate(pod, f"over budget: ${cost * hours:.2f} > ${left:.2f} left of ${budget}")
         return 3
     rc = 1
     try:
-        ip, port = ssh_target(pod["id"])
+        target, port = ssh_target(pod["id"])
         time.sleep(15)
         for src in a.push or []:
-            rsync(src, f"root@{ip}:/workspace/", port)
-        rc = ssh(ip, port, a.cmd, timeout=int(hours * 3600) - 120)
+            rsync(src, f"{target}:/workspace/", port)
+        rc = ssh(target, port, a.cmd, timeout=int(hours * 3600) - 120)
         for path in a.pull or []:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-            rsync(f"root@{ip}:/workspace/{path}", str(Path(path).parent) + "/", port)
+            rsync(f"{target}:/workspace/{path}", str(Path(path).parent) + "/", port)
     except Exception as e:
         print(f"gpu: job error {type(e).__name__}: {e}")
     finally:
@@ -163,7 +174,6 @@ def main() -> None:
     r.add_argument("--gpu", action="append", default=None, help="RunPod gpuTypeId, repeatable in priority order")
     r.add_argument("--hours", type=float, default=1.0)
     r.add_argument("--cloud", default="COMMUNITY", choices=["COMMUNITY", "SECURE"])
-    r.add_argument("--spot", action="store_true")
     r.add_argument("--push", action="append")
     r.add_argument("--pull", action="append")
     r.add_argument("--cmd", required=True)
@@ -177,7 +187,7 @@ def main() -> None:
         sys.exit(run(a))
     if a.action == "list":
         for p in forge_pods():
-            print(p["id"], p["name"], p.get("desiredStatus"), p.get("costPerHr"))
+            print(p["id"], p["name"], p.get("status"), p.get("cost"))
         print(f"forge spend so far: ${spent():.2f}")
     elif a.action == "reap":
         reap(a.all)
