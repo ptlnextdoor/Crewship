@@ -2,6 +2,76 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #127 · 2026-11-03T22:20:25Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #127 forge: the builder prompt names the session's kill time; the repair pass renders its own
+What it changes: builder.md:1 tells the builder the clock time its session is killed at (`{KILL}`, `{TIMEOUT_MIN}`) and to check `date -u` before any step over ten minutes, stopping to write its `PROGRESS.md` entry and note when too little time is left. builder.md:4 adds `date -u` to the start steps. `cycle()` renders the builder prompt through a local `bprompt()` (forge.py:813-824), so the repair pass (:852) gets its own kill time. Also one README row (:102), one prompt-literal selftest (:507), and two extra conditions on selftest 18 (:915-918).
+Findings:
+- info forge/prompts/builder.md:1, forge/forge.py:813-852: nothing here weakens the gate, the reviewer or the protected paths.
+  - The stop rule can lead a builder short on time to skip its own final `{GATE}` run (builder.md:18) and its Done-when lines (:19). But :19 already says a line not run means the ticket is not done.
+  - forge still runs the checks on whatever was committed: protected paths (forge.py:834), unrequested deps (:837), `test_tampering` (:840) and the gate (:843). The repair path (:852-868) runs them again, and the reviewer reruns the Done-when lines.
+  - The new text names no protected path and grants no permission.
+  - `KILL` and `TIMEOUT_MIN` come from forge: `strftime` output and the role's config integer. No ticket text reaches them.
+  - `prompt("builder")` has one caller (:819). The merge-resolve prompt (:652) is written inline, so it never sees `{KILL}`.
+  - No new exception path: `bprompt()` reads the same cfg and ticket that `agent()` and the old render read, and a failure lands in the existing except/finally (:921-939).
+  - No layer is retired. builder.md:1 and :4 keep their old text word for word. Selftest 18 keeps every old condition and adds two. The README adds row 102 and removes none.
+- low forge/forge.py:820: `"%H:%M UTC"` has no date. A probe with a pinned clock showed the problem: a session started at 23:30Z with a 75-minute timeout is told "killed at 00:45 UTC" while `date -u` reads 23:xx.
+  - 10 of the 167 `agent builder` starts in reflex1's forge.log fall between 22:45 and 23:59Z.
+  - A model that compares the two clock strings and ignores "(75 minutes after it starts)" reads the deadline as already past and stops at once, losing the attempt [INFERENCE].
+  - Adding the date removes the ambiguity; see Change needed.
+- low forge/forge.py:813-824 with :216-240: on a quota fallback the kill time is stale.
+  - The time is rendered once per `agent()` call. `agent()` hands the same prompt string to each fallback model, and each `_agent_once` gets the full `timeout_min` again.
+  - Probe: the first model runs 50 min and returns the usage-limit refusal at 10:50. The fallback starts at 10:50 with 75 min (real kill 12:05) and is told "killed at 11:15 UTC".
+  - A first session that hits its own timeout (rc 124) with a quota or `rate_limit` string on stderr also qualifies at :235. Its fallback is then given a time already past.
+  - History: reflex1's forge.log has one builder fallback (2026-10-23T04:54:32Z), 7 s after the session started, so that one was stale by 7 s.
+  - Open sibling #47 would also fall back on provider errors (e.g. a connection reset mid-session), which makes this path more common.
+  - It fails closed (the builder stops early and the attempt is lost), so it does not block the merge. It gets a `shortcut:` comment in Change needed.
+- low forge/prompts/builder.md:1 with forge.py:826-827, 929-937, 958-967: under the stop rule, a session that runs out of time always leaves a non-empty diff, its `PROGRESS.md` entry.
+  - 0078 attempt 1 (rc=124, no diff) failed at no extra cost at :827 ("builder produced no diff").
+  - The same session under this rule leaves a diff of notes only. That diff then costs a gate run (≤30 min) and a reviewer session from the other vendor (≤30 min) before it is rejected.
+  - The cost is bounded, and the builder session itself ends at least 10 min earlier.
+  - The note is written on the branch that the finally block deletes. `fail()` stores only `why` (:967), so the note reaches the next attempt only if the reviewer quotes it.
+  - Accepted. When the PR's "measurable after" is checked, count reviewer sessions spent on notes-only diffs as well.
+- info forge/forge.py:819: the repair prompt now reads `ticket.read_text()` at repair time instead of reusing the snapshot taken before the builder ran.
+  - Nothing in forge writes the lane's ticket file between :824 and :852: `pr_open` only reads it (:678, :690), and `sync_main` does not run in between.
+  - A yolo builder could write the lane clone's `tickets/<id>.md` by absolute path, outside the worktree, where `touched_protected` does not see it. That edit now reaches the repair prompt.
+  - It already reached `unrequested_deps` (:837), `test_tampering` (:840) and the reviewer's TICKET (:887), which are stronger levers. No new exposure.
+- low forge/prompts/builder.md:1: deploy window. `prompt()` re-reads builder.md on every call (forge.py:145-149), but a lane loads a new forge.py only between cycles (:1109-1110).
+  - A lane that is mid-cycle when this lands renders "killed at {KILL} ({TIMEOUT_MIN} minutes" literally for that cycle. The same pattern was accepted for GATE_START. The text is harmless.
+- nit forge/forge.py:816 and the PR body's Risk paragraph overstate the cited paper. arXiv 2610.10833 (abstract checked) finds that a budget stated only in the prompt fails, and that "injecting timing information through the harness" helps with no measurable loss. Its tests ran Qwen3.6-27B and Qwen3-4B on MLE-Bench Lite and Zork.
+  - This PR states the budget in the prompt and asks the agent to poll `date -u` itself. That is closer to the condition that failed than to harness injection, and the "no loss" result belongs to the other condition.
+  - The code is still the most a headless `omp -p` session can get.
+- nit forge/prompts/builder.md:1: "sends it to review as finished work" is inaccurate. A killed tree goes first to the protected-path, deps and tampering checks and the gate, then to a repair session if the gate fails (forge.py:834-868), and only then to review. "to the gate and review" would be accurate.
+- nit forge/selftest.py:915-918: the check is named "its own kill time", but the fake agent returns instantly, so both sessions render the same minute. The check proves the time is rendered, not that it is rendered again for the repair.
+  - My probe with a moved clock did show the second render: the first session got "00:45 UTC" and the repair, 40 min later, got "01:25 UTC".
+- info evidence for the PR body's claims:
+  - 4 of 127 builder logs start with `TIMEOUT after 4500s`: sessions/00011, sessions/00020, lane4/00001 and lane4/00002.
+  - 0019 attempt 1 (lane 1, cycle 11) went to RETRY at 11:20:23Z.
+  - 0078 attempt 1 ended "builder produced no diff (rc=124)"; attempt 2 merged between 05:46:05 and 06:08:40Z (22 min).
+  - `python3 forge/selftest.py` on the PR head (git archive into /tmp) printed "all checks passed", and again with the Change below applied.
+- info siblings, open PRs on `forge` that touch the same files:
+  - #7 (`_agent_once`, opened 2026-10-23) duplicates this PR for the builder: it prepends "killed after {timeout_min} minutes" to every role's prompt. Both take the duration from the role's `timeout_min`, so they agree, but a builder would be told the limit twice.
+    - #7's hunk context (`logdir = self.home / "sessions"`) no longer exists in `_agent_once` (now `log_path()`, forge.py:260), so #7 has to be rebased anyway.
+    - #7 is the side to change: drop the builder roles from it, or close it. This does not lower this verdict.
+  - #99 rewrites the same repair f-string (forge.py:852) and keeps `{prompt}`. After this PR, `cycle()` has no `prompt` local and the module has no global of that name.
+    - A #99 rebase that keeps `{prompt}` raises NameError on the first gate failure; selftest 18 catches that.
+    - #99 is the side to change (to `{bprompt()}`). The conflict is textual, not one of meaning.
+  - #47 widens `agent()` fallback (see the fallback finding above). No contradiction.
+  - #1, #3, #23 and #85 edit other builder.md lines.
+    - #1's hunk context is builder.md:1, which this PR rewrites. That conflict is textual only, and #1 is already stale.
+    - #85's in-session merge before the last commit is a long step that this rule covers.
+  - #6's review-repair prompt is written inline rather than taken from builder.md, so it gets no kill time. That is outside this PR's scope.
+  - The other siblings that touch the README, selftest or forge.py edit other rows and functions.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:820: replace `KILL=kill.strftime("%H:%M UTC"), TIMEOUT_MIN=str(tm),` with `KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm),`
+2. forge/selftest.py:917: replace `re.search(r"killed at \d\d:\d\d UTC \(\d+ minutes", prompts[1])` with `re.search(r"killed at \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\d+ minutes", prompts[1])`
+3. forge/forge.py: after line 816, add `                # shortcut: agent() reuses this render for a quota fallback, so a fallback after a long first session is told an earlier kill than its own; render KILL in _agent_once if mid-session builder fallbacks show up in forge.log.`
+(Steps 1 and 2 applied to a /tmp copy of the PR head: selftest "all checks passed".)
+
+
 ## PR #126 · 2026-11-03T20:16:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
