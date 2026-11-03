@@ -2,6 +2,43 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #119 · 2026-11-03T03:41:07Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #119 forge: a Done-when test command that ran no test is a FAIL, whatever its exit code
+What it changes: Adds one sentence to reviewer check 1 (reviewer.md:4) and one clause to builder rule 19 (builder.md:19): a "Done when" test command whose output shows no test ran is a FAIL whatever its exit code. Adds the matching safeguard row at README.md:29. It changes prompts only: no forge.py, selftest or protected-path change.
+Findings:
+- low forge/prompts/reviewer.md:4, forge/prompts/builder.md:19, forge/README.md:29 The rule lists `running 0 tests` and "`0 passed` with the rest `filtered out`" as the signs of an empty run. Cargo prints both strings once per test binary, so they also appear in the output of a correct run.
+  - Scratch crate (lib, plus tests/it.rs, no doctest): `cargo test decode` exits 0. It prints `running 1 test … 1 passed; … 1 filtered out` and also `running 0 tests … 0 passed; … 1 filtered out` for tests/it.rs. Plain `cargo test` prints a `Doc-tests demo / running 0 tests / 0 passed` block.
+  - reflex1: all 5 crates have a lib target plus 1–4 `tests/*.rs` files. Only one source file has a doc block (reflex-core/src/pyjson.rs).
+  - The common Done-when shapes are name-filtered, e.g. `cargo test -p reflex-core decode`, which past reviews record as "18 passed", and `cargo test -p reflex-cpu --release smoke_matches_reference -- --nocapture`, used by 5 tickets. Their passing output therefore contains the exact strings the new sentence pairs with FAIL.
+  - The rule's head clause ("output shows no test ran") is correct. But reviewer.md:1 says to assume the change is broken, and reviewer.md:12 makes any step-1 problem a REJECT. A reviewer that matches the quoted strings rejects correct work. Each false REJECT loses an attempt (75-min builder plus 30-min review, forge.py:842) and blocks the ticket after max_attempts=3.
+  - This errs toward rejection, never approval. It does not touch the gate, the protected paths or the claim/recover/land paths.
+- info forge/prompts/{builder,reviewer}.md, forge/README.md: traced end to end, nothing weakened.
+  - A word diff against merge-base ca3075e2 shows pure insertions: builder.md's `done:` becomes `done, and so does …:`. So no prompt, selftest or safeguard-table line is deleted.
+  - Prompts are filled in by `str.replace` of `{KEY}` (forge.py:141-145), and the new text has no braces. Prompts reach omp as `@file` (forge.py:266-267), so the ~230 added bytes cannot hit an argv limit. Prompts are re-read for each session (forge.py:122-123), so the change takes effect on the next session without a lane restart. Only the builder and reviewer segments of `version` move (forge.py:127-128).
+  - Nothing in the new text reads as permission to edit `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, or to skip a test. Its only remedy is "fix the code, or stop and write which line and why".
+  - It merges cleanly onto origin/forge efbdae5b (`git merge-tree` exit 0; efbdae5b touches only SCOUT.md). `python3 forge/selftest.py` on the PR tree: all checks passed. The prompt-string checks at selftest.py:469-480 are intact.
+- info PR body claims, checked:
+  - Confirmed: cargo exits 0 on a name that matches nothing (scratch crate, `cargo test -q decdoe`: `0 passed; … 2 filtered out`, rc=0).
+  - Confirmed: 0 hits for `running 0 tests|0 passed|collected 0 items|no tests ran` across all 273 files under ~/.local/state/forge/reflex1/. As the body says, this is a trap closed before it was seen, not a measured recurrence.
+  - Confirmed: planner.md:23 asks for "a test name that passes".
+  - Confirmed: reviewer.md:6 already said "`0 passed` there is not a pass" for the old-code run only, so check 1 was the uncovered case. PR_AUDIT.md:4382 named it earlier.
+- nit forge/README.md:29 The cited figures are misstated.
+  - arXiv 2606.09863 computes its 75.8% "among failures with explicit status" (Table 2: AppWorld, 1,425 false success / 454 honest failure). The row says "of self-assessing coding-agent trajectories".
+  - The 0.65 AUROC ceiling is for tau2-bench. The same judges reached 0.54 on AppWorld, so "beat 0.65 AUROC on them" attaches tau2's number to the AppWorld set.
+- info Sibling #9 (open, base forge) appends a different sentence to the same reviewer.md:4 line: rerun a reported number with a perturbed input. The two complement each other; they neither contradict nor duplicate. #9 already conflicts with origin/forge in reviewer.md without #119 (`git merge-tree origin/forge pr/9` gives CONFLICT): its base predates the current check list. #9 is the side to rebase, keeping #119's sentence.
+- info Sibling #85 rewrites builder.md:18 (merge origin/main before the formatter and gate), the line above #119's :19. Both act "before the last commit" and are compatible, with no contradiction.
+- info The other 26 open PRs on base forge touch README.md only for their own rows. A grep of all their diffs for `running 0 tests|filtered out|no tests ran|0 passed|collected 0` finds 0 hits, so none duplicates this rule.
+Change needed: Anchor the rule to the whole run, not to per-binary strings, and correct the citation. Four replacements in one commit:
+1. forge/prompts/reviewer.md:4, replace the added sentence `So does a test command whose output shows no test ran (`running 0 tests`, `0 passed` with the rest `filtered out`, pytest's `no tests ran`), whatever its exit code: `cargo test <name>` exits 0 when the name matches nothing.` with `So does a test command in whose output no test ran, whatever its exit code: every `test result:` line reads `0 passed` (or pytest prints `no tests ran`); `cargo test <name>` exits 0 when the name matches nothing. Cargo also prints `running 0 tests` and `0 passed; N filtered out` for each test binary and the doc-tests the name does not reach; beside a binary whose `test result:` shows the named test passed, those lines are no FAIL.`
+2. forge/prompts/builder.md:19, replace `and so does a test command whose output shows no test ran (`running 0 tests`, `0 passed` with the rest `filtered out`; `cargo test <name>` exits 0 when the name matches nothing)` with `and so does a test command in whose output every `test result:` line reads `0 passed` (`cargo test <name>` exits 0 when the name matches nothing; a `running 0 tests` block for another test binary or the doc-tests, beside one where the named test passed, is not this)`.
+3. forge/README.md:29 first cell, replace `(`running 0 tests`, `0 passed` with the rest `filtered out`, pytest's `no tests ran`)` with `(every `test result:` line `0 passed`, or pytest's `no tests ran`; a `running 0 tests` block for another binary beside one that ran is not)`.
+4. forge/README.md:29 second cell, replace `75.8% of self-assessing coding-agent trajectories with an explicit status claim were false successes and no LLM judge beat 0.65 AUROC on them (arXiv 2606.09863)` with `75.8% of the failed AppWorld coding-agent trajectories with an explicit status claim claimed success, and LLM judges reached 0.54 AUROC on them (0.65 at best on tau2-bench; arXiv 2606.09863)`.
+
+
 ## PR #118 · 2026-11-02T19:30:28Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
