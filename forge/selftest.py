@@ -1163,6 +1163,26 @@ with tempfile.TemporaryDirectory() as d:
     git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
     check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
 
+# 26. The prompt file is the renderer between what the loop knows and what the session reads, and a dropped
+# placeholder costs nothing visible: the reviewer still returns a verdict, the cycle still merges or fails.
+with tempfile.TemporaryDirectory() as d:
+    repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
+    repo.mkdir(); git("init -q -b main", repo)
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nprompts_dir="{d}/p"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    (Path(d) / "p").mkdir()
+    (Path(d) / "p/reviewer.md").write_text("Ticket:\n{TICKET}\n\nDiff:\n{DIFF}\n")
+    f = forge.Forge(cfg)
+    filled = f.prompt("reviewer", TICKET="t", DIFF="the diff")
+    (Path(d) / "p/reviewer.md").write_text("Ticket:\n{TICKET}\n")  # an edit drops the diff block
+    try:
+        f.prompt("reviewer", TICKET="t", DIFF="the diff")
+        refused = ""
+    except RuntimeError as e:
+        refused = str(e)
+    check("a prompt file that lost a placeholder stops the session instead of running it without the input",
+          "the diff" in filled and "{DIFF}" in refused and "{TICKET}" not in refused,
+          f"filled={filled!r} refused={refused!r}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
