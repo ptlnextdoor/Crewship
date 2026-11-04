@@ -73,12 +73,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo)):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, "")):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 4, str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 5, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not.
     for p in ("crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json", "docs/omp.md"):
@@ -105,6 +105,14 @@ with tempfile.TemporaryDirectory() as d:
     check("unrequested crate refused, named crate and its pulls pass", got == ["evil 0.1.0", "serde_derive 1.0.1"], str(got))
     check("every new crate named passes", f.unrequested_deps(repo, "axum, evil and a serde-derive bump") == [])
     check("a crate named only in a ## forge note is still refused", "evil 0.1.0" in f.unrequested_deps(repo, "x\n\n## forge t (retry)\n['evil 0.1.0']"))
+    # 2b'. A lock entry the ticket names but pins at a version with a public advisory passes the guard above and
+    # is refused here. `osv` is stubbed: the selftest makes no network call, and a real OSV error returns {}.
+    f.osv = lambda pkgs: {("evil", "0.1.0"): ["RUSTSEC-2026-0001"]} if ("evil", "0.1.0") in pkgs else {}
+    got = f.vulnerable_deps(repo, "axum, evil and a serde-derive bump")
+    check("a new crate at a version with an advisory is refused", got == ["evil 0.1.0 (RUSTSEC-2026-0001)"], str(got))
+    check("a ticket naming the advisory id waives it", f.vulnerable_deps(repo, "axum, evil; RUSTSEC-2026-0001 is accepted here") == [])
+    check("an advisory id quoted in a ## forge note does not waive it",
+          f.vulnerable_deps(repo, "evil\n\n## forge t (retry)\n['evil 0.1.0 (RUSTSEC-2026-0001)']") == ["evil 0.1.0 (RUSTSEC-2026-0001)"])
     git("checkout -q main", repo); git("checkout -q -b work2", repo)
     check("no Cargo.lock change is no finding", f.unrequested_deps(repo, "") == [])
     # 2d. A test switched off (`#[ignore]`, `pytest.skip`) or dropped is refused before the gate unless the ticket

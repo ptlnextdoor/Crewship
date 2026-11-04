@@ -34,6 +34,7 @@ import subprocess
 import sys
 import time
 import tomllib
+import urllib.request
 from pathlib import Path
 
 OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
@@ -430,6 +431,21 @@ class Forge:
         files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd, check=True).stdout.split()
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
 
+    def lock_pkgs(self, cwd: Path, rev: str) -> dict[tuple[str, str], list[str]]:
+        """Third-party `Cargo.lock` entries at `rev`: (name, version) -> the package names it depends on."""
+        try:
+            pkgs = tomllib.loads(self.sh(f"git show {rev}:Cargo.lock", cwd=cwd).stdout).get("package", [])
+        except tomllib.TOMLDecodeError:
+            return {}
+        return {(p["name"], p["version"]): [d.split()[0] for d in p.get("dependencies", [])] for p in pkgs if "source" in p}
+
+    def lock_added(self, cwd: Path) -> list[tuple[str, str]]:
+        """Third-party entries this branch adds to or bumps in `Cargo.lock`; [] when the lock is unchanged."""
+        if "Cargo.lock" not in self.sh("git diff --name-only origin/main...HEAD -- Cargo.lock", cwd=cwd, check=True).stdout:
+            return []
+        base = self.lock_pkgs(cwd, self.sh("git merge-base origin/main HEAD", cwd=cwd).stdout.strip())
+        return [k for k in self.lock_pkgs(cwd, "HEAD") if k not in base]
+
     def unrequested_deps(self, cwd: Path, ticket_text: str) -> list[str]:
         """Third-party packages the branch adds to or bumps in `Cargo.lock` that the ticket does not name and
         no crate it names pulls in. Builder rule 15 and reviewer step 6 say this in prose, and the review
@@ -437,16 +453,10 @@ class Forge:
         mechanical copy beside the prose (reflex1: 0 of 14 Cargo.toml-changing commits on main added a direct
         dependency no ticket names, so the prose has held; the lock is the surface the LiteLLM 1.107.0
         stealer came through)."""
-        import tomllib
-        if "Cargo.lock" not in self.sh("git diff --name-only origin/main...HEAD -- Cargo.lock", cwd=cwd, check=True).stdout:
+        new = self.lock_added(cwd)
+        if not new:
             return []
-        def lock(rev: str) -> dict[tuple[str, str], list[str]]:
-            try:
-                pkgs = tomllib.loads(self.sh(f"git show {rev}:Cargo.lock", cwd=cwd).stdout).get("package", [])
-            except tomllib.TOMLDecodeError:
-                return {}
-            return {(p["name"], p["version"]): [d.split()[0] for d in p.get("dependencies", [])] for p in pkgs if "source" in p}
-        head, base = lock("HEAD"), lock(self.sh("git merge-base origin/main HEAD", cwd=cwd).stdout.strip())
+        head = self.lock_pkgs(cwd, "HEAD")
         text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")
         # shortcut: a crate named by any word of the ticket counts as requested (`image`, `png`), so this loosens
         # toward the reviewer's reading, never blocks a named crate; tighten to a `crates:` line if it ever passes one.
@@ -457,7 +467,49 @@ class Forge:
             if not more:
                 break
             ok |= more
-        return sorted(f"{n} {v}" for n, v in head if (n, v) not in base and (n, v) not in ok)
+        return sorted(f"{n} {v}" for n, v in new if (n, v) not in ok)
+
+    def osv(self, pkgs: list[tuple[str, str]]) -> dict[tuple[str, str], list[str]]:
+        """Advisory ids OSV lists for these crates.io versions, with withdrawn records and informational
+        RUSTSEC ones (`unmaintained`, `notice`) left out: those name no exploit and a crate goes unmaintained
+        without anyone touching this repo. {} on any OSV error, so a check that cannot reach the network never
+        costs an attempt. (reflex1's lock: 265 third-party crates answered in 0.8 s, 3 with an advisory, 2 of
+        those unmaintained-only.)"""
+        if not pkgs:
+            return {}
+        get = lambda url, body=None: json.load(urllib.request.urlopen(urllib.request.Request(
+            url, body and json.dumps(body).encode(), {"Content-Type": "application/json"}), timeout=30))
+        try:
+            res = get("https://api.osv.dev/v1/querybatch",
+                      {"queries": [{"package": {"ecosystem": "crates.io", "name": n}, "version": v} for n, v in pkgs]})["results"]
+            out, real = {}, {}
+            for p, r in zip(pkgs, res):
+                ids = []
+                for i in sorted(v["id"] for v in r.get("vulns", [])):
+                    if i not in real:
+                        d = get(f"https://api.osv.dev/v1/vulns/{i}")
+                        real[i] = not d.get("withdrawn") and not any(
+                            (a.get("database_specific") or {}).get("informational") for a in d.get("affected", []))
+                    if real[i]:
+                        ids.append(i)
+                if ids:
+                    out[p] = ids
+            return out
+        except Exception as e:
+            self.log(f"OSV advisory check skipped ({e})")
+            return {}
+
+    def vulnerable_deps(self, cwd: Path, ticket_text: str) -> list[str]:
+        """Crates the branch adds to or bumps in `Cargo.lock` at a version with a public advisory. The guard
+        above and reviewer step 6 both ask whether the ticket named the crate, never which version it pinned,
+        so a crate the ticket does name passes both at a version with a known CVE: PinTrace (arXiv 2605.06279)
+        finds 36.7-55.7% of LLM-specified version sets carry one and that the models converge on the same few
+        risky releases, and DepDec-Bench (arXiv 2601.00205, 117,062 dependency changes) finds agents pick a
+        version already known vulnerable at PR time in 2.46% of them. A ticket naming the advisory id waives
+        it, the same escape hatch as naming the crate; a `## forge` note quoting an earlier finding does not."""
+        text = ticket_text.split("\n## forge")[0].lower()
+        return sorted(f"{n} {v} ({', '.join(ids)})" for (n, v), ids in self.osv(self.lock_added(cwd)).items()
+                      if not any(i.lower() in text for i in ids))
 
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
@@ -858,6 +910,9 @@ class Forge:
             deps = self.unrequested_deps(wt, ticket.read_text())
             if deps:
                 return self.fail(ticket, f"diff adds packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
+            deps = self.vulnerable_deps(wt, ticket.read_text())
+            if deps:
+                return self.fail(ticket, f"diff adds or bumps Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
                 return self.fail(ticket, f"diff skips, deletes or strips tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
@@ -883,6 +938,9 @@ class Forge:
                 deps = self.unrequested_deps(wt, ticket.read_text())
                 if deps:
                     return self.fail(ticket, f"the repair added packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
+                deps = self.vulnerable_deps(wt, ticket.read_text())
+                if deps:
+                    return self.fail(ticket, f"the repair added or bumped Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
