@@ -2,6 +2,62 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #133 · 2026-11-04T19:32:00Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (the fixer changed nothing)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #133 forge: record which vendor reviewed, split the merge tally by it
+What it changes: `record()` adds `"reviewer"` to each history entry: the first `last_model` value whose role starts with `reviewer`, i.e. the model that actually ran after any fallback. `status_text()` adds one line, `merged/attempts by review vendor (builder vs reviewer that ran)`, which splits attempts carrying both `model` and `reviewer` into `cross-vendor` and `same-vendor` by the model-string prefix before `/`. It also adds two selftest checks and changes the section-21 fallback stub so that cycle reaches a review.
+Findings:
+- ok forge/forge.py:1081-1082. Security trace: nothing reaches the gate, the reviewer or the protected paths.
+  - `last_model` is cleared at claim (:878). It is set only by `agent()` on return (:240), and only `reviewer`/`reviewer_alt` start with "reviewer". The value is the model the review that produced the verdict ran on: the no-verdict rerun at :980 overwrites it.
+  - An attempt that dies before :973 (no diff, protected path, deps, tests, invisible chars, gate) records `reviewer: None` and is left out of the tally.
+  - The value is a config model string, not ticket text. It reaches no shell, no f-string command and no prompt other than the steward's `{STATE}` (:1086, steward.md:4). The steward may edit only docs (steward.md:13).
+  - `record()` is called only at :1004 and from `fail()` (:1063), and each lane writes its own `state_file`. No state is shared between lanes. History stays capped at 200 entries, and the new status line has at most 2 buckets.
+  - `next(..., None)` cannot raise. The tally filters on truthy `model` and `reviewer` before it calls `.split`.
+  - Claim, `recover()`, `discard_strays()`, timeouts, the process-group kill, PR create/merge, quota and GPU are untouched.
+- low forge/forge.py:1077-1078, forge/selftest.py:1064 (and the PR body's table and "about 78%"): "103 of 132 reviews ran on claude-fable-5-1 ..., 25 on gpt-6-astra" counts session starts, not reviews. I paired every `agent ... model=` line in `~/.local/state/forge/reflex1/forge.log` with the `quota: ... exhausted` line that follows it in the same lane.
+  - 17 of the 25 Astra starts were quota refusals that fell over to Fable, so they are already inside the 103.
+  - The review sessions that ran were 115: 103 Fable, 8 Astra, 4 Opus. So about 90% were same-vendor, not 78%.
+  - The docstring repeats the started-versus-ran conflation that the code it documents avoids, and SCOUT.md already quotes the figure forward.
+- low forge/README.md:143-147: README documents each `status` tally line, but the new line is not documented.
+  - `status_text()` now appends the new line between the per-model line (:1265) and the per-guard line, so README:147 "A third line tallies failed attempts by the guard" now describes the fourth line.
+  - Nit: README:101 and steward.md:3, which list the STATE contents, also omit the new line. Harmless, because the steward sees the line either way.
+- nit forge/forge.py:1076: "(958-961)" is the only reference in forge.py to its own line numbers (grep). Every other comment names the function. The reference goes stale with the first forge.py edit above line 958, and #86 and #83 both edit `cycle()`.
+- low forge/forge.py:721,1080: an approved attempt can be counted in the wrong vendor bucket. Traced path:
+  - `land()` (:995) → `rebase_onto_main()` (:809) → `self.agent(builder, ...)` (:721) overwrites `last_model[builder]` after the review.
+  - A provider refusal marks the whole vendor (:237), so an Anthropic refusal in that merge-resolve session jumps the reflex1 builder chain to `openai-codex/gpt-6.1-sol`.
+  - The entry then pairs Sol with the Astra reviewer and lands in `same-vendor`, although `cycle()` chose Astra against the Opus build (`built_by`, :959).
+  - It is rare: forge.log has 1 builder quota fallback in total. It comes from `model`'s existing semantics (#101), not from a new mechanism, so no change is required.
+- info forge/selftest.py: the diff deletes or modifies three lines. None is a `check(`.
+  - (a) `return build_big_then_review(...)` for the builder role in `build_on_fallback`. It was fixture, not a check. Because `big.txt` was already on main from section 20, the second cycle used to end at `builder produced no diff`, so the model/secs/harness checks read a `fail()` entry. With `second.txt` they now read the merged entry written at :1004. Both paths write through the same `record()`. The `fail()`-path entry is still asserted at selftest.py:313 (protected-path `why`).
+  - (b) The synthetic history entries are kept verbatim, with one `c/x`/`c/y` entry added. It has `why=""`, so the per-guard count is unchanged, and the `g/h` checks still pass.
+  - (c) `[:-2]`→`[:-3]` matches the three added entries. The harness check after it still reads the real cycle entry.
+- info Verified on PR head a23bfcdb, from `git archive` copies in a mktemp dir that was then removed:
+  - `py_compile` passes. `selftest.py` gives 129 ok, "all checks passed".
+  - The same selftest with the base forge.py (c55ee885) fails exactly the 2 new checks, and the other 127 pass. So the checks test the change, and the stub edit breaks nothing else.
+  - `forge.py status --config ~/.config/forge/reflex1.toml` prints `merged/attempts by review vendor (builder vs reviewer that ran): -` over the live states, as the PR body says.
+- info siblings (open on `forge`, touching forge.py or selftest.py; diffs read):
+  - #132 edits the same `record()` docstring and history line, the by_model `out.append` next to the new block, and the selftest synthetic entries (its check expects `g/h:high`). The conflict is textual only and the two are semantically compatible. Whichever lands second rebases, and neither text needs to change.
+  - #83 writes the same `last_model.get(reviewer, ...)` into a `Reviewed-by:` trailer on landing commits. That covers merged attempts only, while this PR also covers failed reviewed attempts. They overlap but do not duplicate, and no change is needed.
+  - #20 (Grok before Fable in `reviewer_alt`), #39 (quota mark expires after an hour) and #47 (5xx falls over and still sets `last_model[role]` on return) change the routing this line measures. The new line stays correct under all three, and `xai-oauth` counts as cross-vendor against `anthropic`.
+  - #86's README row gives a different figure for the same log ("45 of 48"). Each PR should fix its own figure, and this PR's fix is in Change needed.
+  - #5, #6, #8 touch only the review-comment line (:983). #7, #16, #19, #25, #28, #31, #40, #42, #44, #48, #79, #84, #99, #111 and #117 touch nothing this PR reads or writes.
+Change needed (only for MERGE WITH CHANGE): correct the figures and document the line. The code is unchanged.
+1. forge/forge.py:1076-1079 becomes:
+```
+        the same reason as `model`: cycle() picks the role cross-vendor, but the role's own fallback can land
+        back on the builder's vendor, and reflex1's forge.log shows that is the normal case - of the 115 review
+        sessions that ran, 103 were claude-fable-5-1 behind an Opus builder, 8 gpt-6-astra (17 more Astra starts
+        were quota refusals) and 4 Opus behind a Codex builder - while the history keeps no trace of which
+        review was cross-vendor."""
+```
+2. forge/selftest.py:1064 becomes `    # reflex1's forge.log: 103 of the 115 review sessions that ran were on the builder's own vendor because reviewer_alt fell back to it.`
+3. forge/README.md: in line 147, change "A third line tallies failed attempts" to "A fourth line tallies failed attempts". Insert before it this paragraph, followed by a blank line:
+   `A third line tallies merged/attempts by whether the reviewer that ran shares the builder's vendor (\`cross-vendor\`, \`same-vendor\`: the model string before \`/\`, the comparison \`cycle()\` picks the reviewer role by), over attempts that reached a review. \`cycle()\` compares the builder with the configured reviewer model, and the chosen role's fallback can put the builder's vendor back in the chair: of reflex1's 115 review sessions, 103 ran on Fable behind an Opus build. Entries from before \`reviewer\` existed are not counted.`
+
+
 ## PR #132 · 2026-11-04T18:30:03Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
