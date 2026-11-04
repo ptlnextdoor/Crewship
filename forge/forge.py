@@ -508,8 +508,8 @@ class Forge:
         version already known vulnerable at PR time in 2.46% of them. A ticket naming the advisory id waives
         it, the same escape hatch as naming the crate; a `## forge` note quoting an earlier finding does not."""
         text = ticket_text.split("\n## forge")[0].lower()
-        return sorted(f"{n} {v} ({', '.join(ids)})" for (n, v), ids in self.osv(self.lock_added(cwd)).items()
-                      if not any(i.lower() in text for i in ids))
+        left = {k: [i for i in ids if i.lower() not in text] for k, ids in self.osv(self.lock_added(cwd)).items()}
+        return sorted(f"{n} {v} ({', '.join(ids)})" for (n, v), ids in left.items() if ids)
 
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
@@ -940,7 +940,7 @@ class Forge:
                     return self.fail(ticket, f"the repair added packages to Cargo.lock the ticket does not name and no named crate pulls in: {deps}. A new or bumped third-party crate needs the ticket to name it (builder rule on dependencies).")
                 deps = self.vulnerable_deps(wt, ticket.read_text())
                 if deps:
-                    return self.fail(ticket, f"the repair added or bumped Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
+                    return self.fail(ticket, f"the repair pinned Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")

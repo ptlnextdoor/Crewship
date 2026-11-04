@@ -113,6 +113,9 @@ with tempfile.TemporaryDirectory() as d:
     check("a ticket naming the advisory id waives it", f.vulnerable_deps(repo, "axum, evil; RUSTSEC-2026-0001 is accepted here") == [])
     check("an advisory id quoted in a ## forge note does not waive it",
           f.vulnerable_deps(repo, "evil\n\n## forge t (retry)\n['evil 0.1.0 (RUSTSEC-2026-0001)']") == ["evil 0.1.0 (RUSTSEC-2026-0001)"])
+    f.osv = lambda pkgs: {("evil", "0.1.0"): ["RUSTSEC-2026-0001", "RUSTSEC-2026-0002"]} if ("evil", "0.1.0") in pkgs else {}
+    got = f.vulnerable_deps(repo, "axum, evil; RUSTSEC-2026-0001 is accepted here")
+    check("naming one advisory id waives only that id", got == ["evil 0.1.0 (RUSTSEC-2026-0002)"], str(got))
     git("checkout -q main", repo); git("checkout -q -b work2", repo)
     check("no Cargo.lock change is no finding", f.unrequested_deps(repo, "") == [])
     # 2d. A test switched off (`#[ignore]`, `pytest.skip`) or dropped is refused before the gate unless the ticket
