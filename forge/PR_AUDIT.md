@@ -2,6 +2,52 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #128 · 2026-11-04T03:29:09Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #128 forge: role-prompt rules as direct instructions, not conditions on the agent's own action
+What it changes: rewrites five prompt rules from "if/when X, do Y" into direct instructions: builder.md:14 (GPU via gpu.py) and :21 (PROGRESS.md entry), planner.md:36 (mark milestones done), steward.md:10 (LEARNINGS fixes) and :11 (owner note). It adds README row 103 and selftest check :510-514, which fails when a `-` bullet or numbered step in prompts/*.md (scout.md excepted) opens with If/When/Whenever. There is no forge.py change.
+Findings:
+- low forge/README.md:103 The new safeguard row claims more than the PR does.
+  - It says "Every standing rule in the role prompts is written as a direct instruction", that the prompts "carried five if/when rules", and that "selftest 6 refuses a new one".
+  - On the PR head these conditionals are still there, and the new check passes all of them: builder.md:1 "when the time left is under that, stop", builder.md:9 "If the ticket's feature already exists, ... stop", planner.md:5 "If the answer is none, set its status to `cancelled`", planner.md:35 "when the remainder is under the job's cost, write only tickets a CPU can finish", steward.md:9 "When a merged ticket measured one ... put the value", and reviewer.md:12 "If you found a problem in steps 1 to 6, the verdict is REJECT" and "When you reject, end with a `Must change:` block".
+  - The check only matches a condition at the start of a bullet or step, and a mid-line condition never starts one.
+  - The reviewer's REJECT rule is the conditional shape the PR's own evidence says gets followed less. The safeguard table, which later audits read as the list of layers in place, now says this is handled.
+  - No runtime effect: no code or reviewer text changes.
+- info prompt lines this PR deletes. Each one is replaced by a line that carries the same rule; no layer is retired. Traced one by one:
+  - builder.md:14 (old "if the ticket needs a GPU ..., use gpu.py run"). It kept GPU work inside gpu.py's caps. New :14 keeps the same routing, plus README:49 and gpu.py's caps: GPU_MAX_HOURS at gpu.py:122, and the GPU_BUDGET_USD refusal at :123/:138. "every" turns routing into an obligation, still scoped to what "the ticket needs".
+    - This is a fifth rewrite. The regex does not flag it (the line opens with "Heavy work:"), and the PR's Why names only "the four rewritten rules". The spend caps are unchanged, and planner.md:35 still moves GPU steps to Out of scope when the budget is low.
+  - builder.md:21 (old "When done, append ... PROGRESS.md"). It made sure a session leaves its entry. Now carried by new :21 "before your last commit", together with :19 (Done-when output goes in that entry before the last commit) and :1 (on a low clock, write the entry instead). The PR body's claim that :19 already required this is true. The repair pass embeds the whole builder prompt (forge.py:853), so it gets the same rule as before.
+  - planner.md:36 (old "If the current milestone is done, mark it done ... plan the next one"). It moved the planner off a finished milestone. Carried by new :36, but the scope widens from "the current" milestone to "every finished" one.
+    - The planner's ROADMAP.md edits commit straight to main with no gate or reviewer (forge.py:563 commit_docs). Only steward step 3 rechecks them.
+    - With work-ahead allowed (planner.md:31), "plan the one after it" can point past an unfinished current milestone. planner.md:34 ("Prefer tickets that move the roadmap's current milestone") still applies.
+    - Not on the gate, reviewer or protected paths.
+  - steward.md:10 (old "If LEARNINGS.md has duplicates or wrong entries, fix them"). Carried by new :10, with the same definition of wrong and the same "a missing source is not a reason to delete".
+    - "every" asks for a full sweep (reflex1: 128 entries) before step 5. The steward session is capped at 30 min (forge.py:997), and commit_docs commits whatever exists after a kill, so step 5 is what a timeout would drop.
+    - Recent steward turns ran about 12-14 min (forge.log 05:08→05:20Z and 09:57→10:11Z, 2026-10-24). Bounded; no change.
+  - steward.md:11 (old "... only when a person must decide ... Otherwise the planner handles it"). It kept "Needs the owner" free of noise. The "only" is carried by the restrictive "whose clear cause needs a person's decision" plus "Every other blocked ticket is the planner's". PROGRESS.md stays trimmed to 300 lines by step 2.
+- none Security trace:
+  - The new text has no `{...}` placeholder, and prompt() substitutes with str.replace (forge.py:145-149).
+  - No ticket text reaches a shell. No forge.py, gate, reviewer.md, touched_protected or discard_strays change. No new state, lock, lane write or GPU/quota call.
+  - Nothing in the new lines mentions or relaxes gate.sh, tickets/, .forge/ or STEERING.md.
+  - The only side effect is the expected change in the version hash for builder, planner and steward.
+- none forge/selftest.py:510-514 The check works.
+  - I extracted the head and base trees to /tmp (since removed) and ran the selftest on both. Head: rc 0, 120 ok. Base 537dfd0d: rc 0, 119 ok. The only difference is the new check.
+  - Against base prompts the regex lists builder.md:21, planner.md:36, steward.md:10 and :11, matching the PR body.
+  - The `l[:60]` detail output is bounded.
+- nit forge/selftest.py:512 The scout.md exemption is undocumented. scout.md:7 "2. If the `consensus` MCP tool is available" is an environment condition, and the regex cannot tell that apart from a condition on the agent's own action. A one-line why would help the next editor.
+- info Evidence: I checked arXiv 2611.04367 (Tsuchida et al., 2026-11-03). Table 3 shows claude-opus-5 at 78.0 Prescriptive vs 64.2 Conditional, and claude-sonnet-5 at 71.6 vs 35.6, from 86 CTXbench tasks with three runs each. Table 4 shows the Prescriptive-vs-Conditional gap is significant after Holm correction for both. The study tested one code-style policy appended to an AGENTS.md/CLAUDE.md file. Applying it to forge's role prompts is an extrapolation, and the PR body says so.
+- info Siblings (open PRs on `forge`):
+  - #23 edits the same builder.md "When done, append ..." line, written against an older base, and keeps "When done". The two collide textually, and #23's added line trips the new check (I matched the regex on its diff). #23 should change: rebase its added sentence onto the new "Append a short entry to `PROGRESS.md` before your last commit ..." line.
+  - #85 (builder.md:18, merge origin/main before the last commit) is compatible with the new :21.
+  - #31 edits planner.md:13 and :31 only. #3 adds a rule line that does not trip the check.
+  - #1 adds an indented "When `AGENTS.md` ... disagrees" line that the check misses. It duplicates base builder.md:22, so #1 is the side to change (it is superseded).
+  - The README and selftest siblings (#6, 8, 16, 19, 20, 25, 28, 31, 39, 40, 42, 44, 47, 48, 79, 83, 84, 85, 86, 99, 111, 117) overlap textually only. None adds or removes the old wordings this PR replaces. #5 and #9 edit reviewer.md, which the new check scans; neither adds a matching line.
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:103, change only the claims and keep the arXiv evidence sentence as written. Replace the rule cell's opening "Every standing rule in the role prompts is written as a direct instruction with its scope as the object" with "No rule line (a `-` bullet or numbered step) in the role prompts opens with a condition on the agent's own action: it is a direct instruction with its scope as the object". Replace the closing clause "forge's builder, planner and steward prompts carried five `if ...`/`when ...` rules, now rewritten with the same meaning, and selftest 6 refuses a new one" with "five such rules (builder.md's GPU and `PROGRESS.md` rules, planner.md's milestone rule, steward.md steps 4 and 5) are rewritten with the same meaning, and selftest 6 refuses a bullet or numbered step that opens with `If`/`When`/`Whenever` (`scout.md` excepted for its environment condition); conditions inside a line (builder.md "If the ticket's feature already exists", planner.md "If the answer is none" and "when the remainder is under the job's cost", steward.md "When a merged ticket measured one", reviewer.md "If you found a problem in steps 1 to 6") are not rewritten and the check does not see them".
+
+
 ## PR #127 · 2026-11-03T22:20:25Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
