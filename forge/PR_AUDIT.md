@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #129 · 2026-11-04T04:35:16Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #129 forge: invisible_chars() refuses a diff that adds bidi, zero-width or tag code points
+What it changes: adds a fourth pre-gate guard, `Forge.invisible_chars()`, which reads `git diff -U0 origin/main...HEAD` with check=True and fails the attempt when an added line carries U+200B/C, U+200E/F, U+202A-202E, U+2060-2064, U+2066-2069, U+FEFF or U+E0000-E007F. It runs before the gate (forge.py:864) and again after the repair (889). There is one README row (90) and selftest checks (76, 81, 141-154). No prompt, gate, reviewer or protected-path change.
+Findings:
+- medium forge/forge.py:517-519 The guard can be bypassed by any added line whose content starts with `++ `. In a diff, that line prints as `+++ ...`, so the `if line.startswith("+++ ")` branch treats it as a file header, and the `elif` means the line is never searched. I ran the PR's own `invisible_chars()` against a scratch repo. `PROGRESS.md` = `++ done <U+E0041 U+E0042>` returned `[]`. A Rust block-comment line `++ note <U+202E> }` returned `[]`. The same tag line without the `++ ` prefix returned `['PROGRESS.md: U+E0041']`. A builder (or text injected into one) can put a tag payload in PROGRESS.md, the file the reviewer reads as the builder's claim, past a guard whose README row says it refuses "a branch whose added lines carry" these code points. Changing `elif` to `if` closes the gap without false positives: with git's default core.quotePath, a real `+++ b/<path>` header never holds raw non-ASCII. A path containing U+200B is printed octal-quoted, and I checked it returns `[]`. The `f` name that a fake header leaves behind does not carry the payload into the ticket note: `fail()` formats `{bad}` as a list repr, which escapes every code point in the set (all are Cf/Cn, `isprintable()` False; checked). The pre-existing `test_tampering()` loop has the same header misparse; that is out of scope here.
+- low forge/forge.py:891 The repair-path message starts "the repair added code points…", and the dependency guard at 885 starts "the repair added packages…". `status_text()` groups `why` by its first three words (1205-1209), so both guards count under the same key "the repair added". The shortcut comment at 1203-1204 says every fail() message keeps that prefix distinct, and `record()`'s docstring uses per-guard zeros to judge whether a layer held. The pre-gate message ("diff adds code") does not collide with "diff adds packages".
+- low forge/forge.py:506-507, forge/README.md:90 The evidence for passing U+200D and the variation selectors is false. The comment says "3 and 24 text files on reflex1 main carry them in emoji"; the README says "reflex1 main uses them in 27 text files". In ~/Dev/reflex1, origin/main is 2c39a79c (627 commits) and `git ls-remote` confirms it is current. A byte scan of every blob finds 0 text files with U+200D, U+FE00-FE0F or U+E0100-E01EF. The matches are 3 and 24 binary `.pt`/`.png` blobs (NUL in the first 8000 bytes), where those byte sequences occur by chance. The other claim holds: 0 added lines across `git log -p origin/main` carry the refused set. Excluding U+FE0F/U+200D can still be justified, because emoji sequences such as ⚠️ (U+26A0 U+FE0F) carry them, but the stated count is wrong. Like U+FE0F, the Variation Selectors Supplement (U+E0100-E01EF) passes, and no emoji uses that range; I note this and do not require a change.
+- low forge/forge.py:515 A branch that adds `.gitattributes` with `*.md -diff` makes `git diff` print "Binary files … differ" for that file, and the guard returns `[]` (tested). `.gitattributes` is not a protected path. The reviewer's diff shows the `.gitattributes` hunk and the binary line, so the hiding is visible, but the reviewer `rg`s/reads worktree files and would see the content. `git --attr-source=origin/main diff -U0 origin/main...HEAD` (git 2.43 on this box) prints the content (tested). This is optional hardening and not required for merge.
+- none forge/forge.py:861-866, 886-891 Placement and failure paths traced. `touched_protected(wt, "origin/main")` fetches just before, so the guard diffs a fresh base. A failed `git diff` raises RuntimeError. A non-UTF-8 text diff raises UnicodeDecodeError from `sh(text=True)`; the full-diff read at 898 (reviewer diff) already does that later in the same cycle, so this is not a new failure class. Either way, cycle()'s handler closes the PR, `finally` removes the worktree and branch, and lane_loop's `recover()` puts the ticket back as retry, or blocked after `max_attempts` interruptions. No ticket is left in_progress. The message is bounded by fail()'s `why[-7000:]`, `pr_close`'s `[-6000:]` and `head[:200]`. The guard is a read-only diff in the lane's own worktree: no shared state, no agent session, no quota or GPU spend. The gate, reviewer prompt, protected list and prompts are untouched.
+- none forge/selftest.py:76,81 Deleted lines: the three-guard loop and `raised == [True, True, True]`. They are replaced by the same three guards plus `invisible_chars`, asserting `[True] * 4`, so each original guard's raise-on-failed-diff check stays. No layer is retired. README: one row added, none deleted. No `forge/prompts/*.md` change.
+- none Sibling PRs on base `forge`: no open PR adds, duplicates or contradicts an invisible-character guard (searched all 29 diffs for invisible/bidi/zero-width/U+200B/U+202E/unicode/INVISIBLE/test_tampering/raised ==). Several touch the same files: #99 rewrites fail()'s note and the repair prompt, #8/#6 the land/review-repair paths, and others the README table and selftest. These are adjacent edits, not contradictions.
+- Verified: `python3 forge/selftest.py` passes on the PR tree. With the change below applied in a scratch export it passes again, and the new selftest check fails on the unpatched PR code.
+Change needed (only for MERGE WITH CHANGE):
+forge/forge.py:519
+-            elif line.startswith("+") and (m := self.INVISIBLE.search(line)):
++            if line.startswith("+") and (m := self.INVISIBLE.search(line)):
+forge/forge.py:891
+-                    return self.fail(ticket, f"the repair added code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
++                    return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
+forge/forge.py:507
+-    # 3 and 24 text files on reflex1 main carry them in emoji; the set below matches 0 text files there (627 commits).
++    # emoji sequences carry them (U+26A0 U+FE0F, U+200D joins); reflex1 main has neither set in a text file (627 commits).
+forge/README.md:90
+-(reflex1 main uses them in 27 text files, the refused set in none of 627 commits)
++(emoji sequences carry them; reflex1 main has neither set in a text file, 627 commits)
+forge/selftest.py, after line 153 (`check("removing a hidden code point is no finding", …)`):
++    (repo / "NOTES.md").write_text("++ done \U000e0041\n")
++    git("add -A", repo); git("commit -qm plus", repo)
++    check("an added line that reads as a +++ header is still searched", [g[-7:] for g in f.invisible_chars(repo)] == ["U+E0041"], str(f.invisible_chars(repo)))
+
+
 ## PR #128 · 2026-11-04T03:29:09Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
