@@ -507,6 +507,11 @@ check("builder reruns an earlier Must change line before coding to it; the revie
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
+# A rule phrased as a condition on the agent's own action ("If the milestone is done, ...") is followed less
+# than the same rule as a direct instruction (78.0% vs 64.2% Opus 5, 71.6% vs 35.6% Sonnet 5; arXiv 2611.04367).
+cond = [f"{p.name}: {l[:60]}" for p in (ROOT / "prompts").glob("*.md") if p.name != "scout.md"
+        for l in p.read_text().splitlines() if re.match(r"\s*(-|\d+\.)\s+(If|When|Whenever)\b", l)]
+check("no role-prompt rule opens with a condition on the agent's own action", not cond, "; ".join(cond))
 
 # 7. A sync of main must not destroy this lane's unpushed commits (planner tickets, status, doc edits).
 with tempfile.TemporaryDirectory() as d:
