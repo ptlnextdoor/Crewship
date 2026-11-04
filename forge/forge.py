@@ -809,7 +809,7 @@ class Forge:
         self.sync_main()
         return True
 
-    def land(self, wt: Path, branch: str, tid: str, builder: str) -> str:
+    def land(self, wt: Path, branch: str, tid: str, builder: str, ticket_text: str) -> str:
         """Bring the branch up to date with main, re-gate, merge (through the PR when there is one). Returns "" or
         why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
@@ -826,6 +826,13 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket/harness-config paths {bad}; not allowed."
+            # Same session, same reason, for the tests: it is told to "build and run the tests the conflicted
+            # files touch", and a resolution that drops one leaves a gate that passes with the test gone. The
+            # pre-gate run of this guard was two agent turns earlier, and the conflict commit is gated, never
+            # reviewed, so between them the only thing holding the rule was the prompt sentence.
+            bad = self.test_tampering(wt, ticket_text)
+            if bad:
+                return f"resolving the conflict with main switched off, deleted or stripped tests the ticket does not name: {bad}; not allowed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
             # patch (context shifts on any rebase, so a clean one posts nothing).
             sha, lines = self.reviewed
@@ -1002,7 +1009,7 @@ class Forge:
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
                 return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
-            why = self.land(wt, branch, tid, builder)
+            why = self.land(wt, branch, tid, builder, ticket.read_text())
             if why:
                 return self.fail(ticket, why)
             done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
