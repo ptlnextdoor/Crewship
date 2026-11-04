@@ -305,12 +305,24 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")
     git("add -A", repo); git("commit -qm z", repo); git("push -q origin main", repo)
     f.pr, f.pr_close = "https://example.invalid/pull/1", lambda pr, why: None
+    f.last_model = {"builder": "a/b"}
     f.fail(t, "diff edits protected gate/ticket paths ['tickets/0002-y.md']; not allowed.")
     logged = f.log_file.read_text().splitlines()[-1]
     check("fail() logs the cause when there is a PR", "RETRY 0009-z: diff edits protected" in logged and "https://" not in logged, logged)
     check("ticket note still carries the PR url", "PR: https://example.invalid/pull/1\ndiff edits" in git("show origin/main:tickets/0009-z.md", repo))
     check("a failed attempt's history entry carries the guard that ended it",
           f.state["history"][-1].get("why", "").startswith("diff edits protected gate/ticket paths"), str(f.state["history"][-1]))
+    # 4i-b. `builder` and `builder_hard` are the same model string at two `thinking` levels, so an attempt that
+    # records only the model makes the status tally average a high-effort run with an xhigh one.
+    check("a failed attempt's history entry carries the builder's effort",
+          f.state["history"][-1].get("effort") == "high", str(f.state["history"][-1]))
+    f.cfg["roles"]["builder_hard"] = {"model": "a/b", "thinking": "xhigh"}
+    f.last_model = {"builder_hard": "a/b"}
+    f.record("0009-z", "merged")
+    txt = f.status_text()
+    check("status splits one model's attempts by effort", "a/b:high 0/1" in txt and "a/b:xhigh 1/1" in txt,
+          next((l for l in txt.splitlines() if "per builder model" in l), txt))
+    f.last_model.clear()
 
     # 4j. A project that does not have every path the steward stages still gets its turn committed:
     # `git add -A a b c` stages nothing when one path is missing, so discard_strays threw the turn away.
@@ -1058,7 +1070,7 @@ with tempfile.TemporaryDirectory() as d:
     f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200, why="reviewer did not approve."), dict(f.state["history"][-1], model="g/h", result="merged", secs=600, why="")]
     with contextlib.redirect_stdout(io.StringIO()) as out:
         f.status()
-    check("status charges a model's failed attempts to its merged tickets", "g/h 1/2 (9-91%) 30 min/merge" in out.getvalue(), out.getvalue())
+    check("status charges a model's failed attempts to its merged tickets", "g/h:high 1/2 (9-91%) 30 min/merge" in out.getvalue(), out.getvalue())
     # Which guard ends attempts is the number behind retiring or tightening one; the live log's heads were PR urls.
     check("status tallies failed attempts by the guard that ended them", "the guard that ended them:" in out.getvalue() and "reviewer did not 1" in out.getvalue(), out.getvalue())
     f.state["history"] = f.state["history"][:-2]

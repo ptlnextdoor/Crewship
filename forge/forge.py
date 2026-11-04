@@ -1072,9 +1072,13 @@ class Forge:
         is the usable proxy for cost when the meter is unreadable (arXiv 2610.39621); reflex1's 80 merges ran
         23 to 159 min (median 60) and only forge.log held that. `why` is the first line of a failed attempt's
         cause, the guard that ended it: status counts them per guard; a zero on the gate, reviewer, protected-path or dependency guards means
-        the layer in front held, not that the guard can go."""
-        model = next((m for r, m in self.last_model.items() if r.startswith("builder")), None)
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
+        the layer in front held, not that the guard can go. `effort` is the `thinking` level of the builder role that
+        ran: `builder` and `builder_hard` are the same model string at high and xhigh, so without it the per-model
+        tally pools two settings whose published score and cost differ more than the model choice does at this tier
+        (codingplans.dev FrontierCode 2.0, Claude Opus 5.5: medium 30.1 at $1.70 a task, xhigh 43.38 at $5.18, max 45.45 at $12.82)."""
+        role, model = next(((r, m) for r, m in self.last_model.items() if r.startswith("builder")), (None, None))
+        effort = self.cfg["roles"].get(role, {}).get("thinking", "high") if role else None
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "effort": effort, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
@@ -1249,7 +1253,8 @@ class Forge:
         out.append(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}): " + ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
         by_model: dict[str, list[int]] = {}
         for h in (h for s in states for h in s.get("history", [])):
-            t = by_model.setdefault(h.get("model") or "pre", [0, 0, 0, 0])  # merged, attempts, secs of every attempt carrying it, merged among those
+            key = h.get("model") or "pre"  # entries written before `effort` existed keep the bare model name
+            t = by_model.setdefault(f"{key}:{h['effort']}" if h.get("effort") else key, [0, 0, 0, 0])  # merged, attempts, secs of every attempt carrying it, merged among those
             t[0] += h["result"] == "merged"
             t[1] += 1
             if "secs" in h:
@@ -1257,7 +1262,7 @@ class Forge:
                 t[3] += h["result"] == "merged"
         # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
         # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
-        out.append("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts: " + ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
+        out.append("merged/attempts per builder model and effort that ran, lane-minutes per merged ticket counting its failed attempts: " + ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
         # shortcut: a cause is keyed by its first three words ("builder produced no", "reviewer did not", "merge
         # conflict landing"), which every fail() message in this file keeps distinct; split into a `cause` argument
         # if two messages ever share a prefix. Entries written before `why` existed are not counted.
