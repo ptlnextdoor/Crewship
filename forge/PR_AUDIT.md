@@ -2,6 +2,63 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #132 · 2026-11-04T18:30:03Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #132 forge: record the builder's effort per attempt, split the model tally by it
+What it changes: `record()` (forge.py:1079-1081 on head a4a3815b) finds the builder role that ran, not only its model, and writes `effort`, which is that role's `thinking` with agent()'s `"high"` default. `status_text()` (:1256-1265) keys the per-model tally as `model:effort`; entries without `effort` keep the bare model name. Selftest adds 4i-b (two checks) and changes the min/merge check's expected key to `g/h:high`. It reports only: no routing, prompt, gate or guard change.
+Findings:
+- low forge/README.md:145 (not in the diff) The README is out of date, and the new split invites a wrong reading.
+  - The README still says the second status line is "per builder model that ran". The code now prints `per builder model and effort that ran`, with `model:effort` keys. The fallback key that remains (entries before `effort` keep the bare model name) is documented only in a code comment.
+  - forge.py:881-883 sends `difficulty: hard` tickets and every attempt from the third on to `builder_hard` (xhigh in reflex1.toml:41-43). So the new `:xhigh` row holds the hardest tickets and tickets that already failed twice, and the `:high` row holds the rest. A gap between the two rows is selection, not the effect of effort.
+  - The docstring and PR body frame the split as exposing "the larger of the two knobs". The steward reads this line as `{STATE}` (forge.py:1081, steward.md:3) and writes PROGRESS/LEARNINGS from it.
+  - The README's old clause on `builder_hard` assumed both roles shared one row. It needs to state this bias for the split rows instead. It is reporting only and nothing routes on it, hence low.
+- nit forge/forge.py:1075-1078 (docstring) Wrong rows cited. It says `builder` (high) and `builder_hard` (xhigh) differ more in published score than the model choice does, but cites Opus 5.5's medium, xhigh and max rows. It leaves out high, the level `builder` runs.
+  - I checked codingplans.dev/recipes/optimal-effort/ today: high is 34.53 at $2.42, xhigh 43.38 at $5.18.
+  - The claim holds with the high row: GPT-6.1 Sol, the builder's Codex fallback, scores 34.82 at high. The cited numbers just don't show it.
+- nit forge/forge.py:1080 The `{}` in `self.cfg["roles"].get(role, {})` is never reached in production.
+  - Only `agent()` writes `last_model` (:240), and it first indexes `self.cfg["roles"][role]` (:220), so `role` is always configured.
+  - If the fallback ever were reached, it would silently record `"high"` for an unknown role. Harmless, but defensive code on a trusted path.
+- none forge/forge.py:1079-1081 Traced end to end. Nothing reaches the gate, the reviewer, the protected paths or spend.
+  - Model and effort stay consistent:
+    - `last_model` is cleared at claim (:878).
+    - Each cycle holds at most one `builder*` key, because the repair (:931) and the conflict session (:721) reuse the cycle's `builder` variable.
+    - `effort` comes from the same role as `model`. `agent()` passes that role's `thinking` to every model in the fallback chain (:225), so `model:effort` is the exact `--model`/`--thinking` pair the session ran. On a fallback that is e.g. `openai-codex/gpt-6.1-sol:xhigh`.
+    - No `builder*` key means `(None, None)`, so the key stays `pre`.
+  - Safety:
+    - The value comes from the TOML config, never from ticket text, and reaches no shell or argv.
+    - The new expression cannot raise.
+    - `record()` still runs after `set_status`+`push` in `fail()` (:1059-1063) and after the done push in `cycle()` (:1004), so no exception path can leave a ticket `in_progress` or a worktree behind.
+  - State and size:
+    - It writes this lane's `state.json` only, still capped at `[-200:]`, about 17 bytes more per entry.
+    - The tally has at most one key per model and thinking level, so the steward prompt stays bounded.
+  - Not touched: prompts, `gate.sh` handling, `touched_protected`, reviewer selection or verdict parsing, claim, `recover()`, `discard_strays()`, timeouts or killpg, PR create/merge, quota or `gpu.py`.
+  - Side effect: the forge.py hash segment moves, so the per-version tally starts a new row, as it does for any forge.py change.
+- none forge/selftest.py:1073 One assertion string is replaced, not deleted. It is still covered.
+  - What the old line (`"g/h 1/2 (9-91%) 30 min/merge"`) prevented: lane-minutes per merge being computed from merged attempts only, without the failed attempts' seconds.
+  - The rewritten line carries the same check with the `:high` key. The `:high` comes from the entry copied off the cycle that `build_on_fallback` ran.
+  - Mutation run on a /tmp copy: I changed `t[2] += h["secs"]` to count merged attempts only, and this check FAILs. The PR body names the rewrite.
+  - No line is deleted from `forge/prompts/*.md` or the README safeguard table.
+- none forge/selftest.py:315-325 The new checks catch the old code and a wrong role lookup.
+  - Full PR-head selftest (git archive a4a3815b to /tmp): "all checks passed". py_compile is clean.
+  - PR selftest against base 1d6ae020 forge.py: 3 FAILs, the two new checks plus the rekeyed min/merge check.
+  - Mutant that always reads `builder`'s thinking: FAIL on "status splits one model's attempts by effort".
+  - The block's edits to `f.cfg` and `f.last_model` break no later check.
+- none PR body claims checked against the code. All hold:
+  - reflex1.toml:34-45 (both roles `anthropic/claude-opus-5-5`, high/xhigh, 75/90 min).
+  - The `"high"` default matches agent() at :225.
+  - Live smoke: PR-head `forge.py status --config ~/.config/forge/reflex1.toml` (read-only) prints `merged/attempts per builder model and effort that ran ... pre 85/122 (61-77%)`.
+  - 0 of the 122 live history entries carry `model` or `effort`, so no mixed bare/split rows exist yet.
+  - No HTML comments in the body. The one comment is Copilot's quota notice.
+- none Siblings: 23 open PRs on `forge` touch `forge/forge.py` or `forge/selftest.py`. I read every diff.
+  - None changes `record()`, `status_text()`, `by_model` or the history entry fields.
+  - #83 (Built-by trailer) and #86 (reviewer prompt names the builder model) read `last_model`/`built_by` for other outputs. Neither duplicates or contradicts recording the effort.
+  - #99 rewrites the same selftest 4i block (the `fail()` call and the note check next to this PR's insert at :308 and :315-325). The overlap is textual only: whichever lands second rebases, and neither side's text needs to change.
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:145, replace "A second line tallies merged/attempts per builder model that ran (the fallback after a quota refusal, not the configured one)." with "A second line tallies merged/attempts per builder model and effort that ran (`model:thinking`; the fallback after a quota refusal, not the configured model; entries written before `effort` existed keep the bare model name)." and replace "The span includes forge's gate runs, the review by the other vendor's model and any merge-resolve session, and `builder_hard` (same model string, more effort) takes the hard tickets and later attempts, so it is not the builder model's own time; same caveat as the rate." with "The span includes forge's gate runs, the review by the other vendor's model and any merge-resolve session, so it is not the builder model's own time. `builder_hard` (same model string, its own `thinking`) takes the `difficulty: hard` tickets and every attempt from the third on, so its `model:effort` row holds harder tickets than `builder`'s and the gap between the two rows is not the effort's own effect; same caveat as the rate." In the same commit, in forge/forge.py:1078 (docstring), replace "medium 30.1 at $1.70 a task, xhigh 43.38 at $5.18, max 45.45 at $12.82" with "high 34.53 at $2.42 a task, xhigh 43.38 at $5.18".
+
+
 ## PR #131 · 2026-11-04T16:24:20Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
