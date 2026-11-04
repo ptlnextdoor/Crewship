@@ -151,6 +151,9 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text("// safe\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm clean", repo)
     check("removing a hidden code point is no finding", f.invisible_chars(repo) == [])
+    (repo / "NOTES.md").write_text("++ done \U000e0041\n")
+    git("add -A", repo); git("commit -qm plus", repo)
+    check("an added line that reads as a +++ header is still searched", [g[-7:] for g in f.invisible_chars(repo)] == ["U+E0041"], str(f.invisible_chars(repo)))
     git("reset -q --hard origin/main", repo)
     # 2f. gate() keeps the stage header and error lines a 5,000-character tail would cut (reflex1 PR #2: a
     # rustfmt failure whose tail was all hunks), and a short output passes through unchanged.

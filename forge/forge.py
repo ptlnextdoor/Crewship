@@ -504,7 +504,7 @@ class Forge:
     # source that reads one way to the reviewer and another to the compiler), zero-width characters and Unicode
     # tags (Reverse CAPTCHA, Graves 2026, arXiv 2603.00164: models follow instructions encoded in them, Anthropic
     # models through tags, more so with tools on). U+200D (the emoji joiner) and variation selectors are left out:
-    # 3 and 24 text files on reflex1 main carry them in emoji; the set below matches 0 text files there (627 commits).
+    # emoji sequences carry them (U+26A0 U+FE0F, U+200D joins); reflex1 main has neither set in a text file (627 commits).
     INVISIBLE = re.compile(r"[\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
 
     def invisible_chars(self, cwd: Path) -> list[str]:
@@ -516,7 +516,7 @@ class Forge:
         for line in self.sh("git diff -U0 origin/main...HEAD", cwd=cwd, check=True).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
-            elif line.startswith("+") and (m := self.INVISIBLE.search(line)):
+            if line.startswith("+") and (m := self.INVISIBLE.search(line)):
                 out.add(f"{f}: U+{ord(m[0]):04X}")
         return sorted(out)
 
@@ -888,7 +888,7 @@ class Forge:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
                 bad = self.invisible_chars(wt)
                 if bad:
-                    return self.fail(ticket, f"the repair added code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
+                    return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
                 if not ok:
