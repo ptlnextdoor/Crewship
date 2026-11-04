@@ -2,6 +2,45 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #136 · 2026-11-04T23:38:39Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #136 forge: re-run the test guard after a conflict resolution at landing
+What it changes: `land()` gets a required fifth parameter, `ticket_text`, which `cycle()` passes as `ticket.read_text()` (forge.py:1012). On every landing pass it runs `test_tampering(wt, ticket_text)` right after the `touched_protected` re-check (:833-835) and returns a failure on a dropped, skipped or stripped test. The PR also inserts one clause into README row 34, adds selftest 16b (two checks), and adds the new argument to 4 selftest `land()` calls and 2 `f.land` stubs.
+Findings:
+- low forge/forge.py:835 (with :1069, :1080, :1298 and README.md:148): the new failure message has the same first three words, `resolving the conflict`, as the protected-path message at :828. Path: `fail()` keeps `why.splitlines()[0]` (:1069). `record()` stores it (:1080). `status_text()` keys every cause by its first three words (:1298). The shortcut comment at :1293-1295 relies on "every fail() message in this file keeps distinct". README:148 lists `resolving the conflict` under the protected-path guards and says those tallies are the evidence for keeping or retiring a guard. After this PR, a test-guard firing at landing counts as a protected-path firing, and the steward and owner cannot tell the two apart. I computed the 3-word key of every `self.fail(...)` and `land()` return message at the PR head: this is the only collision. It does not let anything bypass the gate. It corrupts the per-guard count. The fix below removes the collision and the full selftest still passes (rc 0).
+- ok forge/forge.py:829-835, traced end to end:
+  - Placement: the check runs on every pass after `rebase_onto_main()` returns True (clean rebase, clean merge, or the resolve session's `git add -A` commit at :737). It runs after `touched_protected`'s fetch and before the delta post, the gate, the `--force-with-lease` push and both merge paths. A rejected resolution is never pushed or merged.
+  - Base: after the sync HEAD contains origin/main, so `origin/main...HEAD` diffs from the synced main. Tests that main itself dropped appear on neither side. A test from another lane that the resolution drops counts, which is correct, because that deletion was never reviewed.
+  - Waivers: they come from the same `ticket.read_text()` as the pre-gate (:933) and repair (:961) runs. `test_tampering` cuts at `\n## forge`, so a fail note quoting this message cannot waive the next attempt.
+  - Injection: ticket text never reaches a shell. The diff command at :545 is a constant string.
+  - Failure path: `check=True` raises inside `cycle()`'s try. The except closes the PR (:1027), `finally` removes the worktree and branch, and `lane_loop` → `recover()` sets the ticket back to retry. This is the same path the existing `touched_protected` call in `land()` (`check=True`, :441) already takes, so no ticket stays `in_progress` and no worktree is left behind.
+  - Cost and shared state: one `git diff -U0` per pass, at most 3 passes. No GPU, quota, prompt or shared state is involved.
+  - Callers: all are updated (forge.py:1012; selftest 255, 399, 408, 742, 872, 908, 912, 1153), and nothing else in forge/ calls `land()`.
+  - Tests: PR-head selftest rc 0 (131 ok, including both new 16b checks), and py_compile is clean. A mutant with :833-835 removed fails `a conflict resolved by dropping a test does not land` with `why=''`, which reproduces the PR body's base measurement. So the new test pins the new guard.
+- none forge/README.md:34, forge/selftest.py: no layer is removed. A word diff of row 34 is a pure insertion (`runs` → `runs, and again in land() ...`). The only `-` lines in selftest are the 6 `land` call/stub signatures, which gain `ticket_text`. No check is removed and no prompt is touched.
+- nit forge/README.md:34: "again in `land()` once a conflict with main has been resolved" understates what the code does. :833 runs on every landing pass, clean rebases included. It is not false for the case that matters.
+- nit forge/selftest.py:876-878 and PR body ("closes the other half of the same gap"): "the one way past every check this loop has" is an overclaim. `land()` (:812-864) re-runs only `touched_protected` and now `test_tampering`. `unrequested_deps`, `vulnerable_deps` and `invisible_chars` run only at :927-938 and :955-966, so a resolve session can still land a new crate or invisible characters, gated but never reviewed. That gap predates this PR and this PR does not introduce it; the comment just should not claim exclusivity. The 4-line comment at :829-832 also restates the reasoning of :821-825 directly above it.
+- info sibling #83, #84: both add an optional fifth positional parameter to `land()` (`trailers: str = ""`, `gated: str = ""`) and rewrite the same `cycle()` call line (:1012). Whichever of these PRs lands after #136 must rebase:
+  - #84's selftest calls `f.land(..., "builder")` with 4 args, which raises TypeError against the required `ticket_text`, and it calls `f.land(wt, "a", "0001-a", "builder", gated)` positionally.
+  - #83 passes its trailer block positionally.
+  - Selftest catches each wrong binding before production. The intents do not contradict. The side that should change is whichever lands second, by passing its own optional argument by keyword. This does not lower #136's verdict. The PR body names #83 but not #84.
+- info siblings #48, #111, #19, #85, #99, #132, #133: compatible, no contradiction or duplicate.
+  - #48 adds a `continue` pass to `land()`; the guard just runs on that pass too.
+  - #111 merges the gated sha.
+  - #19 and #85 move conflict resolution earlier, where the pre-gate guard already applies.
+  - #99 fences the note, but it still sits under set_status's `## forge` header, so `test_tampering`'s split holds.
+  - #132 and #133 keep the "keeps distinct" comment that this PR's message breaks.
+  - The other siblings on base `forge` that touch these files (#5, #6, #7, #8, #16, #20, #23, #25, #28, #31, #39, #40, #42, #44, #47, #79, #86, #117) do not touch `land()`, `test_tampering` or README row 34. I checked the +/- lines and hunk headers of every diff.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py:835 replace
+`                return f"resolving the conflict with main switched off, deleted or stripped tests the ticket does not name: {bad}; not allowed."`
+with
+`                return f"the conflict resolution skipped, deleted or stripped tests the ticket does not name: {bad}; not allowed."`
+That gives the cause a 3-word key no other fail message uses. Selftest 16b matches on `fewer test functions` and passes unchanged (verified: rc 0, no duplicate keys).
+
+
 ## PR #135 · 2026-11-04T22:38:48Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
