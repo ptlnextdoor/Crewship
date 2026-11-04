@@ -500,6 +500,26 @@ class Forge:
             out.append(f"{-asserts} fewer assertion lines than the branch point")
         return out
 
+    # Code points a reader does not see and a model does: bidi controls (Trojan Source, Boucher and Anderson 2021:
+    # source that reads one way to the reviewer and another to the compiler), zero-width characters and Unicode
+    # tags (Reverse CAPTCHA, Graves 2026, arXiv 2603.00164: models follow instructions encoded in them, Anthropic
+    # models through tags, more so with tools on). U+200D (the emoji joiner) and variation selectors are left out:
+    # emoji sequences carry them (U+26A0 U+FE0F, U+200D joins); reflex1 main has neither set in a text file (627 commits).
+    INVISIBLE = re.compile(r"[\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
+
+    def invisible_chars(self, cwd: Path) -> list[str]:
+        """Files whose added lines carry a code point no reader sees, with the code point. rustc refuses bidi
+        controls in literals and comments; nothing refuses them in Markdown, Python, shell or the PROGRESS.md
+        entry the reviewer reads as the builder's claim, and nothing refuses zero-width or tag characters
+        anywhere. No ticket waiver: no ticket needs text the reviewer cannot see."""
+        out, f = set(), ""
+        for line in self.sh("git diff -U0 origin/main...HEAD", cwd=cwd, check=True).stdout.splitlines():
+            if line.startswith("+++ "):
+                f = line[6:]
+            if line.startswith("+") and (m := self.INVISIBLE.search(line)):
+                out.add(f"{f}: U+{ord(m[0]):04X}")
+        return sorted(out)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -841,6 +861,9 @@ class Forge:
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
                 return self.fail(ticket, f"diff skips, deletes or strips tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+            bad = self.invisible_chars(wt)
+            if bad:
+                return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
             ok, gout = self.gate(wt)
             self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
             if not ok:
@@ -863,6 +886,9 @@ class Forge:
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                bad = self.invisible_chars(wt)
+                if bad:
+                    return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
                 if not ok:
