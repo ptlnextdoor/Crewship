@@ -288,8 +288,13 @@ with tempfile.TemporaryDirectory() as d:
     # The steward's `{STATE}` is every lane's tally (the `status` text), not this lane's state.json: reflex1's
     # lane 1 held 31 of the loop's 122 attempts, and the other 91 never reached the turn that writes "what failed".
     (Path(d) / "s/lane2").mkdir(parents=True)
+    # 0098-twice is the same ticket attempted on two lanes: its attempt number is the count across both
+    # histories, so the per-attempt tally has to pool them (a retry is claimed by whichever lane is free).
     (Path(d) / "s/lane2/state.json").write_text(json.dumps({"cycle": 3, "merged": 0, "failed": 1, "history": [
-        {"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-31T00:00:00Z", "why": "reviewer did not approve: x"}]}))
+        {"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-31T00:00:00Z", "why": "reviewer did not approve: x"},
+        {"cycle": 4, "ticket": "0098-twice", "result": "failed", "at": "2026-10-31T01:00:00Z", "why": "gate failed"}]}))
+    f.state["history"] = f.state.get("history", []) + [
+        {"cycle": 5, "ticket": "0098-twice", "result": "merged", "at": "2026-10-31T02:00:00Z"}]
     seen_state: list[str] = []
     def steward_agent(role, prompt, cwd, timeout_min=0):
         seen_state.append(prompt)
@@ -300,6 +305,10 @@ with tempfile.TemporaryDirectory() as d:
     f.steward()
     check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
     check("steward sees every lane's attempts and the per-guard tally", "0099-other: failed" in seen_state[0] and "reviewer did not 1" in seen_state[0], seen_state[0][-600:])
+    # The second attempt merged on another lane than the first: pooled, that is #1 0/2 and #2 1/1.
+    check("steward sees merged/attempts by attempt number, pooled across lanes",
+          "#1 0/2" in seen_state[0] and "#2 1/1" in seen_state[0],
+          "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")))
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")

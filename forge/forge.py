@@ -1227,9 +1227,10 @@ class Forge:
         print(self.status_text())
 
     def status_text(self) -> str:
-        """Every lane's totals, what is building, the last attempts and the per-version, per-model and
-        per-guard tallies: the `status` command, and the loop state the steward reads (`self.state` is one
-        lane's file; reflex1's lane 1 held 31 of the loop's 122 attempts, the steward never saw the other 91)."""
+        """Every lane's totals, what is building, the last attempts and the per-version, per-model,
+        per-attempt-number and per-guard tallies: the `status` command, and the loop state the steward reads
+        (`self.state` is one lane's file; reflex1's lane 1 held 31 of the loop's 122 attempts, the steward
+        never saw the other 91)."""
         states = self.all_states()
         out = [f"{self.cfg['name']}: {self.lanes} lane(s) · merged {sum(s.get('merged', 0) for s in states)} · failed {sum(s.get('failed', 0) for s in states)}"]
         busy = []
@@ -1258,6 +1259,20 @@ class Forge:
         # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
         # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
         out.append("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts: " + ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
+        # merged/attempts by the ticket's own attempt number, pooled across lanes (a retried ticket is claimed
+        # by whichever lane is free): `cycle()` runs builder_hard from attempt 3, and from attempt 1 on a
+        # `difficulty: hard` ticket, so no bucket is a single effort level.
+        # shortcut: counted over the history kept (200 entries per lane, none before `history` existed, a renamed
+        # ticket starts over), so a later attempt can read as #1; record attempts() on the entry if that matters.
+        by_try: dict[int, list[int]] = {}
+        nth: dict[str, int] = {}
+        for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"]):
+            nth[h["ticket"]] = k = nth.get(h["ticket"], 0) + 1
+            t = by_try.setdefault(k, [0, 0])
+            t[0] += h["result"] == "merged"
+            t[1] += 1
+        out.append("merged/attempts by the ticket's attempt number (builder_hard from #3, and from #1 on difficulty: hard tickets): "
+                   + (", ".join(f"#{k} {rate_interval(m, n)}" for k, (m, n) in sorted(by_try.items())) or "-"))
         # shortcut: a cause is keyed by its first three words ("builder produced no", "reviewer did not", "merge
         # conflict landing"), which every fail() message in this file keeps distinct; split into a `cause` argument
         # if two messages ever share a prefix. Entries written before `why` existed are not counted.
