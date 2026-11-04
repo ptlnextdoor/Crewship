@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #130 · 2026-11-04T15:25:23Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #130 forge: refuse lock entries pinned at a version with a public advisory
+What it changes: adds a pre-gate guard, `vulnerable_deps()`. It runs at forge.py:913 and again after the repair at :941, right after `unrequested_deps()`. The guard POSTs every third-party `Cargo.lock` entry the branch adds or bumps to api.osv.dev `querybatch`. It drops withdrawn and `informational` records and fails the attempt unless the ticket text above `## forge` names an advisory id. The PR also moves the lock parsing out of `unrequested_deps()` into `lock_pkgs()` and `lock_added()`, adds one sentence to builder.md's Dependencies bullet, and adds 3 selftest checks with `osv` stubbed. It extends the "guard raises on a failed git diff" check from 4 guards to 5.
+Findings:
+- medium forge/forge.py:511-512 The waiver covers more than it says. `if not any(i.lower() in text for i in ids)` drops the whole crate's finding as soon as the ticket names any one of its ids. The docstring at :508, builder.md:15 and both fail messages (:915, :943) all say "only the ticket naming the advisory id accepts one". I imported the PR's forge.py in memory, stubbed `lock_added` and `osv`, and gave `zip 8.6.0` three ids. With a ticket naming only `RUSTSEC-2026-0101`, `vulnerable_deps` returns `[]`. With a ticket naming none, it returns all three. So accepting one low-severity advisory silently accepts every other advisory on the same version (the PR body's own smoke gives zip 8.6.0 9 ids). Selftest 2b' (selftest.py:110-115) stubs a single id, so it cannot catch this. This only loosens the new layer, not an existing one, but it is the guard's whole contract.
+- low forge/forge.py:943 The status tally now mixes up two guards. The repair message "the repair added or bumped Cargo.lock ..." keys as `the repair added` (first three words, forge.py:1266). That is the same key as `unrequested_deps`'s repair message at :940. I printed both keys to confirm. The shortcut comment at forge.py:1261-1263 says every fail() message keeps its first three words distinct. README.md:147 lists `the repair added` as the dependency-check key, so `status` and the steward's `{STATE}` now merge the two guards' repair-path failures. The pre-gate message's key, `diff adds or`, is distinct.
+- low forge/forge.py:491-492 The informational filter drops any truthy `informational`, so `unsound` goes too, not only the `unmaintained`/`notice` the docstring and PR body name. On the live API, `atty 0.2.14` returns RUSTSEC-2021-0145 (`informational: "unsound"`) and its alias GHSA-g98v-hv3f-hcfr (no `informational` field, severity LOW). The RUSTSEC id is filtered and the GHSA alias is kept, so the crate is still refused. The filter is uneven across aliases but errs toward blocking; it is not a bypass. The docstring overstates what the filter does.
+- low forge/forge.py:913-915 Some advisories have no fixed version, so the fail message's advice cannot be followed. `rsa 0.9.8` returns RUSTSEC-2023-0071 (Marvin; its range is only `introduced: 0.0.0-0`) plus GHSA-9c48-w39g-hm26. A ticket naming a crate that pulls in `rsa` fails each attempt after a full builder session (`builder_hard` from attempt 2) until `max_attempts` blocks it. The spend is capped by `max_attempts`, not unbounded. The owner unblocks the ticket by naming the ids.
+- low forge/prompts/builder.md:15 The new clause "rather than whatever `cargo add` resolves to" points the wrong way. `cargo add` resolves the newest compatible release from the registry at run time. The research the PR cites (PinTrace) says model-chosen pins are the risky ones, and this clause pushes the builder toward hand-picked `--precise` pins. "pick the fixed version" without the clause says what is needed. The sentence grants nothing on protected paths, tests or tickets.
+- low forge/forge.py:482-500 Fail-open granularity: one `try` covers the batch and every `/v1/vulns/<id>` lookup. A single lookup error or timeout throws away the advisories already confirmed for every other crate in the batch, logs one line and passes. Failing open is the PR's stated design: `unrequested_deps()` and reviewer step 6 are unchanged and still carry the dependency rule, so no existing layer is weakened.
+- low forge/README.md (untouched) The fifth pre-gate guard gets no row in the safeguard table. Every other pre-gate guard has one: rows 33, 34, 89 and 90. README.md:147's list of guard keys also omits it.
+- info Deletions: builder.md:15 keeps the old Dependencies text verbatim and appends one sentence. selftest.py:76/81 extends the guard tuple and changes `[True] * 4` to `[True] * 5`, which is stricter. The README table is untouched. No prompt, selftest or safeguard-table layer is removed.
+- info Traced and found clean:
+  - The `unrequested_deps` refactor keeps its result. Before: head minus base minus ok. After: `lock_added` (head minus base) minus ok, with the same `check=True` diff first. The only cost is one extra `git show HEAD:Cargo.lock` parse (and `vulnerable_deps` repeats the diff, merge-base and both parses), which is cheap slop.
+  - Ordering: the guard runs before the gate on both paths. It cannot touch `gate.sh`, the reviewer, the protected paths, `recover()` or `discard_strays()`.
+  - No new shared state: local dicts, plus `log()` appends to forge.log as every other log line does.
+  - Network: only when `lock_added` is non-empty. Each request has a 30 s timeout, at most 1 + (number of distinct ids) requests. No quota or GPU spend.
+  - A broken `git diff` raises through `lock_added`, so the cycle ends as an error.
+  - The waiver reads the same ticket text as `unrequested_deps`/`test_tampering`, so it adds no new trust source.
+  - The selftest does no network: other `cycle()` tests never change Cargo.lock, and `osv([])` returns before any request.
+- info Siblings: 27 open PRs on `forge` touch forge.py, builder.md or selftest.py. None edits the Dependencies bullet, `unrequested_deps`, the pre-gate guard block or the guard-raises selftest, and none adds a version or advisory check. #85, #23, #3 and #1 edit other builder.md bullets. #99 fences the fail() note but keeps the `\n## forge ` header that this PR's waiver split relies on. No contradictions and no duplicates.
+Change needed (only for MERGE WITH CHANGE): two edits, A and B.
+A. In forge/forge.py `vulnerable_deps`, replace the `return sorted(...)` at :511-512 with:
+```python
+        left = {k: [i for i in ids if i.lower() not in text] for k, ids in self.osv(self.lock_added(cwd)).items()}
+        return sorted(f"{n} {v} ({', '.join(ids)})" for (n, v), ids in left.items() if ids)
+```
+Then add a selftest check after selftest.py:115 that stubs `osv` to return `["RUSTSEC-2026-0001", "RUSTSEC-2026-0002"]` for `evil 0.1.0`. With a ticket naming only `RUSTSEC-2026-0001`, the check should expect `["evil 0.1.0 (RUSTSEC-2026-0002)"]`.
+B. At forge.py:943, start the repair message with "the repair pinned Cargo.lock entries at a version with a public advisory: ..." so its tally key no longer collides with `unrequested_deps`'s "the repair added".
+
+
 ## PR #129 · 2026-11-04T04:35:16Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
