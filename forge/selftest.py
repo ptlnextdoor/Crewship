@@ -300,6 +300,10 @@ with tempfile.TemporaryDirectory() as d:
     f.steward()
     check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
     check("steward sees every lane's attempts and the per-guard tally", "0099-other: failed" in seen_state[0] and "reviewer did not 1" in seen_state[0], seen_state[0][-600:])
+    # lane2's state carries 3 cycles for 1 recorded attempt, so the coverage line must show the two cycles
+    # that ended outside fail() - summing `cycle` per lane, not counting history entries of this lane.
+    cov = re.search(r"(\d+) attempts recorded of (\d+) cycles started", seen_state[0])
+    check("the steward is told how many cycles left no attempt", bool(cov) and int(cov.group(2)) - int(cov.group(1)) >= 2, seen_state[0][:200])
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")

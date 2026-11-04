@@ -1231,7 +1231,15 @@ class Forge:
         per-guard tallies: the `status` command, and the loop state the steward reads (`self.state` is one
         lane's file; reflex1's lane 1 held 31 of the loop's 122 attempts, the steward never saw the other 91)."""
         states = self.all_states()
-        out = [f"{self.cfg['name']}: {self.lanes} lane(s) · merged {sum(s.get('merged', 0) for s in states)} · failed {sum(s.get('failed', 0) for s in states)}"]
+        merged, failed = sum(s.get("merged", 0) for s in states), sum(s.get("failed", 0) for s in states)
+        # Attempts recorded against cycles started. A cycle that dies outside fail() - loop restart, crash,
+        # quota pause, `./gate.sh` timeout - raises past record(), so it leaves no history entry while
+        # `cycle` has already counted it, and every rate below is computed over the recorded ones alone.
+        # reflex1's four lane states hold 122 attempts against 170 cycles started: 48 cycles (28%) spent
+        # lane time and appear in no tally on this page (arXiv 2611.04399: report the graded fraction, the
+        # ungraded part is where orderings move). A lane's running cycle counts as started until it records.
+        out = [f"{self.cfg['name']}: {self.lanes} lane(s) · merged {merged} · failed {failed} · "
+               f"{merged + failed} attempts recorded of {sum(s.get('cycle', 0) for s in states)} cycles started"]
         busy = []
         for p in sorted(self.tickets.glob("[!.]*.md")):
             m = re.search(r"^status:\s*in_progress\s+lane=(\d+)", p.read_text(errors="replace")[:600], re.M)
