@@ -145,6 +145,16 @@ class Forge:
 
     def prompt(self, name: str, **subs: str) -> str:
         text = (self.prompts / f"{name}.md").read_text()
+        # A placeholder the prompt file lost is silent: `str.replace` matches nothing and the session runs
+        # without the evidence the loop meant to hand it. A reviewer with no `{DIFF}` still answers, and its
+        # APPROVE is indistinguishable here from one that read the code. One judge pipeline rendered 53 of 60
+        # steps blank with matching hashes and every checker passing (arXiv 2611.02676); on this repo each PR
+        # audit counts reviewer.md's placeholders by hand instead. `PROJECT`/`GATE` below are not checked:
+        # they are added to every role and no role has to use them.
+        gone = [k for k in subs if "{" + k + "}" not in text]
+        if gone:
+            raise RuntimeError(f"prompts/{name}.md has no {', '.join('{' + k + '}' for k in gone)}: "
+                               f"the {name} session would run without it")
         for k, v in {"PROJECT": self.cfg["name"], "GATE": self.cfg.get("gate", "./gate.sh"), **subs}.items():
             text = text.replace("{" + k + "}", v)
         return text
