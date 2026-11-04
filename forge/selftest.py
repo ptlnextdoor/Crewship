@@ -1042,7 +1042,11 @@ with tempfile.TemporaryDirectory() as d:
 
     def build_on_fallback(role, prompt, cwd, timeout_min=None):
         f.last_model[role] = "e/f" if role == "builder" else "c/d"  # what agent() records after a quota fallback
-        return build_big_then_review(role, prompt, cwd, timeout_min)
+        if role == "reviewer":
+            return build_big_then_review(role, prompt, cwd, timeout_min)
+        (cwd / "second.txt").write_text("work\n")  # a file the first cycle did not write, so this one reaches the review
+        git("add -A", cwd); git("commit -qm work2", cwd)
+        return 0, ""
 
     f.agent = build_on_fallback
     f.cycle_t0 = forge.time.monotonic() - 86400  # stale start: cycle() must reset it at claim
@@ -1051,17 +1055,23 @@ with tempfile.TemporaryDirectory() as d:
     # saving in a planner-coder-reviewer pipeline is choosing the model per task), so the entry names the builder.
     check("a history entry names the builder model that ran, not the configured one",
           f.state["history"][-1].get("model") == "e/f", str(f.state["history"][-1]))
+    check("a history entry names the reviewer model that ran, so a review can be told cross-vendor from same-vendor",
+          f.state["history"][-1].get("reviewer") == "c/d", str(f.state["history"][-1]))
     check("a history entry records the cycle's wall time in seconds",
           isinstance(f.state["history"][-1].get("secs"), int) and 0 <= f.state["history"][-1]["secs"] < 3600, str(f.state["history"][-1]))
     # reflex1's 85 merges read median 60 min while its 37 failed cycles held 2,097 of 7,139 lane-minutes: 84 per merge.
     import contextlib, io
-    f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200, why="reviewer did not approve."), dict(f.state["history"][-1], model="g/h", result="merged", secs=600, why="")]
+    # reflex1's forge.log: 103 of 132 reviews ran on the builder's own vendor because reviewer_alt fell back to it.
+    f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200, why="reviewer did not approve."), dict(f.state["history"][-1], model="g/h", result="merged", secs=600, why=""),
+                           dict(f.state["history"][-1], model="c/x", reviewer="c/y", result="retry", secs=600, why="")]
     with contextlib.redirect_stdout(io.StringIO()) as out:
         f.status()
     check("status charges a model's failed attempts to its merged tickets", "g/h 1/2 (9-91%) 30 min/merge" in out.getvalue(), out.getvalue())
     # Which guard ends attempts is the number behind retiring or tightening one; the live log's heads were PR urls.
     check("status tallies failed attempts by the guard that ended them", "the guard that ended them:" in out.getvalue() and "reviewer did not 1" in out.getvalue(), out.getvalue())
-    f.state["history"] = f.state["history"][:-2]
+    check("status splits merged/attempts by whether the review was cross-vendor",
+          "cross-vendor 2/3" in out.getvalue() and "same-vendor 0/1" in out.getvalue(), out.getvalue())
+    f.state["history"] = f.state["history"][:-3]
     forge.OMP = str(bindir / "missing")
     check("a history entry names the omp release that ran the cycle",
           f.state["history"][-1].get("harness") == "omp/9.9.9", str(f.state["history"][-1]))
