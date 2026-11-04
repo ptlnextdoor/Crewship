@@ -73,12 +73,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, "")):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo)):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True, True, True], str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 4, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not.
     for p in ("crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json", "docs/omp.md"):
@@ -138,6 +138,20 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert!(1 == 1);\n    debug_assert!(true);\n}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm rewrite", repo)
     check("an assertion rewritten in place is no finding", f.test_tampering(repo, "") == [])
+    # 2e'. A line the branch adds with a bidi control, zero-width or tag character is refused with the file and the
+    # code point; emoji (variation selector, joiner) and lines the branch removes are not.
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text("// safe \u202e }\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
+    (repo / "NOTES.md").write_text("done \U000e0041\U000e0042\n\u200b\n")
+    (repo / "README.md").write_text("ok \u2705\ufe0f \U0001f468\u200d\U0001f4bb\n")
+    git("add -A", repo); git("commit -qm hidden", repo)
+    got = f.invisible_chars(repo)
+    check("bidi, tag and zero-width code points are refused per file; emoji pass", got == ["NOTES.md: U+200B", "NOTES.md: U+E0041", "src/a.rs: U+202E"], str(got))
+    git("push -q -f origin work2:main", repo)
+    (repo / "src/a.rs").write_text("// safe\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm clean", repo)
+    check("removing a hidden code point is no finding", f.invisible_chars(repo) == [])
+    git("reset -q --hard origin/main", repo)
     # 2f. gate() keeps the stage header and error lines a 5,000-character tail would cut (reflex1 PR #2: a
     # rustfmt failure whose tail was all hunks), and a short output passes through unchanged.
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'error: rustfmt diff'\nseq 1 2000 | sed 's/^/Diff in x.rs:/'\nexit 1\n")
