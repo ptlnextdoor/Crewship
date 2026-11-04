@@ -308,7 +308,7 @@ with tempfile.TemporaryDirectory() as d:
     # The second attempt merged on another lane than the first: pooled, that is #1 0/2 and #2 1/1.
     check("steward sees merged/attempts by attempt number, pooled across lanes",
           "#1 0/2" in seen_state[0] and "#2 1/1" in seen_state[0],
-          [l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")])
+          "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")))
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")
