@@ -2,6 +2,62 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #134 · 2026-11-04T21:35:59Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #134 forge: tally merged/attempts by the ticket's attempt number
+What it changes: `status_text()` gets one more line, merged/attempts grouped by the ticket's Nth history entry. Entries are pooled over every lane's state.json and ordered by `at`. That line also reaches the steward's `{STATE}`. selftest adds a ticket that fails on lane 2 and merges on lane 1, and checks for `#1 0/2`, `#2 1/1`.
+Findings:
+- low forge/selftest.py:309-311 The new check passes a list as `detail`, but `check()` (selftest.py:23-24) does `': ' + detail`. When this check fails, selftest stops with `TypeError: can only concatenate str (not "list") to str` at line 309 and none of the checks after it run. Reproduced by removing the `at` sort in a temp copy: a traceback appears and the ~77 later checks are skipped. With the fix below it prints a FAIL line and the other 127 still run. The run still exits non-zero, so a failure still blocks the merge, but the remaining failures go unreported. Every other check passes a str (`str(...)`, `seen_state[0][-600:]`).
+- low forge/forge.py:1275 The label "(builder_hard, xhigh, from #3)" is wrong for the #1 and #2 buckets. forge.py:881 starts a `difficulty: hard` ticket on builder_hard at attempt 1, and the 1275 label never mentions it. In the live reflex1 state (read-only), tickets whose file now says `difficulty: hard` account for 23 of #1's 92 attempts (20/23 merged against 50/69 for the rest) and 3 of #2's 20. "xhigh" comes from reflex1.toml:43, not from code. This line reaches the steward's `{STATE}` (forge.py:1081, steward.md:4), and the steward copies numbers into PROGRESS.md. The PR body already reads it as "#2 (high) against #3 (xhigh)" and concludes the escalation has no measurable effect.
+- low forge/forge.py:1264-1267 Two problems in the comment:
+  - "history written before `effort` existed" refers to a key this base does not have. There is no `effort` anywhere in forge.py; only sibling PR #132 adds it.
+  - Surge's +11.3 points is xhigh compared with **medium**. The article says "improved by 11.3 points over medium effort", and its harness runs were at medium. forge's escalation goes from high to xhigh (reflex1.toml:37 vs 43), so "the loop's biggest single lever" is not what the cited source measured.
+- info forge/forge.py:1270-1271 The attempt number comes from the history that is kept, not from `attempts()` (the `## forge ` notes that cycle() escalates on). Three cases make it too low:
+  - `record()` keeps 200 entries per lane (forge.py:1077; lanes hold 31/30/34/27 now).
+  - Attempts made before `history` existed are missing.
+  - A renamed ticket (README:141 steers by renaming) starts over under its new stem.
+  Live example: 0002-tokenizer-and-sequence has 2 notes (retry 03:19:08Z, done 03:25:55Z) but 1 history entry, so its attempt-2 merge counts as #1. That is 1 of 122 today and grows once a lane passes 200 entries. It is a known limit with no `shortcut:` comment.
+- none forge/forge.py:1268-1276 Safety trace: nothing gets weaker.
+  - The change only reports. It touches no claim, recover, discard_strays, gate, reviewer, protected-path, quota, timeout, PR or GPU code.
+  - The keys it reads (`ticket`, `at`, `result`) are already read from the same entries at forge.py:1242-1243 and 1247. `record()` writes all three on both of its call sites (1004, 1063), so steward() gains no new exception.
+  - The output is attempt numbers and Wilson intervals only: no ticket text, nothing reaches a shell.
+  - The line's length is bounded by the number of distinct attempt numbers (max_attempts 3 plus owner reopens), and history is capped at 200 per lane.
+- none forge/selftest.py:293-297 Deleted lines:
+  - The one deleted selftest line (old 292, the lane-2 `0099-other` fixture entry) comes back verbatim with one more entry. The check at 307 still asserts `0099-other: failed` and `reviewer did not 1` and passes; the new entry's `why` "gate failed" is tallied under its own key.
+  - The docstring rewrite (forge.py:1230-1232) only adds "per-attempt-number".
+  - No prompt line, README table row or selftest check is removed.
+- none (verification) Checks run:
+  - selftest on a temp copy (repo working tree not used): 127 ok on base 7a135c6d, 128 ok with the PR, no FAIL.
+  - The live tally reproduces the body's `#1 70/92, #2 10/20, #3 5/10` (122 attempts).
+  - Removing the `at` sort makes the new check fail, so pooling across lanes is actually tested.
+- nit Slop:
+  - forge.py:1270 sorts the same pooled history that 1242 already sorts. One `hist` variable would serve both.
+  - README "Watch and steer" (143-147) describes each status line but not this one.
+  - steward.md:3's list of what `{STATE}` holds does not mention it.
+  None of these is required.
+- sibling #132 ("record the builder's effort per attempt, split the model tally by it"): same goal (what the high-to-xhigh escalation returns) from the other side.
+  - #132 records `effort` from now on; #134 works backwards over history already recorded. They complement each other and do not contradict.
+  - #134's comment assumes #132's `effort` key. That text is #134's to change, and Change needed covers it.
+  - #132's fixture entries carry `model`; #134's carry none and fall under "pre", so neither PR's checks see the other's data.
+  - Textual conflict: #132 edits forge.py:1252/1260, and #133 ("record which vendor reviewed") adds its status line right after forge.py:1261, where #134 also adds. Whichever lands later needs a rebase. There is no semantic conflict: #133 only counts entries with both `model` and `reviewer`.
+- sibling The other 22 open PRs on `forge` that touch forge.py or selftest.py have no hunk in `status_text()`, `record()` or selftest section 4h. No overlap.
+Change needed (only for MERGE WITH CHANGE):
+In forge/forge.py, replace lines 1262-1267 (the comment above `by_try`) with:
+```
+        # merged/attempts by the ticket's own attempt number, pooled across lanes (a retried ticket is claimed
+        # by whichever lane is free): `cycle()` runs builder_hard from attempt 3, and from attempt 1 on a
+        # `difficulty: hard` ticket, so no bucket is a single effort level.
+        # shortcut: counted over the history kept (200 entries per lane, none before `history` existed, a renamed
+        # ticket starts over), so a later attempt can read as #1; record attempts() on the entry if that matters.
+```
+In forge/forge.py:1275, change the label `"merged/attempts by the ticket's attempt number (builder_hard, xhigh, from #3): "` to `"merged/attempts by the ticket's attempt number (builder_hard from #3, and from #1 on difficulty: hard tickets): "`.
+In forge/selftest.py:311, change `[l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")])` to `"\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")))`.
+Checked in a temp copy with these edits: selftest 128 ok. With the `at` sort removed it prints a FAIL line and the other 127 checks still run.
+
+
 ## PR #133 · 2026-11-04T19:32:00Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (the fixer changed nothing)
 
 Verdict: MERGE WITH CHANGE
