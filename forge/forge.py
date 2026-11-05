@@ -302,7 +302,14 @@ class Forge:
                 except ProcessLookupError:
                     pass
                 so, se = p.communicate()
-                so = f"TIMEOUT after {timeout}s (process group killed)\n{(so or '')[-4000:]}"
+                # Hung or still working when the clock ran out? omp appends each model turn, tool start and
+                # tool result to the session JSONL as it happens, so its newest mtime is the last sign of life.
+                # 4 of the first 22 reflex1 reviews died here with no verdict and no log said which; the
+                # number decides whether a silence cap (Droid 1.0 retries after 4 min of stream silence) fits.
+                writes = [f.stat().st_mtime for f in out.with_suffix("").rglob("*") if f.is_file()]
+                quiet = f"last session write {(time.time() - max(writes)) / 60:.0f} min before the kill" if writes else "no session file written"
+                self.log(f"agent {role} TIMEOUT after {timeout_min} min; {quiet}")
+                so = f"TIMEOUT after {timeout}s (process group killed; {quiet})\n{(so or '')[-4000:]}"
             text = (so or "") + ("\n[stderr]\n" + se if se else "")
             rc = 124 if so.startswith("TIMEOUT") else p.returncode
         except OSError as e:
