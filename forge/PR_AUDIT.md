@@ -2,6 +2,71 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #138 · 2026-11-05T05:18:26Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #138 forge: stamp the last session write on a session timeout
+What it changes: in `_agent_once`'s `except subprocess.TimeoutExpired:` branch (forge.py:297-312, PR head 4b337531, one commit on f6645640), after the SIGTERM, the 5 s sleep, the SIGKILL and `communicate()`, it takes the newest mtime under the session dir (`out.with_suffix("")`). It writes `last session write N min before the kill` (or `no session file written`) to forge.log and into the TIMEOUT line of the session log. Reporting only.
+Findings:
+- medium forge/forge.py:309-310 The number is taken after omp's own shutdown write, so nearly every timeout will read "0 min". That defeats the PR's stated purpose.
+  - The traced path, omp 18.12.6 `dist/cli.js`: on the main thread, omp installs `process.on("SIGTERM", async()=>{await S7("sigterm"),xB(143)})`. `S7` runs every registered postmortem callback.
+  - The `AgentSession` constructor registers one of those callbacks: `sa("agent-session:<id>", S=>this.#Zr(S))`.
+  - `#Zr` returns early only when the branch has no pending tool call and no assistant message. Otherwise it runs `appendCustomEntry("session_exit", {reason, kind:"signal", recordedAt})` and then `flushSync()`. `types/session/exit-diagnostics.d.ts` confirms this: "Session shutdown marker written during normal and fatal process teardown".
+  - So forge's `os.killpg(p.pid, 15)` at :298 makes omp write the session file at the moment of the kill. Forge then sleeps 5 s (:299) and stats (:309). `time.time() - max(writes)` comes out at about 5 s, which prints as `0 min`.
+  - That happens for every session that got at least one model reply, whether it was hung on a model stream or busy in a 25-minute `./gate.sh`. Only a session stalled on its very first model call reads the true value.
+  - The comment at :305-306 ("its newest mtime is the last sign of life") is wrong as written.
+  - The PR body's check could not catch this. Its fake `omp` has no SIGTERM handler, and it wrote 6 s before the kill, so the fake and real omp both print "0 min".
+  - I traced this in the source only. No live run: no session dir exists yet under `~/.local/state/forge/reflex1/**/sessions/`, because the lanes have not run since #118.
+- low forge/forge.py:309, :315 A stat error ends up in the wrong handler.
+  - If a file under the session dir is removed or renamed between `rglob` and `f.stat()`, the `FileNotFoundError` is an `OSError`. It reaches the outer `except OSError as e:` at :315.
+  - The result is `rc 127 "failed to start agent: ..."` in place of rc 124. The partial output is lost, and the reviewer's no-verdict rerun (`if rc == 124 and not verdict`, :997) is skipped, which charges the ticket an attempt.
+  - In the PR's position, omp's process group is already dead, so this is unlikely. Once the measurement moves before the SIGTERM (Change below), omp is live, and the same exception would skip both `killpg` calls and leave omp running past its timeout. The move therefore needs the guard.
+  - I did not trace omp creating or removing files in that dir.
+- none forge/forge.py:297-315 The security pass found nothing.
+  - The gate, the reviewer, protected paths, prompts, selftest and the README are untouched.
+  - `rc = 124 if so.startswith("TIMEOUT")` (:314) still holds: the line still begins `TIMEOUT after {timeout}s (process group killed`.
+  - `agent()`'s quota regex (:246) reads only the `[stderr]` part, and the new text is in the stdout part.
+  - `quiet` is built from a float and constant strings. The session path comes from `self.home`, the int cycle and the role name, never from ticket text, and no shell is involved.
+  - Each lane has its own home (`lane2/sessions`, ...), so no two lanes walk or log the same dir.
+  - Growth is bounded: one log line per timeout, and the walk covers one session's own dir. Nothing spends quota or GPU.
+- info deletions: the only deleted line is the old `so = f"TIMEOUT after {timeout}s (process group killed)\n..."` (:305 base). It comes back in extended form at :312. No line is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. No grep hit in selftest asserts the agent TIMEOUT text.
+- nit forge/forge.py:307-308 Comment slop.
+  - "4 of the first 22 reflex1 reviews died here with no verdict" repeats the comment at :998-999 (base :991-992).
+  - The Droid 1.0 silence cap explains a possible later change, not why this code exists.
+- info Already recorded elsewhere: the session JSONL that #118 keeps holds `tool_execution_start` entries (written before each tool runs) and, at a SIGTERM, `session_exit.pendingToolCalls` with `startedAt`.
+  - Those records separate "inside a long tool call" from "waiting on a model stream". The PR body names exactly that ambiguity, and the mtime number cannot resolve it.
+  - This does not block the merge. It is the place to look when the number is used.
+- info Siblings: of the open PRs on `forge` that touch forge/forge.py (#136 #133 #132 #117 #111 #99 #86 #84 #83 #79 #48 #47 #44 #42 #40 #39 #31 #28 #25 #20 #19 #16 #8 #7 #6), none edits the `TimeoutExpired` branch of `_agent_once`.
+  - #117 edits the argv in the same function: a separate hunk, a textual conflict at most.
+  - #47's `PROVIDER_ERROR` regex runs over `text[-3000:]`. It matches none of the new strings.
+  - #42's `verdict()` keys on `rc == 124`, which this PR leaves unchanged.
+  - #40 and #79 write the same `TIMEOUT after {timeout}s (process group killed)` prefix from `sh()`. The prefixes agree.
+  - No contradiction or duplicate.
+- info Checks: the PR head's forge.py parses (`git show ... | ast.parse`). I ran the proposed `quiet` block in a throwaway on a missing dir ("no session file written") and on a populated dir (a minute count). I did not run selftest.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `_agent_once`, replace the PR's `except subprocess.TimeoutExpired:` branch (PR head lines 297-312) with:
+```
+            except subprocess.TimeoutExpired:
+                # Measured before the SIGTERM: omp's signal handler appends a session_exit entry to the session
+                # file, so read after the kill every session that got one model reply shows 0 min.
+                try:
+                    writes = [f.stat().st_mtime for f in out.with_suffix("").rglob("*") if f.is_file()]
+                    quiet = f"last session write {(time.time() - max(writes)) / 60:.0f} min before the kill" if writes else "no session file written"
+                except OSError:  # omp is still running: a stat error here must not skip the kill below
+                    quiet = "session dir unreadable"
+                os.killpg(p.pid, 15)
+                time.sleep(5)
+                try:
+                    os.killpg(p.pid, 9)
+                except ProcessLookupError:
+                    pass
+                so, se = p.communicate()
+                self.log(f"agent {role} TIMEOUT after {timeout_min} min; {quiet}")
+                so = f"TIMEOUT after {timeout}s (process group killed; {quiet})\n{(so or '')[-4000:]}"
+```
+
+
 ## PR #137 · 2026-11-05T02:16:06Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
