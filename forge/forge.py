@@ -427,9 +427,14 @@ class Forge:
     # directories holding AGENTS.md, RULES.md (an always-apply sticky rule), mcp.json, hooks and skills.
     # The reviewer's own session runs in the worktree, so a RULES.md the diff adds is in its context while it
     # judges that diff; no reflex1 PR (0 of 123) has touched one, and no ticket needs to.
-    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills)/"
+    # Same class for the gate: `.cargo/config(.toml)` at any depth and `rust-toolchain(.toml)` are read by every
+    # cargo call before it compiles anything (cargo book, config.html): `target.*.runner` wraps the test
+    # binaries `cargo test` runs, `build.rustc-wrapper` replaces rustc, `build.rustflags` can `--cap-lints`
+    # past clippy's `-D warnings`, `[env]` and `[patch]` reach every build, and the toolchain file swaps the
+    # compiler. 0 of reflex1's commits touch either; a ticket that needs one is an owner change, like gate.sh.
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
-                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?)$")
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$")
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):
