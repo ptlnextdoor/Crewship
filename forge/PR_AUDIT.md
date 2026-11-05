@@ -2,6 +2,54 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #141 · 2026-11-05T11:30:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #141 builder: never reach origin; forge pushes, opens the PR and lands
+What it changes: adds one rule to `forge/prompts/builder.md` (:19 on the PR head): never run `git push`, `git fetch`, `git pull` or any other command that reaches `origin`, because forge pushes, opens the PR and lands. It also adds a matching README safeguard row (:106) and a selftest section 6 substring check (:548). The diff is +3/-0 and forge.py is unchanged.
+Findings:
+- low forge/prompts/builder.md:19 The ban covers `git fetch` and `git pull`, but nothing in the PR justifies that. Its threat is a write: the PR body's "Why" and the README row talk only about pushing `origin main`. Fetch and pull write nothing to `origin`.
+  - Traced: `claim()` (forge.py:701-709) runs `sync_main()` and then `git push origin main`, which leaves `refs/remotes/origin/main` at the branch point. Nothing in the lane moves it during the builder session (:920). So the only way a builder can pick up other lanes' landings is to fetch.
+  - forge.py:925-929 records builders doing exactly that (reflex1 PRs #30/#55/#93/#100/#101/#103/#105). Every check after the session already handles it: each one fetches first (:450) and diffs against `origin/main` (`touched_protected` :930/:958/:839, `lock_added`, `test_tampering`, `invisible_chars`, and the reviewer diff :979).
+  - With the ban, all of that integration moves to `land()`: rebase, then merge, then the 30-minute conflict session (:744). That costs quota and does not strengthen any guard.
+  - The parenthetical "`origin/main` is already in this clone" is only true as of the claim, so it reads as if the ref were current.
+  - Nothing here weakens the gate, the reviewer or the protected paths.
+- low forge/prompts/builder.md:18-20 Placement. The new bullet sits between ":18 Before your last commit run the formatter ... `{GATE}`" and ":20 Before that last commit, run every other command under `## Done when`". The phrase "that last commit" now refers back across an unrelated bullet. The Done-when rule is the one a reviewer FAIL turns into a lost attempt.
+- low forge/prompts/builder.md:19, forge/README.md:106 Coverage:
+  - The rule reaches only sessions that render builder.md: the first build (:920) and the repair (:954, through `bprompt()`).
+  - The landing conflict session (forge.py:744-747) is also a builder-role yolo session, with the same login, in the same worktree, and it is not told.
+  - Reviewer sessions (:996) are not told either.
+  - `gh` writes such as `gh pr merge` and `gh api` are not named, and "reaches `origin`" may not be read as covering them.
+  - None of this is a regression. The README row says "The builder is told", which is accurate for builder.md only.
+- info Deletions: none. Nothing is removed from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table.
+- info Claims checked:
+  - reflex1 `main` is unprotected: `gh api repos/ptlnextdoor/reflex1/branches/main` returns `protected:false`, and `rules/branches/main` returns 0 rules. So "nothing mechanical refuses it" is true today.
+  - Forge itself pushes main with the same credentials: `land()` calls `push()` (:861 → :666), and `claim()` pushes at :709.
+  - Before this PR, no prompt mentioned `git push` (grep of `forge/prompts`).
+  - reflex1 `gate.sh`, `AGENTS.md` and `STEERING.md` contain no `git push`/`fetch`/`pull`/`origin`, so the rule does not collide with "run `{GATE}`".
+  - `.omp/` is in `HARNESS_CONFIG` (:443).
+  - omp 18.12.6 `examples/hooks/README.md:12` auto-discovers hooks from `~/.omp/agent/hooks/pre/`.
+  - ContextCov's 67.0%/88.3% figures were not checked.
+- info Verification:
+  - I extracted the PR head with `git archive` into /tmp (no checkout). `py_compile` passes, and `python3 forge/selftest.py` passes all checks, including the new one.
+  - The new check bites: it is False with the rule line removed.
+  - The line adds no `{...}` placeholder, so the `prompt()` guard is unaffected, and it does not open with If/When.
+  - Pass 1 areas this PR does not touch: claim race, `recover()`, `discard_strays()`, timeouts/killpg, quota, GPU spend, PR create/merge. No ticket text reaches a command.
+- info Sibling #85 contradicts this PR:
+  - #85's builder.md says "Before your last commit, bring main in: `git fetch -q origin && git merge --no-edit origin/main`". #141 says "Never run ... `git fetch`, `git pull`".
+  - #141 is the side that should change: its own threat is a push, and forge.py:925-929 already supports builder-side merges of main.
+  - #85 separately needs a rebase: its context line "When done, append ..." no longer exists in builder.md.
+- info Sibling #140 inserts its selftest check after the same line (selftest.py:547). That is a textual conflict only: keep both lines.
+- info Other siblings: none of the other 27 open PRs on `forge` that share a file adds a builder push/fetch rule. In the added lines, `git push|fetch|pull` appears only in #48 (forge.py code), #117 (systemd unit) and #85.
+- nit Pass 2: no slop. It is one bullet, one row and one check, and no text repeats an existing rule.
+Change needed (only for MERGE WITH CHANGE): In forge/prompts/builder.md, delete the added line 19 and insert this line directly after the `- Credentials:` bullet (line 16), so line 18 → "Before that last commit" stays adjacent:
+`- Never run `git push`, or any other command that reaches `origin` to change it (`gh pr create`, `gh pr merge`, a `gh api` write). Forge pushes this branch, opens the PR and lands it after review; this shell's `gh` login can push `origin main` directly and nothing mechanical refuses it from here.`
+In forge/README.md:106, make the first cell match: `The builder is told never to run `git push` or anything else that reaches `origin` to change it (`gh pr create`/`merge`, a `gh api` write): forge pushes the branch, opens the PR and lands it`.
+selftest.py:548 stays as it is: all three substrings it checks are kept. Applied to a scratch copy, selftest passes all checks.
+
+
 ## PR #140 · 2026-11-05T09:25:43Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
