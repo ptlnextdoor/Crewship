@@ -2,6 +2,51 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #137 · 2026-11-05T02:16:06Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #137 forge: protect .cargo/ and rust-toolchain like harness config
+What it changes: adds `\.cargo` to `HARNESS_CONFIG`'s directory alternation and `rust-toolchain(\.toml)?` to its file alternation (forge/forge.py:435-437). `touched_protected()` therefore refuses a branch that adds or edits cargo config or a toolchain file, at its three call sites: pre-gate (:922), repair (:950) and landing (:831). The selftest 2c case and README row 99 are extended to match.
+Findings:
+- medium forge/forge.py:435 A `.cargo` symlink gets past the new protection. The directory alternation ends in `)/`, so only paths under `.cargo/` match, and `git diff --name-only` lists a symlink by its own name (`.cargo`, mode 120000).
+  - Repro in a scratch repo: a crate with one failing test, then a commit adding `tools/cfg/config.toml` (`[target.x86_64-unknown-linux-gnu] runner = "true"`) and the symlink `.cargo -> tools/cfg`.
+  - Diff names: `['.cargo', 'Cargo.lock', 'tools/cfg/config.toml']`. The PR's regex flags none of them, and `cargo test` goes from rc 101 to rc 0 because cargo follows the symlink.
+  - Changing `)/` to `)(/|$)` flags `.cargo`. The same hole already exists for `.omp/`, `.claude/` and the other directories in that alternation, so the one edit closes it for all of them.
+  - The edited regex matches none of reflex1's 933 tracked paths on origin/main, none of Crewship's 615 on forge, and neither `docs/omp.md` nor `docs/cargo.md`.
+- ok forge/selftest.py:83,84,88,89 (deleted) No layer is lost. Each deleted line is rewritten as a superset of itself:
+  - The comment keeps its first sentence word for word and adds one.
+  - The new path tuple (:85-86) still holds all 7 old paths.
+  - The new check (:90-92) still requires the 6 old harness paths in `bad` and `docs/omp.md` out of it, and adds 3 cargo paths plus `docs/cargo.md`.
+  - What the old lines prevented (an edit to `HARNESS_CONFIG` that drops a rules file or `.omp/`) is still caught by the rewritten check itself.
+  - I ran the PR head's forge.py and selftest.py in memory (no checkout): all checks passed, including this one.
+- ok forge/README.md:99 (deleted and re-added) The old row is a strict subset of the new one: a character diff shows a single insertion (the cargo clause in the rule column) and no text removed. Nothing the row documented is retired.
+- ok forge/forge.py:447,831,922,950 Traced end to end. The guard reads only file names and is a pure function of the branch's diff:
+  - A hit goes through the existing `fail()` path: PR closed, ticket goes to retry or blocked, the `finally` block removes the worktree and the remote branch.
+  - Nothing is added to lane state, the claim race, `recover()`, `discard_strays()`, prompts, quota or GPU.
+  - The regex has no ticket-text input, so there is no injection path.
+  - False positives: no reflex1 commit on any branch touches `.cargo` or `rust-toolchain*`, and nothing in the reflex1 tree mentions `rustflags`, `target-cpu`, `.cargo/config`, `rust-toolchain` or `rustc-wrapper`.
+  - gate.sh calls `cargo clippy ... -D warnings` and `cargo test --workspace` with no `RUSTFLAGS` set, so `build.rustflags` and `target.*.runner` would apply. The threat the PR names is real.
+- low forge/prompts/builder.md:11 The builder is told only about `gate.sh`, `tickets/` and `.forge/`, and the planner about none of them.
+  - A ticket that really needs cargo config (for example `-C target-cpu=native` for candle on CPU) will find out by refusal: each attempt fails until `max_attempts` (3) blocks it.
+  - The refusal note names the path for the retry, and this follows the existing convention for harness-config protection. No change asked.
+- info PR body: the `runner = "true"` example overstates the gap. gate() at forge.py:420-422 already FAILs a green run in which every `test result:` line reads `0 passed`. My repro printed exactly one such line, a doc-test, which gate() would flag.
+  - A runner script that runs the binary and then exits 0 passes regardless, so the threat holds.
+  - The body's other claims check out: three call sites, 0 reflex1 commits, selftest passes.
+- info Out-of-tree route (already there, not this diff): no git-diff check can see it.
+  - Cargo also reads `.cargo/config.toml` in every ancestor of the worktree: `~/.local/state/forge/reflex1/wt/.cargo/`, and so on up to `~/.cargo/config.toml`.
+  - rustup applies `rustup override set` from `~/.rustup/settings.toml`.
+  - A builder running with yolo approvals can write those, and they would apply to land()'s re-gate in the same worktree and to later cycles.
+  - README:99's "the files every gate's cargo calls read ... are protected" covers repo paths only.
+- low forge/README.md:99 Slop: the cargo mechanisms (`runner`, `rustc-wrapper`, `rustflags`) sit in the rule column. The "prevents" column still describes only session-context files ("0 of reflex1's 123 PRs touch one"); a separate row would read cleaner. Not required.
+- ok Sibling PRs: I read the diffs of all 26 other open PRs on `forge` that touch README.md, forge.py or selftest.py.
+  - None edits `HARNESS_CONFIG`, selftest 2c or README row 99.
+  - #6, #8 and #28 touch `touched_protected()` against an older base (the one-argument signature, no `HARNESS_CONFIG`). None of them contradicts or duplicates this PR.
+- ok PR text: the only comment is Copilot's quota notice. The body contains no instructions to the auditor, and its claims are checked above.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py:435, in `HARNESS_CONFIG`'s first alternation, replace `|\.github/skills|\.cargo)/"` with `|\.github/skills|\.cargo)(/|$)"`. A symlink or file named `.cargo` (or any other directory in the list) is then caught, not only paths beneath it. In forge/selftest.py 2c, add `"tools/.cargo"` to the `for p in (...)` tuple (line 86, before `"docs/omp.md"`) and to the expected set (line 92, after `"rust-toolchain.toml"`); git lists a symlinked directory by its own name, so a plain file there exercises the same match. Checked in memory: the PR's selftest with both edits passes all checks.
+
+
 ## PR #136 · 2026-11-04T23:38:39Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
