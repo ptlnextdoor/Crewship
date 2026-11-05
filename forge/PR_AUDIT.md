@@ -2,6 +2,47 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #139 · 2026-11-05T06:22:43Z · REJECT · risk low · gate fail · left open: gate failed
+
+Verdict: REJECT
+Risk: low
+
+## PR #139 forge: union-merge the notes files on a rebase conflict before calling the builder
+What it changes: when `rebase_onto_main()`'s rebase conflicts, forge writes `<p> merge=union` into the lane clone's `info/attributes` for each `union_merge` path (default `PROGRESS.md`, `LEARNINGS.md`; reflex1.toml adds `tools/README.md`) before its `git merge origin/main`, so notes-only conflicts skip the builder session. Selftest 4d's conflict fixture moves from PROGRESS.md to src.rs. New test 4n. New README row.
+Findings:
+- medium forge/forge.py:740-743, forge/projects/reflex1.toml:12. Union keeps both sides of every conflicting hunk, so a line one side deleted or rewrote comes back. PR #71 (merged) measured this exact mechanism and left it out. Its body: "`merge=union` in `.git/info/attributes` ... a union hunk resurrects the deleted side (seen in selftest 4m)". Its audit (PR_AUDIT.md:2819) cites a builder removing a stale "0083: not landed". This PR's body names only "a duplicate line the steward's next pass sees" and does not mention #71's reason.
+  - Replay on reflex1: `git merge-file --union` over its 33 builder-resolved merges (`git log --all --merges` minus landings, `diff-tree -c`). 52 of 84 notes-file resolutions match the builder's. In 11 merges, union keeps lines the builder had removed:
+    - 70e37802d keeps `- 0083: not landed` beside 0083's landed entry.
+    - a6359e806 keeps `- 0055: not landed`, which the builder's own note says it "dropped as landed". Tickets tell the builder to replace that anchor line, per PR_AUDIT.md:624.
+    - 57b721c48 keeps both the old and new `render_laps.py`/`render_bench.py` usage lines. The old ones lack `--jobs` and `--from-tick`.
+    - ecc40bd05 keeps two versions of the "Render throughput" lesson.
+  - Of the 11, 7 are `tools/README.md` (reflex1.toml only) and 4 are in the default pair.
+  - Probe on the PR head: a branch deletes a stale LEARNINGS entry (steward.md:10 and the builder's LEARNINGS rule ask for this), and main appends right after it. `rebase_onto_main()` returns True with 0 builder sessions, the entry is back, and `git diff origin/main...HEAD -- LEARNINGS.md` is empty. On base forge.py the same case goes to the builder.
+  - Impact: builders `rg` these files for their ticket id, and reviewer step 5 quotes LEARNINGS entries against diffs. A resurrected stale lesson steers builders wrong and can cost a REJECT.
+  - The gate and protected paths are not affected: land() still runs `touched_protected(wt, "origin/main")` (:847) and `self.gate(wt)` (:860) after `rebase_onto_main()` returns.
+- medium forge/forge.py:739-743, forge/README.md:62. The attribute is not scoped to this merge. `--git-path info/attributes` resolves to the clone's common dir; the probe printed `<repo>/.git/info/attributes`. The file is never removed, so after the first notes conflict every merge and rebase in that lane clone unions these files:
+  - `sync_main()`, which runs under `claim()`, `push()`, `plan()` and `steward()`.
+  - land()'s local `git merge --no-ff` (:868).
+  - The builder's and repair session's own merges.
+  - For lane 1, the clone is the owner's configured checkout (`~/Dev/reflex1`, forge.py:85-86).
+  - Probe: lane main holds an unpushed steward commit that deletes a LEARNINGS entry, and another lane pushes an entry right after it. On the PR head, `sync_main()` drops the steward commit as empty and the entry is back. No `sync-conflict/*` branch, no log line. Base forge.py on the same script logs "local main conflicted with origin; reset to origin/main, local commits kept on sync-conflict/l1-…". That is README row 44's evidence trail, now lost for these files.
+  - steward.md:8 also trims PROGRESS.md to under 300 lines, and a conflicting trim is undone the same way.
+  - The new README row says the driver applies "when the rebase conflicts", and the code comment says "its later rebases". Both understate the scope.
+- low forge/forge.py:740-743. The file is rewritten only on the conflict path. Setting `union_merge = []` or removing the key changes nothing on a lane until its next rebase conflict.
+- info PR body numbers. The replay finds 33 merges with resolved files: PROGRESS 33, LEARNINGS 27, tools/README 24, other 7. That is close to the PR's 32/31/25/22/7. With the default pair, only 7 of 33 merges are notes-only, so the default saves 7 sessions. Most of the saving comes from adding `tools/README.md`, which is in-place reference rows rather than appends and accounts for 7 of the 11 resurrecting merges.
+- low forge/selftest.py:237-259 (deleted lines). 4d's conflict moves from PROGRESS.md to src.rs.
+  - What the old lines prevented: a notes-file conflict during the landing gate not landing through the builder's resolution plus the "reviewer never saw" comment.
+  - The builder path and comment are still asserted, on a code file. Notes conflicts are now covered by 4n alone. 4n exercises `rebase_onto_main()` only, and no test checks that a deleted notes line stays deleted.
+  - The PR body names the move, so this is not a masked deletion. Nothing is deleted from prompts or the safeguard table.
+- none (traced):
+  - Patterns come from the owner's TOML and are written by Python `write_text`, never through a shell. No ticket text reaches them.
+  - One file per lane clone (forge.py:83-92), so no two lanes write it.
+  - No new quota, GPU or session spend. No new exception path that leaves a ticket in_progress. `selftest.py` on the PR head passes, including 4n.
+- sibling #19 ("notes files merge with git's union driver instead of a builder session") duplicates this PR: same `info/attributes` write (in `__init__`, opt-in) and the same reflex1.toml `union_merge` line. If both land and the toml conflict is resolved by keeping both lines, `tomllib` raises "Cannot overwrite a value" and no lane starts. #19 is the side to change: close it as superseded or stale. It has the same resurrection problem.
+- sibling #136 edits the 4d `f.land(...)` call next to this PR's 4d lines and keeps the PROGRESS.md fixture. With this PR landed, that conflict would be union-merged with no builder session and #136's 4d check would fail. #136 is the side to adapt on rebase. Not a contradiction in intent.
+- slop: none beyond the scope comment above. The comment and README row restate the same counts, which is consistent with the house style.
+
+
 ## PR #138 · 2026-11-05T05:18:26Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
