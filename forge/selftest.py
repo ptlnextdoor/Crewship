@@ -545,6 +545,7 @@ check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in 
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
 check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
+check("a test that removes files through a path the test cannot set is not run against the unfixed code, by builder or reviewer", "do not run that test against the unfixed code" in b and "the same path exception" in r)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
 # A rule phrased as a condition on the agent's own action ("If the milestone is done, ...") is followed less
