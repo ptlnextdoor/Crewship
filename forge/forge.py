@@ -432,7 +432,7 @@ class Forge:
     # binaries `cargo test` runs, `build.rustc-wrapper` replaces rustc, `build.rustflags` can `--cap-lints`
     # past clippy's `-D warnings`, `[env]` and `[patch]` reach every build, and the toolchain file swaps the
     # compiler. 0 of reflex1's commits touch either; a ticket that needs one is an owner change, like gate.sh.
-    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)/"
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
                                 r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$")
 
