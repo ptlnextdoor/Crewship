@@ -444,6 +444,15 @@ class Forge:
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
                                 r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$")
 
+    def cargo_home_config(self) -> dict[str, str]:
+        """sha256 of `$CARGO_HOME/config.toml` and `config` ("" when absent). Cargo reads them before every build, the
+        same keys HARNESS_CONFIG refuses in the diff (`target.*.runner`, `build.rustc-wrapper`, `build.rustflags`),
+        but they sit outside the worktree, so nothing in the diff shows a builder session writing one and the gate
+        compiles under it. SWE-Bench Pro V2's re-grade on a pristine image caught an agent editing the Go module
+        cache the same way. cycle() snapshots this before the builder; touched_protected() compares."""
+        home = Path(self.env.get("CARGO_HOME") or Path.home() / ".cargo")
+        return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else "" for p in (home / "config.toml", home / "config")}
+
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):
             # A stale remote-tracking ref puts main's own commits on this branch's side of the diff.
@@ -452,7 +461,9 @@ class Forge:
         # and nothing matches, so the guard passed with nothing checked. A check that cannot fail is the one an
         # agent loop finds (Copilot Cowork, 2026-11-02: a changed-file list that came back empty passed for weeks).
         files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd, check=True).stdout.split()
-        return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
+        seen = getattr(self, "cargo_seen", None) or {}
+        return ([f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
+                + [p for p, h in self.cargo_home_config().items() if p in seen and h != seen[p]])
 
     def lock_pkgs(self, cwd: Path, rev: str) -> dict[tuple[str, str], list[str]]:
         """Third-party `Cargo.lock` entries at `rev`: (name, version) -> the package names it depends on."""
@@ -900,6 +911,7 @@ class Forge:
         self.pr = ""
         self.last_model.clear()  # record() reads the builder that ran this cycle, not a previous one's fallback
         self.cycle_t0 = time.monotonic()
+        self.cargo_seen = self.cargo_home_config()  # the gate's cargo reads these; the builder can write them outside the diff
         try:
             builder = "builder_hard" if re.search(r"^difficulty:\s*hard", ticket.read_text(), re.M) else "builder"
             if self.attempts(ticket) >= 2:

@@ -90,6 +90,15 @@ with tempfile.TemporaryDirectory() as d:
     check("harness config files are protected (nested rules, .omp/, CLAUDE.md, copilot instructions, .cargo/, rust-toolchain)",
           {"crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json",
            ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo"} <= set(bad) and not {"docs/omp.md", "docs/cargo.md"} & set(bad), str(bad))
+    # 2d. `$CARGO_HOME/config.toml` is outside the worktree: a builder session that writes it is caught by the
+    # snapshot cycle() takes before the session, with the file's path in the same finding list; no snapshot, no finding.
+    ch = Path(d) / "cargo-home"; ch.mkdir(); f.env["CARGO_HOME"] = str(ch)
+    f.cargo_seen = f.cargo_home_config()
+    (ch / "config.toml").write_text('[build]\nrustflags = ["--cap-lints", "allow"]\n')
+    check("a CARGO_HOME config written after the snapshot is a protected-path finding", str(ch / "config.toml") in f.touched_protected(repo), str(f.touched_protected(repo)))
+    (ch / "config.toml").unlink()
+    check("CARGO_HOME back as snapshotted is no finding", str(ch / "config.toml") not in f.touched_protected(repo))
+    del f.cargo_seen; del f.env["CARGO_HOME"]
     # 2b. A third-party crate new to Cargo.lock is refused before the gate unless the ticket names it or a named
     # crate pulls it in; a version bump of a named crate's dependency passes with it.
     o = Path(d) / "origin"; o.mkdir(); git("init -q --bare", o)
