@@ -2,6 +2,67 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #142 · 2026-11-05T22:27:00Z · REJECT · risk low · gate pass · closed: rejected
+
+Verdict: REJECT
+Risk: low
+
+## PR #142 forge: refuse a builder that writes $CARGO_HOME/config.toml outside the diff
+What it changes: adds `cargo_home_config()`, which takes the sha256 of `$CARGO_HOME/config.toml` and `$CARGO_HOME/config`. `cycle()` snapshots both into `self.cargo_seen` after `git worktree add` (forge.py:914; line numbers are PR head ba99773). `touched_protected()` appends either path when its hash changed, so the pre-gate (:942), repair (:970) and landing (:850) checks fail the attempt. Adds selftest 2d (two checks).
+Findings:
+- medium forge/forge.py:447-454 The check is bypassed by writing the same file one directory up.
+  - Cargo reads `.cargo/config.toml` from every ancestor of the gate's cwd before it reads `$CARGO_HOME`.
+  - Worktrees live at `~/.local/state/forge/reflex1/wt/<n>-<tid>` (lane 1) and `.../reflex1/lane<k>/wt/...` (forge.py:82-89; this box has exactly that layout). So `~/.local/state/forge/reflex1/.cargo/config.toml` reaches every lane's gate, and so does `.../wt/.cargo/`, `~/.local/.cargo/` and so on. None of these is in the diff or hashed.
+  - Repro on PR-head code: a crate at `<state>/wt/00001-x` plus `<state>/wt/.cargo/config.toml` setting `build.target-dir`. `cargo metadata` reports the redirected target dir, and `touched_protected()` returns `[]`.
+  - PR_AUDIT.md:222-226 (the #137 audit) already listed these ancestor paths and `~/.rustup/settings.toml`. This PR covers one of them, while its title and body present it as closing the out-of-diff route.
+- medium forge/forge.py:914 with :464-466 A tampered config becomes the baseline after one failed attempt.
+  - The snapshot is retaken every cycle. Once a builder's write fails its own attempt, the next cycle on every lane hashes the tampered file as the baseline, and the check passes.
+  - Nothing restores the file or stops the lanes. Repro: snapshot, write `rustflags = ["--cap-lints", "allow"]`, the finding appears. Snapshot again: `[]`, with the file still tampered.
+  - From then on, every gate on all four lanes runs under the builder's config, and so does the owner's own cargo. "Refuse" holds for one attempt.
+  - Selftest's "CARGO_HOME back as snapshotted" case tests a restore that nothing in forge performs.
+- medium forge/forge.py:914, :942/:970/:850 An innocent lane's ticket is charged for another lane's write.
+  - All lanes share one `$CARGO_HOME`; only `CARGO_TARGET_DIR` is split per lane (forge.py:122-123).
+  - Each lane compares against its own cycle-start snapshot. The comparison runs after its builder (up to 75 min), after the repair, and in `land()` after the review. Any write in that window by another lane's builder, a planner or a reviewer makes this lane list the file.
+  - Effect: `fail()` charges this lane's ticket an attempt (forge.py:1080-1082 base). Its `## forge` note says "diff edits protected ... Change the code", which the next builder reads as its own doing. At :850 it discards an approved, gated attempt.
+  - Repro: two `Forge` objects sharing `CARGO_HOME`, one write. Both return the path, including the lane that did nothing.
+  - One write can cost four attempts. Refusing lane B's gate result is defensible, since its gate ran under that config. Charging lane B's ticket and blaming its builder is not.
+- medium forge/forge.py:454 with :910-915 A FIFO at the hashed path hangs every lane.
+  - `p.exists()` then `p.read_bytes()` reads a path any yolo session can write. A FIFO there blocks forever: in my test, `cargo_home_config()` was still blocked after 5 s.
+  - `exists()` follows symlinks, so a link to a device would be read without bound [inference, not run].
+  - The read runs in every lane's `cycle()` after the claim push and `git worktree add`, outside `try`. The lane hangs with its ticket `in_progress` and no log line. `lane_loop`'s except and `recover()` never run.
+  - `run()` restarts only lanes that exit (:1203-1215), so the supervisor also never reaches its closing `gpu.py reap --all` (:1218). The reaper timer still runs.
+  - Before this PR, the same file stalled only cargo inside `gate.sh`, bounded by `gate_timeout_min`.
+  - An `OSError` at :914 (a directory, mode 000) also skips `cycle()`'s `finally`. `recover()` then cleans it up as a free retry, and the ticket goes `blocked` after `max_attempts` interruptions.
+- low forge/selftest.py:93-101 Selftest 2d does not test the snapshot that makes the guard work.
+  - It sets `f.cargo_seen` by hand and tests only the comparison.
+  - Mutant with forge.py:914 removed: selftest rc 0, "all checks passed". That is the guard-dropped-with-suite-green case in README row 88.
+- low forge/forge.py:464 `getattr(self, "cargo_seen", None) or {}` is a defensive read, and when no snapshot exists it passes silently.
+  - The house pattern is to initialise per-cycle state in `__init__` (`last_model`, `cycle_t0`, `reviewed`, forge.py:111-113).
+  - With no snapshot, any caller outside `cycle()` gets no cargo check and no error: the empty-pass shape README row 89 warns about.
+- low forge/README.md No safeguard row for the new guard, and row 99 is unchanged.
+  - Every other guard has its own row.
+  - Selftest section "2d" sits between 2c and 2b.
+- none Deletions: the one removed line is `touched_protected()`'s return (base forge.py:455). It is rewritten as the same list plus the cargo entries.
+  - No line is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README table, so no layer is retired.
+- none Injection, quota, GPU and growth: no ticket text reaches the new code or a shell. The hashed paths come from `self.env` or `HOME` and are read by Python only.
+  - No new agent session, quota or GPU spend.
+  - A fail note grows by at most two paths.
+- none PR text: the body's claims are checked above.
+  - Selftest on the PR head: rc 0, 132 ok, both 2d checks pass.
+  - "Pre-gate, repair and land checks refuse the attempt" is true for the attempt in flight.
+  - The SWE-Bench Pro V2 citation was not verified.
+  - The only comment is Copilot's quota notice, and the body has no HTML comments or instructions.
+- none Siblings: 25 other open PRs on `forge` touch forge.py or selftest.py; I scanned all 25 diffs.
+  - #8, #25 and #28 touch `touched_protected()` against an older base (one-argument signature, `main...HEAD`, no `HARNESS_CONFIG`). They are stale, and none contradicts or duplicates this PR.
+  - #16, #42, #83, #84, #86 and #99 edit other `cycle()` lines; the overlap is adjacent lines only.
+  - None touches `CARGO_HOME`, `HARNESS_CONFIG`, cargo config or :914.
+- info One edit cannot fix this; a resubmission needs four things:
+  - Take one baseline at lane start, covering `$CARGO_HOME/config(.toml)` plus `.cargo/config(.toml)` in every ancestor of `self.home / "wt"`.
+  - `stat` before reading, and count anything that is not a regular file as changed without opening it.
+  - On a mismatch, hold the lane (log and sleep, as `disk_ok()` does) instead of calling `fail()` on whichever ticket is in flight.
+  - Add a README row, and a selftest case that drives `cycle()`.
+
+
 ## PR #141 · 2026-11-05T11:30:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
