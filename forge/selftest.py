@@ -234,29 +234,29 @@ with tempfile.TemporaryDirectory() as d:
     origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
     git(f"init -q --bare -b main {origin}", Path(d))
     git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
-    (repo / "tickets").mkdir(); (repo / "PROGRESS.md").write_text("base\n")
+    (repo / "tickets").mkdir(); (repo / "src.rs").write_text("base\n")
     git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
     cfg = Path(d) / "c.toml"
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg); f.pr = ""
     wt = Path(d) / "wt"
     git(f"worktree add -q -b land {wt} main", repo)
-    (wt / "PROGRESS.md").write_text("branch\n"); git("add -A", wt); git("commit -qm branch", wt)
+    (wt / "src.rs").write_text("branch\n"); git("add -A", wt); git("commit -qm branch", wt)
     moved: list[int] = []
     def gate(cwd):
         if not moved:  # another lane lands on main while this gate runs
-            moved.append(1); git("pull -q origin main", other); (other / "PROGRESS.md").write_text("main\n")
+            moved.append(1); git("pull -q origin main", other); (other / "src.rs").write_text("main\n")
             git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
         return True, ""
     def agent(role, prompt, cwd, timeout_min=0):  # the builder's conflict resolution
-        git("merge origin/main", cwd); (cwd / "PROGRESS.md").write_text("both\n"); git("add -A", cwd); git("commit -qm merge", cwd)
+        git("merge origin/main", cwd); (cwd / "src.rs").write_text("both\n"); git("add -A", cwd); git("commit -qm merge", cwd)
         return 0, ""
     f.gate, f.agent = gate, agent
     comments: list[str] = []
     f.pr_comment = lambda pr, text: comments.append(text)
     f.reviewed = ("abc123", f.patch_lines(git("diff origin/main...HEAD", wt)))  # what the reviewer approved
     why = f.land(wt, "land", "0001-x", "builder")
-    check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
+    check("landing survives main moving during the gate", why == "" and git("show origin/main:src.rs", repo) == "both\n", why or "not landed")
     # The first pass rebased cleanly (nothing posted); the second landed the conflict session's "both", which
     # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced.
     check("a conflict resolved after the review posts the lines the reviewer never saw",
@@ -383,6 +383,33 @@ with tempfile.TemporaryDirectory() as d:
     check("a conflicting rebase that merges cleanly costs no builder session",
           ok and not sessions and (wt / "PROGRESS.md").read_text() == "base\nanother lane\n"
           and (wt / "src.rs").exists(), f"ok={ok} sessions={sessions}")
+
+# 4n. Both sides appended to PROGRESS.md (a true conflict for git's text driver) and a code line is untouched:
+# the `union` driver keeps both entries and no builder session runs. A code-line conflict still goes to the builder.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, wt = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "wt"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "PROGRESS.md").write_text("base\n"); (repo / "src.rs").write_text("fn main() {}\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    git(f"worktree add -q -b feat {wt} main", repo)
+    (wt / "PROGRESS.md").write_text("base\n## 0002 this lane\n"); git("commit -qam mine", wt)
+    (repo / "PROGRESS.md").write_text("base\n## 0001 other lane\n")
+    git("commit -qam other", repo); git("push -q origin main", repo)
+    sessions = []
+    f.agent = lambda role, prompt, cwd, timeout_min=0: (sessions.append(role), (0, ""))[1]
+    ok = f.rebase_onto_main(wt, "builder")
+    got = (wt / "PROGRESS.md").read_text()
+    check("a notes-only conflict with main merges by union without a builder session",
+          ok and not sessions and "## 0001 other lane" in got and "## 0002 this lane" in got and "<<<<" not in got,
+          f"ok={ok} sessions={sessions} got={got!r}")
+    (wt / "src.rs").write_text("fn main() { mine() }\n"); git("commit -qam mine2", wt)
+    (repo / "src.rs").write_text("fn main() { other() }\n"); git("commit -qam other2", repo); git("push -q origin main", repo)
+    f.rebase_onto_main(wt, "builder")
+    check("a code conflict still goes to the builder", sessions == ["builder"], f"sessions={sessions}")
 
 # 4o. When the PR merge falls back to the local merge, the remote branch goes with it - but only when the
 # merge commit actually reached origin/main.

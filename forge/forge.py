@@ -733,6 +733,14 @@ class Forge:
         # A rebase replays every builder commit onto main and conflicts once per commit, so a line the
         # builder wrote and later rewrote still stops it; a merge resolves the same divergence once over
         # the final trees. 29 of reflex1's cycles paid a 30-minute builder session for this step.
+        # The notes files every ticket appends to take git's `union` driver (both sides' lines, no markers):
+        # of reflex1's 32 builder-resolved merges, 31 conflicted on PROGRESS.md, 25 on LEARNINGS.md and 7 on
+        # a code file (`git diff-tree -c` over the merge commits), so the session mostly re-typed "keep both".
+        # `info/attributes` lives in this lane's clone, never committed, and applies to its later rebases too.
+        union = self.cfg.get("union_merge", ["PROGRESS.md", "LEARNINGS.md"])
+        attrs = wt / self.sh("git rev-parse --git-path info/attributes", cwd=wt).stdout.strip()
+        attrs.parent.mkdir(parents=True, exist_ok=True)
+        attrs.write_text("".join(f"{p} merge=union\n" for p in union))
         if self.sh("git merge -q --no-edit origin/main", cwd=wt).returncode == 0:
             return True
         self.sh("git merge --abort", cwd=wt)
