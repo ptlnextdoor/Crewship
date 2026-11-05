@@ -295,6 +295,13 @@ class Forge:
             try:
                 so, se = p.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
+                # Measured before the SIGTERM: omp's signal handler appends a session_exit entry to the session
+                # file, so read after the kill every session that got one model reply shows 0 min.
+                try:
+                    writes = [f.stat().st_mtime for f in out.with_suffix("").rglob("*") if f.is_file()]
+                    quiet = f"last session write {(time.time() - max(writes)) / 60:.0f} min before the kill" if writes else "no session file written"
+                except OSError:  # omp is still running: a stat error here must not skip the kill below
+                    quiet = "session dir unreadable"
                 os.killpg(p.pid, 15)
                 time.sleep(5)
                 try:
@@ -302,12 +309,6 @@ class Forge:
                 except ProcessLookupError:
                     pass
                 so, se = p.communicate()
-                # Hung or still working when the clock ran out? omp appends each model turn, tool start and
-                # tool result to the session JSONL as it happens, so its newest mtime is the last sign of life.
-                # 4 of the first 22 reflex1 reviews died here with no verdict and no log said which; the
-                # number decides whether a silence cap (Droid 1.0 retries after 4 min of stream silence) fits.
-                writes = [f.stat().st_mtime for f in out.with_suffix("").rglob("*") if f.is_file()]
-                quiet = f"last session write {(time.time() - max(writes)) / 60:.0f} min before the kill" if writes else "no session file written"
                 self.log(f"agent {role} TIMEOUT after {timeout_min} min; {quiet}")
                 so = f"TIMEOUT after {timeout}s (process group killed; {quiet})\n{(so or '')[-4000:]}"
             text = (so or "") + ("\n[stderr]\n" + se if se else "")
