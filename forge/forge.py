@@ -396,7 +396,7 @@ class Forge:
         t = ticket.read_text()
         t = re.sub(r"^status:.*$", f"status: {status}", t, count=1, flags=re.M)
         if note:
-            t += f"\n\n## forge {now()} ({status})\n{note.strip()}\n"
+            t += f"\n\n## forge {now()} ({status})\n{self.redact(note.strip())}\n"
         ticket.write_text(t)
 
     def attempts(self, ticket: Path) -> int:
@@ -601,6 +601,12 @@ class Forge:
                         r"|(?P<anthropic>sk-ant-[A-Za-z0-9_-]{32,})|(?P<openai>sk-proj-[A-Za-z0-9_-]{32,})|(?P<runpod>rpa_[A-Za-z0-9]{32,})"
                         r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})")
 
+    def redact(self, text: str) -> str:
+        """Text bound for GitHub or a ticket note pushed to main, each `SECRET` match replaced by its issuer. A PEM
+        block goes whole: SECRET matches its header, the key is the lines under it."""
+        text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[pem redacted]", text, flags=re.S)
+        return self.SECRET.sub(lambda m: f"[{m.lastgroup} redacted]", text)
+
     def secrets(self, cwd: Path) -> list[str]:
         """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is
         pushed: a pushed key is public in seconds and in history for good, and the builder's environment holds the
@@ -770,10 +776,13 @@ class Forge:
 
     # ---------- GitHub visibility: one PR per attempt ----------
     def gh(self, args: str, cwd: Path | None = None, body: str | None = None) -> str:
-        """Run gh; long bodies go through a file. Never raises: PR plumbing must not stop the loop."""
+        """Run gh; long bodies go through a file. Never raises: PR plumbing must not stop the loop. A body is
+        session output (gate, review, fail note, landing delta) posted where the lane's keys must not go, so the
+        tokens `secrets()` refuses in the tree are replaced here by their issuer; the lane log keeps the original.
+        shortcut: reviewctl.py posts its audit through its own `gh pr comment` and is not covered, add it there."""
         if body is not None:
             f = self.home / "gh-body.md"
-            f.write_text(body[:60000])
+            f.write_text(self.redact(body)[:60000])
             args += f" --body-file {f}"
         # Crewship's gh guard requires an explicit repository target on every write.
         sub = args.split()[:2]
