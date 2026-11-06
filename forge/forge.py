@@ -780,8 +780,7 @@ class Forge:
     def gh(self, args: str, cwd: Path | None = None, body: str | None = None) -> str:
         """Run gh; long bodies go through a file. Never raises: PR plumbing must not stop the loop. A body is
         session output (gate, review, fail note, landing delta) posted where the lane's keys must not go, so the
-        tokens `secrets()` refuses in the tree are replaced here by their issuer; the lane log keeps the original.
-        shortcut: reviewctl.py posts its audit through its own `gh pr comment` and is not covered, add it there."""
+        tokens `secrets()` refuses in the tree are replaced here by their issuer; the lane log keeps the original."""
         if body is not None:
             f = self.home / "gh-body.md"
             f.write_text(self.redact(body)[:60000])

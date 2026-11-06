@@ -183,7 +183,7 @@ def record(v: dict) -> None:
     header = "# PR audits\n\nWritten by reviewctl (forge/reviewctl.py). Newest first.\n"
     old = f.read_text().removeprefix(header) if f.exists() else ""
     entry = f"\n## PR #{v['pr']} · {v['at']} · {v['verdict']} · risk {v['risk']} · gate {v.get('gate')} · {v.get('action', '')}\n\n{v['audit']}\n"
-    f.write_text(header + entry + old)
+    f.write_text(header + Forge.redact(entry) + old)
     sh(f"git add forge/PR_AUDIT.md && git commit -qm 'reviewctl: audit PR #{v['pr']}' && git push -q origin HEAD:{BASE}")
 
 
