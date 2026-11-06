@@ -692,6 +692,17 @@ with tempfile.TemporaryDirectory() as d:
     rc.run()
     check("a PR from a fork is neither gated nor audited (its forge.py would run here as the owner)",
           calls == [], str(calls))
+    # 9b. The audit comment and the close note are session output posted on a public PR (the audit session
+    # runs here as the owner, the gate echoes selftest output); the lane loop's redaction covers them too.
+    calls.clear()
+    rc.open_prs = lambda: [{"number": 30, "headRefName": "b", "files": [{"path": "forge/forge.py"}]}]
+    leak = "export RUNPOD_API_KEY=rpa_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    rc.audit = lambda pr: {"pr": 30, "sha": "s", "verdict": "REJECT", "risk": "low", "audit": leak, "at": "t"}
+    rc.touches_protected = lambda pr: ""
+    rc.run()
+    posted = (Path(d) / "pr30.comment.md").read_text() + (Path(d) / "pr30.close.md").read_text()
+    check("reviewctl's audit comment and close note carry no key",
+          "rpa_ABC" not in posted and posted.count("[runpod redacted]") == 2, posted[:300])
 
 # 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
 # stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the

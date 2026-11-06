@@ -601,11 +601,13 @@ class Forge:
                         r"|(?P<anthropic>sk-ant-[A-Za-z0-9_-]{32,})|(?P<openai>sk-proj-[A-Za-z0-9_-]{32,})|(?P<runpod>rpa_[A-Za-z0-9]{32,})"
                         r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})")
 
-    def redact(self, text: str) -> str:
+    @staticmethod
+    def redact(text: str) -> str:
         """Text bound for GitHub or a ticket note pushed to main, each `SECRET` match replaced by its issuer. A PEM
-        block goes whole: SECRET matches its header, the key is the lines under it."""
+        block goes whole: SECRET matches its header, the key is the lines under it. Static so reviewctl, which
+        posts audit output and gate output of this repo's PRs, uses the same patterns without a Forge instance."""
         text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[pem redacted]", text, flags=re.S)
-        return self.SECRET.sub(lambda m: f"[{m.lastgroup} redacted]", text)
+        return Forge.SECRET.sub(lambda m: f"[{m.lastgroup} redacted]", text)
 
     def secrets(self, cwd: Path) -> list[str]:
         """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is

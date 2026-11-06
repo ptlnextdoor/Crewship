@@ -25,6 +25,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from forge import Forge  # the lane loop's redaction, so a key quoted by the audit or the gate never reaches GitHub
+
 REPO = Path(os.environ.get("REVIEW_REPO", Path.home() / "Dev/Crewship-scout"))
 GH_REPO = os.environ.get("REVIEW_GH_REPO", "ptlnextdoor/Crewship")
 BASE = os.environ.get("REVIEW_BASE", "forge")
@@ -238,14 +240,14 @@ def run() -> None:
                     v["action"] = f"fixed and merged ({detail})" if m.returncode == 0 else f"fixed, merge failed: {m.stderr[-200:]}"
         elif v["verdict"] == "REJECT" and v["risk"] in ("none", "low"):
             cf = STATE / f"pr{n}.close.md"
-            cf.write_text(f"Closed by reviewctl: the audit rejected this change.\n\n{v['audit'][-6000:]}")
+            cf.write_text(Forge.redact(f"Closed by reviewctl: the audit rejected this change.\n\n{v['audit'][-6000:]}"))
             c = sh(f"gh pr close {n} -R {GH_REPO} --delete-branch --comment \"$(cat {cf})\"")
             v["action"] = "closed: rejected" if c.returncode == 0 else f"close failed: {c.stderr[-200:]}"
         else:
             v["action"] = f"left open: {v['verdict']} risk={v['risk']} needs the owner"
         body = f"**reviewctl** ({MODEL}:{THINKING}) · verdict {v['verdict']} · risk {v['risk']} · gate {v['gate']} · {v['action']}\n\n<details><summary>audit</summary>\n\n{v['audit'][-8000:]}\n</details>\n\n```\n{gout[-1500:]}\n```"
         bf = STATE / f"pr{n}.comment.md"
-        bf.write_text(body)
+        bf.write_text(Forge.redact(body))
         sh(f"gh pr comment {n} -R {GH_REPO} --body-file {bf}")
         mark(n, v)
         sh(f"git checkout -q {BASE} && git pull -q --rebase")
