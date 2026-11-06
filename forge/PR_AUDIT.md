@@ -2,6 +2,44 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #146 · 2026-11-06T16:28:18Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #146 forge: redact credential-shaped tokens from every body gh() posts
+What it changes: `gh()` (forge/forge.py:779) now runs `SECRET.sub` over every `--body-file` text and replaces each match with `<issuer redacted>`. The PR also adds one README row (:93) and one selftest check (selftest.py:229-232). It does not touch the gate, the reviewer, prompts, claims, `recover()` or protected paths.
+Findings:
+- medium forge/forge.py:395-400, 1112-1114: the gate output and reviewer text this PR redacts in PR comments still go unredacted into the ticket note, which is pushed to main. `fail()` receives `gate still failing after repair.\n{gout}` (:1006), `reviewer did not approve.\n{review}` (:1047), `gate failed after updating from main.\n{gout}` (land :878) and `builder produced no diff ...{out[-1500:]}` (:947). `set_status()` appends `why[-7000:]` as is. `fail()` commits it, and `push()` runs `git push -q origin main` (:684). `SECRET` is used only at :612 and :779, and `secrets()` scans the branch diff, not forge's own ticket commits. This sink is in the same repo as the PR comment and stays in git history: a comment can be edited, but a pushed commit cannot be removed without rewriting main. Today 13 ticket files on reflex1 `origin/main` hold such notes. README :93 calls PR bodies "the other sink the lane's keys can reach". There are two such sinks, and the more durable one is still open.
+- low forge/forge.py:779: for two of the nine issuers, the matched text is not the secret. `pem` matches only the `-----BEGIN … PRIVATE KEY-----` header, and `aws` matches only the `AKIA…` key id. I replayed both with the PR's regex. An `id_ed25519` dump posts its base64 lines and its END line, with only the header replaced. `AWS_SECRET_ACCESS_KEY=…` is posted in full next to `<aws redacted>`. Matching only the header or id is correct for `secrets()`, because one hit refuses the whole push. It is wrong for replacing just the matched text. The README row says the token is replaced.
+- low forge/forge.py:779: on GitHub the marker disappears outside a code fence. `gh api markdown` renders `RUNPOD_API_KEY=<runpod redacted> set` as `RUNPOD_API_KEY= set`, because the unknown tag is stripped. Inside a ``` fence it does show. The review comment (:1036) and the ticket text in the PR body (:802-806) are not fenced. That covers the case the PR names first ("a reviewer that prints its environment"): a reader there sees no sign that a key was removed. Rendered the same way, `[runpod redacted]` shows literally.
+- low forge/forge.py:779: the body is cut before the redaction runs. `body[:60000]` happens before `sub`, so a token that crosses the cut posts its prefix plus up to 31 characters. Replay: `…rpa_QQQQQQ` survives. Callers also cut before `gh()` sees the text: `gate()` :416 `out[-5000:]`, `pr_close` :820 `why[-6000:]`, :1036 `review[-12000:]`, :874 `delta[:6000]`. A cut from the front removes the prefix, so the rest of the key goes out unmatched. Replay: 20 of 40 key characters were posted. Only the cut inside `gh()` can be fixed here. The caller cuts stay as a rare leftover risk, since a key has to straddle the boundary.
+- none forge/forge.py:779, traced:
+  - The replacement is a lambda over fixed group names, so it takes no backreference or shell input, and the body still goes through `--body-file`.
+  - `sub` on a str cannot raise, so `gh()` still never raises.
+  - The largest growth is a 15-character minimal Slack match turning into a 16-character marker, so a body stays at or under 64,000 characters, below GitHub's 65,536 limit.
+  - Nothing reads a posted body back into a verdict: the verdict comes from local `rout` (:1035-1047). The gate, the reviewer, claims, `recover()` and protected paths are unchanged.
+  - Nothing is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. The only replaced lines are the `gh()` docstring line and its `write_text`.
+- none forge/reviewctl.py:242,249: the PR's "not covered" note is accurate. reviewctl posts the close note and the audit with its own `gh`, not through `Forge.gh()`.
+- none forge/README.md:93: checked the claim "0 of reflex1's 249 PR comments match". `gh api` returns 249 comments on ptlnextdoor/reflex1, with 0 `SECRET` matches. selftest on the PR head (git archive into a temp dir): 133 ok, rc 0, the new check included.
+- none siblings: none of the open PRs on `forge` that touch forge.py, README.md or selftest.py edits `gh()`, `SECRET` or the body path. #99 replaces `fail()`'s `set_status(ticket, status, why[-7000:])` line with a fenced note. That does not contradict this PR, but it is the line the medium finding is about. So the change below goes in `set_status()`, which no open PR touches, and it works with #99's fenced note.
+- nit forge/forge.py:775-778: the docstring's `shortcut:` names the limit but not when to upgrade.
+Change needed (only for MERGE WITH CHANGE): one helper, used at both sinks, applied before any cut.
+forge/forge.py, after `SECRET` (:602):
+    def redact(self, text: str) -> str:
+        """Text bound for GitHub or a ticket note pushed to main, each `SECRET` match replaced by its issuer. A PEM
+        block goes whole: SECRET matches its header, the key is the lines under it."""
+        text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[pem redacted]", text, flags=re.S)
+        return self.SECRET.sub(lambda m: f"[{m.lastgroup} redacted]", text)
+forge/forge.py:779 -> `f.write_text(self.redact(body)[:60000])`
+forge/forge.py:399 -> `t += f"\n\n## forge {now()} ({status})\n{self.redact(note.strip())}\n"`
+forge/selftest.py:232: change the expected text to `...RUNPOD_API_KEY=[runpod redacted] sha ...`, then add:
+    nf = Path(d) / "note.md"; nf.write_text("status: open\n---\n# n\n")
+    f.set_status(nf, "retry", "gate: FAIL\n-----BEGIN OPENSSH PRIVATE KEY-----\nb3Blbn\n-----END OPENSSH PRIVATE KEY-----\nrpa_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345")
+    check("a ticket note pushed to main carries no key; a PEM block goes whole", "b3Blbn" not in nf.read_text() and nf.read_text().endswith("gate: FAIL\n[pem redacted]\n[runpod redacted]\n"), nf.read_text())
+forge/README.md:93: rewrite the row's first cell as "`gh()`, in every body it posts (PR body, gate output, review, fail note, landing delta), and `set_status()`, in the failure note `fail()` commits and pushes to main, replace a token the `secrets()` patterns match by `[issuer redacted]` and a PEM private-key block whole; an AWS secret key has no issuer prefix and passes (only its `AKIA` id is replaced); the lane log keeps the original (...)". In the second cell, change "the other sink" to "the two other sinks".
+
+
 ## PR #145 · 2026-11-06T08:53:48Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
