@@ -2,6 +2,49 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #148 · 2026-11-06T19:36:28Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #148 forge: kill the whole process group when sh() times out
+What it changes: `Forge.sh()` replaces `subprocess.run(..., timeout=)` with `Popen(start_new_session=True)` + `communicate(timeout)`. On `TimeoutExpired` it sends SIGKILL to the process group, calls `p.communicate()` again and re-raises. It also adds README row 42 and selftest check 27 (a subshell orphaned past a 1 s timeout must not write its sentinel).
+Findings:
+- medium forge/forge.py:231 The `p.communicate()` after `killpg` has no timeout. It reads until every holder of the stdout/stderr pipes exits. A descendant that left the gate's process group keeps them open, and `killpg` cannot reach it. Two ways to get there: GNU `timeout`, which calls setpgid, and a child started with `setsid` or Rust `Command::process_group(0)` with inherited stdio. Probe on this box, at a 1 s timeout: `setsid sleep 8 & sleep 30` takes 1.0 s on base and 8.0 s on the PR. `timeout 8 sleep 100` also takes 1.0 s on base and 8.0 s on the PR. With a long-lived child, the PR's wait never ends. The builder writes the tests that `gate.sh`'s `cargo test` runs, so builder code can reach this path. On base, such a gate stalls to `gate_timeout_min`, then raises TimeoutExpired. That becomes a cycle error, `recover()` runs, and the ticket goes back to retry: the damage is bounded. On the PR, `gate()` (408, called at 979/1010) never returns, so cycle()'s `finally` (1073-1084) never runs either. That leaves the worktree and branch behind, the PR open, and the ticket `in_progress lane=k` on origin forever. Other lanes skip that ticket. The watchdog cannot see the stall. It checks the age of `forge.log`, and every lane writes to that one file (forge.py:95, forge-watchdog@.service), so the live lanes keep it fresh. At the deadline the supervisor's `while procs` loop (1228) waits on the hung lane, so the final `gpu.py reap --all` (1243) never runs. GPU spend stays capped anyway: forge-gpu-reap.timer still reaps pods past the deadline in their name, which is at most GPU_MAX_HOURS. The second read's result is thrown away by `raise`, so it buys nothing. `subprocess.run` itself only calls `wait()` after the kill on POSIX.
+- low forge/forge.py:229 `except subprocess.TimeoutExpired` alone. `start_new_session=True` takes the command out of the terminal's foreground process group. So Ctrl-C during an interactive `forge.py once` raises KeyboardInterrupt inside `communicate()`, and nothing kills the group. Checked: I sent SIGINT to the caller's process group while it ran `sleep 3; echo alive > marker`. The marker was written under the PR but not under base, where SIGINT reached the child and `run()` has a bare `except: process.kill()`, and not under the fixed version below. Unattended runs are not affected: systemd stop kills the whole cgroup (forge@.service, default KillMode), and the supervisor never signals lanes; it only polls them (1221-1240).
+- none forge/forge.py:220-236 I checked that the behaviour callers see does not change. The normal path returns the same rc, stdout and stderr on base and the PR (`echo out; echo err >&2; exit 3`). `check=True` raises the same RuntimeError. A timeout raises the same TimeoutExpired, with the message "Command '<cmd>' timed out after N seconds". So nothing changes for the `harness` catch (143), the cycle-error path (1276-1278 → `recover()`), selftest's mocked gate timeout, the claim push (735/744), `discard_strays()` (1157-1160), the protected-path, dependency and test-tampering guards (`check=True` diffs), or the reviewer. The only text the diff adds is two comments and one README row: no prompt text, no ticket text reaching a command. Nothing spends GPU. The `gpu.py reap --all` call (1243) is one simple command that dash execs, so base already SIGKILLed gpu.py on a timeout. reflex1's `gate.sh` never calls gpu.py; builders' `gpu.py run` goes through `_agent_once`, not `sh()`.
+- none deletions: the diff deletes only the two `subprocess.run` lines inside `sh()`. It removes nothing from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table, so it retires no layer.
+- none claims checked: reflex1 `forge.log` lines 137 and 281 show lane 4's `./gate.sh timed out after 1800 seconds` at 08:53:20Z and 14:45:44Z on 2026-10-23, with the next cycle starting at 08:55:26Z and 14:48:06Z. The full PR selftest passes. The PR's check 27 fails against base `forge.py` (the orphan writes its sentinel) and passes on the PR. The only PR comment is Copilot's quota notice; it makes no claims.
+- low forge/selftest.py:1220-1236 Check 27 only covers a descendant that stays inside the group, so it passes the hang in finding 1. Its `import threading` sits mid-file instead of in the top imports (9-17). The `threading.Event().wait(4)` workaround is correct: line 289 replaces `time.sleep` with a no-op and never restores it.
+- low sibling #40 ("a timed-out command dies as a process group and returns rc 124") rewrites the same `sh()` and contradicts this PR's contract. It returns rc 124 with `TIMEOUT` in stdout instead of raising, uses TERM, 5 s, then KILL, and its README row says "comes back as rc 124". It also has the same unbounded post-kill `p.communicate()`, and it is cut against an older base (sh() at line 158). #40 is the side to change: close it as superseded by #148, or rebase it onto #148 if the rc-124 contract is wanted.
+- low sibling #79 ("a gate that hangs is a FAIL with its output") duplicates the `Popen(start_new_session=True)` + `killpg` + unbounded `communicate()` inside `gate()`, which bypasses `sh()`. Its README row goes in at the same table position as #148's and repeats the process-group kill. #79 is the side to change: on top of #148 it should call `self.sh()` and catch `TimeoutExpired`, and its row should drop the kill. No other open PR on `forge` modifies `sh()`; the rest only share neighbouring text in forge.py, README.md and selftest.py.
+Change needed (only for MERGE WITH CHANGE): in `forge/forge.py` `sh()`, replace
+```
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, 9)
+            p.communicate()
+            raise
+```
+with
+```
+        except BaseException:  # the timeout, or Ctrl-C under `once`: the new session no longer gets the terminal's SIGINT
+            os.killpg(p.pid, 9)
+            p.wait()  # not communicate(): a child outside the group (setsid, GNU timeout) holds the pipes open
+            raise
+```
+and add this to selftest check 27, inside its `with` block:
+```
+    t0 = forge.time.monotonic()
+    try:
+        f.sh("setsid sleep 6 & sleep 60", timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+    check("a timed-out command returns at its timeout when a child left the group",
+          forge.time.monotonic() - t0 < 4, f"{forge.time.monotonic() - t0:.1f}s")
+```
+I ran this on a scratch copy. With the edit: the `setsid` and GNU `timeout` cases return in 1.0 s, the plain orphan is still killed, Ctrl-C no longer leaves the child running, and the full selftest passes. The added check fails on the PR as it stands (6.0 s) and passes with the edit (1.0 s).
+
+
 ## PR #147 · 2026-11-06T18:32:35Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
