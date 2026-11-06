@@ -1217,6 +1217,24 @@ with tempfile.TemporaryDirectory() as d:
           "the diff" in filled and "{DIFF}" in refused and "{TICKET}" not in refused,
           f"filled={filled!r} refused={refused!r}")
 
+# 27. A gate that hits its timeout dies whole. subprocess.run's kill reached only `sh -c`; the cargo and test
+# binaries gate.sh had started kept running (reflex1 lane 4, 2026-10-23: both 1800-second gate timeouts) on the
+# box the other lanes' gates share, holding the lane's target-dir lock for the retry two minutes later.
+with tempfile.TemporaryDirectory() as d:
+    repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
+    repo.mkdir(); git("init -q -b main", repo)
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    try:
+        f.sh(f"(sleep 3; echo alive > {d}/orphan); echo done", timeout=1)
+        raised = ""
+    except subprocess.TimeoutExpired as e:
+        raised = str(e)
+    import threading
+    threading.Event().wait(4)  # not time.sleep: an earlier check leaves it a no-op for the rest of the run
+    check("a command that times out takes its whole process group with it",
+          "timed out after 1 seconds" in raised and not (Path(d) / "orphan").exists(), f"raised={raised!r}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
