@@ -857,6 +857,9 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket/harness-config paths {bad}; not allowed."
+            bad = self.secrets(wt)
+            if bad:
+                return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
             # patch (context shifts on any rebase, so a clean one posts nothing).
             sha, lines = self.reviewed
