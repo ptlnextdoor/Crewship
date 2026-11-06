@@ -2,6 +2,84 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #145 · 2026-11-06T08:53:48Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #145 forge: omp's retry-budget give-up falls over to the next model, not onto the ticket
+What it changes: `agent()` (forge/forge.py:250, PR head 3a371174 on 5da9d39a) adds `Retry budget exhausted` to the stderr regex. When a session exits non-zero with that text, the vendor is marked in `self.exhausted` and the role moves down its chain. The PR also extends a comment (:242-246), appends to README safeguard row 69, and adds two checks to selftest 10 (:723-732).
+Findings:
+- medium forge/forge.py:250, with forge/forge.py:1013-1015, :1027, :1043-1048 and forge/projects/reflex1.toml:54-58. The change lets cross-vendor review fail open. README:36 says builder and reviewer come from different vendors. In reflex1, `builder` is Opus, so `cycle()` picks `reviewer_alt` (Codex Astra), whose only fallback is `anthropic/claude-fable-5-1`.
+  - On base, an Astra session that gives up returns rc 1 with no verdict, and `fail()` ends the attempt with nothing merged.
+  - At PR head, the same give-up marks `openai-codex` and the review moves to Fable, the builder's own vendor. That review can APPROVE and land.
+  - Probe on a PR-head copy with reflex1's roles, Astra stubbed to `(1, "...[stderr]\nRetry budget exhausted after 10 retries: ...")`: `ran=['openai-codex/gpt-6-astra','anthropic/claude-fable-5-1']`, `rc=0`, verdict APPROVE, `last_model=fable`.
+  - Same probe on base: `ran=['openai-codex/gpt-6-astra']`, `rc=1`.
+  - The fallback already runs most reviews (reflex1 forge.log: 103 of 128 `agent reviewer_alt` lines are Fable, from quota marks), so the extra harm per outage is small. But this is a new fail-open trigger, and neither the PR body nor the README names it.
+  - Excluding the review roles from the new token restores base behaviour on this path (Change needed).
+- low forge/forge.py:242-246, forge/README.md:69. The token is not specific to outages, though the comment says "an unreachable or 5xx provider" and the README says "written after 10 transient-error retries". In omp 18.12.6 `dist/cli.js`:
+  - `isRetryableError()` returns `jy()`, which covers the classes Transient, UsageLimit, ThinkingLoop, StaleResponsesItem, ProviderFinishError and EmptyResponse (`ATa`), plus MalformedFunctionCall.
+  - Once `maxRetries` is passed, the shared retry handler sets `errorMessage = "Retry budget exhausted after ${L} retries: ${a}"` for any of those classes.
+  - Print mode writes that `errorMessage` to stderr and returns 1.
+  - So ten consecutive empty responses, thinking loops or malformed tool calls also take the whole vendor (every model, every role) out of the lane's chains for the rest of the cycle.
+  - On builder roles this fails closed (next finding). Frequency is low: 0 of reflex1's 264 session logs contain the line. The README cell should say what the code matches.
+- low forge/forge.py:250, with :945-948, :1015, :1027, :1266-1269, :1194, :407 and reflex1.toml:34-52. In reflex1, a builder give-up on Anthropic always ends in a Codex build that is thrown away.
+  - Trace: `anthropic` is marked vendor-wide, so Fable is skipped and Codex Sol builds (up to 75 min) and the gate runs. `built_by` is now Codex, so the reviewer is `reviewer` (Opus, then Fable), and both are spent. That raises `QuotaExhausted`.
+  - `cycle()`'s handler closes the PR and its `finally` removes the worktree and remote branch. `lane_loop` then calls `recover(quota=True)`, which puts the ticket back to `retry` with a `## forge-quota` note. `attempts()` counts only `## forge `, so the attempt is not charged.
+  - Probe: `builder ran ['anthropic/claude-opus-5-5','openai-codex/gpt-6.1-sol']`, `exhausted=['anthropic']`, then `reviewer: QuotaExhausted`.
+  - The spend is capped by `quota_ok()`'s 80% floor on the Codex windows. The mark clears on the next loop pass: live `omp usage` lists the bare `Claude 7 Day` window, so the `anthropic` key pops when it is under the floor.
+  - Two side effects follow:
+    - A ticket that reliably makes omp give up never reaches `blocked` (`QuotaExhausted` skips max_attempts).
+    - A mid-session give-up reruns the full prompt on the first session's uncommitted edits, with the first render's `{KILL}` (existing shortcut at :937), and that work is also discarded.
+  - Quota marks already take this path on base. The vendor-wide mark is also what keeps #47's audited hole closed here: the review chain is spent, so Opus never reviews a diff Opus partly wrote. No change required.
+- info Verification.
+  - Ran `ANTHROPIC_BASE_URL=http://127.0.0.1:9 omp -p --no-session --model=anthropic/claude-fable-5-1 "reply ok"`: rc 1 after 589 s. Stderr was exactly `Working...` plus `Retry budget exhausted after 10 retries: Couldn't connect to 127.0.0.1:9 (connection refused). Check that the server is running and reachable.` This matches the PR's measurement. The comment's "nothing else written" leaves out the `Working...` line, which the selftest fixture does include.
+  - `python3 forge/selftest.py` on a PR-head copy: all checks passed, including both new ones. The MCP check pins that an `ECONNREFUSED` MCP warning plus rc 1 does not mark the vendor.
+- info Security trace, no issue found.
+  - The token is a Python regex over omp output; no ticket text reaches a shell or f-string.
+  - `exhausted` lives on each lane process's own `Forge` instance, so two lanes never write it.
+  - No change touches the gate, protected paths, prompts, `recover()`, `discard_strays()`, PR or merge code, or GPU.
+  - The give-up finishes inside `_agent_once`'s timeout and process-group kill.
+  - Each give-up adds one log line.
+  - An agent that can write to omp's stderr and make it exit non-zero could already trigger the mark with the existing `quota` token, so the new token opens no new kind of injection.
+  - No layer is deleted: README row 69 keeps its old text word for word and only appends, the forge.py comment line is replaced by a superset, and selftest only adds checks.
+- info The PR body says that without the change "the vendor stays first in every chain for the next lane". The fix does not reach other lanes: the mark is per lane process and is cleared at the next `quota_ok()` pass, so each other lane still pays its own 590 s. This is in the body only; the README and comment do not claim it.
+- info Sibling PRs.
+  - #47 duplicates this fix: provider 5xx/overload falls over to the next model.
+    - It sits on an older `agent()` (`model.split("/")[0] in self.exhausted`; base now uses `spent()`).
+    - It matches `text[-3000:]` including stdout, which breaks base README row 69's stderr-only rule.
+    - It does not mark the vendor. Its own audit found that this lets Opus review work Opus partly wrote.
+    - #47 is the side to change: close it as superseded or rebase it to the stderr segment. #145's body already names it.
+  - #39 (quota marks expire after an hour) is written against a `quota_ok()` that used `setdefault`; base now pops marks that are under the floor on every pass. It does not contradict this PR.
+  - #20 (`reviewer_alt` tries `xai-oauth/grok-build` before Fable) would make the first finding's fallback cross-vendor first. It complements the fix below and does not replace it, because Fable stays the last resort.
+  - #133 and #86 (review-vendor tally, builder model named in the reviewer prompt) complement this PR.
+  - The other 21 open PRs on `forge` touch other functions, other README rows, or other selftest sections. Their only overlap is text conflicts at the table tail and between selftest sections.
+- nit forge/forge.py:242-246. The 5-line comment repeats README row 69's new cell. The file already does this elsewhere, so no edit is needed for it.
+Change needed (only for MERGE WITH CHANGE): keep the give-up token off the review roles, document it, and pin it.
+1. forge/forge.py:250: replace
+   `            if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota|Retry budget exhausted", err, re.I):`
+   with
+   `            # Not for a review: its next model can be the builder's own vendor (reviewer_alt falls back to Fable).`
+   `            give_up = "" if role.startswith("reviewer") else "|Retry budget exhausted"`
+   `            if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota" + give_up, err, re.I):`
+2. forge/README.md:69, first cell: replace
+   ``or on omp's own give-up line there (`Retry budget exhausted after 10 retries: Couldn't connect to ...`, written after 10 transient-error retries, 590 s against a refused base URL)``
+   with
+   ``or, for any role but a reviewer, on omp's own give-up line there (`Retry budget exhausted after 10 retries: Couldn't connect to ...`, written after 10 retries of any error omp retries: transient, empty response, thinking loop, malformed tool call; 590 s against a refused base URL); a review that gives up fails the attempt, because its next model can be the builder's own vendor (`reviewer_alt` falls back to Fable)``
+3. forge/selftest.py: after line 732, add
+   `    ran.clear(); f.exhausted.clear()`
+   `    f.cfg["roles"]["reviewer_alt"] = {"model": "a/b", "fallback": ["c/d"]}`
+   `    outs["a/b"] = (1, "\n[stderr]\nRetry budget exhausted after 10 retries: Couldn't connect to 127.0.0.1:9 (connection refused).\n")`
+   `    rc, text = f.agent("reviewer_alt", "p", repo)`
+   `    check("omp giving up on a review fails it on its own model, never falls back to the builder's vendor",`
+   `          (rc, ran, f.exhausted) == (1, ["a/b"], {}), f"{ran} {f.exhausted}")`
+
+I applied steps 1 and 3 to a /tmp copy of the PR head:
+- selftest: "all checks passed", including the new check.
+- reflex1-role probe: `reviewer_alt` returns `rc=1`, `ran=['openai-codex/gpt-6-astra']`, `exhausted={}`.
+- The builder give-up still falls over to Codex.
+
+
 ## PR #144 · 2026-11-06T05:36:58Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
