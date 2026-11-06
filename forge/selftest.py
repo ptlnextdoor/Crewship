@@ -73,12 +73,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, "")):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo)):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 5, str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 6, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not. The files every
     # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class.
@@ -168,6 +168,18 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "NOTES.md").write_text("++ done \U000e0041\n")
     git("add -A", repo); git("commit -qm plus", repo)
     check("an added line that reads as a +++ header is still searched", [g[-7:] for g in f.invisible_chars(repo)] == ["U+E0041"], str(f.invisible_chars(repo)))
+    git("reset -q --hard origin/main", repo)
+    # 2e''. A line the branch adds with a credential-shaped token is refused with the file and issuer before the
+    # push; a bare hex string, a key the branch removes and the key's prefix alone are not.
+    (repo / "src/a.rs").write_text("const K: &str = \"AKIAIOSFODNN7EXAMPLE\";\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
+    (repo / "NOTES.md").write_text("-----BEGIN RSA PRIVATE KEY-----\nsha 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\nrpa_ sk-ant- ghp_\n")
+    git("add -A", repo); git("commit -qm key", repo)
+    got = f.secrets(repo)
+    check("credential-shaped tokens are refused per file with the issuer; hex and bare prefixes pass", got == ["NOTES.md: pem", "src/a.rs: aws"], str(got))
+    git("push -q -f origin work2:main", repo)
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm unkey", repo)
+    check("removing a key is no finding", f.secrets(repo) == [])
     git("reset -q --hard origin/main", repo)
     # 2f. gate() keeps the stage header and error lines a 5,000-character tail would cut (reflex1 PR #2: a
     # rustfmt failure whose tail was all hunks), and a short output passes through unchanged.

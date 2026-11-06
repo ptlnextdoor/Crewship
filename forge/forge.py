@@ -595,6 +595,24 @@ class Forge:
                 out.add(f"{f}: U+{ord(m[0]):04X}")
         return sorted(out)
 
+    # Token shapes with a fixed prefix the issuer chose so scanners can match them with no context; a bare
+    # 32-hex string is not one. reflex1 main (627 commits) and this repo have no match in any tracked file.
+    SECRET = re.compile(r"(?P<aws>AKIA[0-9A-Z]{16})|(?P<pem>-----BEGIN [A-Z ]*PRIVATE KEY-----)|(?P<github>gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"
+                        r"|(?P<anthropic>sk-ant-[A-Za-z0-9_-]{32,})|(?P<openai>sk-proj-[A-Za-z0-9_-]{32,})|(?P<runpod>rpa_[A-Za-z0-9]{32,})"
+                        r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})")
+
+    def secrets(self, cwd: Path) -> list[str]:
+        """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is
+        pushed: a pushed key is public in seconds and in history for good, and the builder's environment holds the
+        keys the loop itself uses (RUNPOD_API_KEY, gh). No ticket waiver: no ticket needs a live key in the tree."""
+        out, f = set(), ""
+        for line in self.sh("git diff -U0 origin/main...HEAD", cwd=cwd, check=True).stdout.splitlines():
+            if line.startswith("+++ "):
+                f = line[6:]
+            if line.startswith("+") and (m := self.SECRET.search(line)):
+                out.add(f"{f}: {m.lastgroup}")
+        return sorted(out)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -921,6 +939,9 @@ class Forge:
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
+            bad = self.secrets(wt)
+            if bad:
+                return self.fail(ticket, f"diff adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint.")
             self.pr = self.pr_open(wt, branch, ticket, builder)
             # Base is origin/main, not the lane's local main: the builder may bring main into its branch
             # during the session (reflex1 PRs #30/#55/#93/#100/#101/#103/#105 rebased onto it), and against a
@@ -953,6 +974,9 @@ class Forge:
                 # repair keeps the failed patch next to its feedback so the next one is not the same patch).
                 rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff origin/main...HEAD` is its work; local `main` sits at the branch point) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end, so skip the starting gate run. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. Every rule below still holds.\n\n{bprompt()}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
+                bad = self.secrets(wt)
+                if bad:
+                    return self.fail(ticket, f"the repair adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint.")
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
                 bad = self.touched_protected(wt, "origin/main")
