@@ -20,7 +20,7 @@ One paragraph: which SCORE.md number this moves (S1, S2, latency, or a prerequis
 Concrete steps, files, interfaces. Name every crate or package the builder may add or upgrade, with version; the builder is not allowed to pick one itself.
 
 ## Done when
-Checkable criteria, each a command and its expected result (a test name that passes, a number above a threshold with the command that prints it). No criterion a person must judge by eye.
+Checkable criteria, each a command and its expected result (a test name that passes, a number above a threshold with the command that prints it). No criterion a person must judge by eye. When the change takes input and a file or doc you can name defines its result on an edge input (empty input, the boundary value, the other input type, a malformed row), at least one criterion runs it on that input with that result and names the source; a test the builder writes counts when this line fixes its input and expected result. Typical inputs alone pass wrong code, and an edge result no source defines is a guess the builder then has to match, so leave that one out.
 
 ## Out of scope
 What not to touch.
