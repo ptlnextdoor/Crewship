@@ -226,6 +226,10 @@ with tempfile.TemporaryDirectory() as d:
     check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
     body = (f.home / "gh-body.md").read_text()
     check("PR body names the forge version and omp release", f"`{f.version}` on `{f.harness}`" in body, body[:120])
+    f.pr_comment("http://pr", "**gate: FAIL**\nexport RUNPOD_API_KEY=rpa_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 sha 9f86d081884c7d659a2feaa0c55ad015\nrpa_ ghp_")
+    body = (f.home / "gh-body.md").read_text()
+    check("a credential-shaped token in PR-bound text is replaced by its issuer; hex and bare prefixes pass",
+          body == "**gate: FAIL**\nexport RUNPOD_API_KEY=<runpod redacted> sha 9f86d081884c7d659a2feaa0c55ad015\nrpa_ ghp_", body)
     # 4c. prune_target drops the workspace's artifacts (lib, test binary, dep-info) and keeps crates.io ones,
     # including a crates.io crate that shares its name with a workspace test target (`http`).
     (repo / "crates/rc/src").mkdir(parents=True); (repo / "crates/rc/tests").mkdir()
