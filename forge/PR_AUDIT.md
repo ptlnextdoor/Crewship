@@ -2,6 +2,48 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #143 · 2026-11-06T01:32:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #143 forge: refuse credential-shaped tokens in the diff before the first push
+What it changes: adds `Forge.SECRET` (9 fixed-prefix token shapes) and `secrets(wt)`, which scans the added lines of `git diff -U0 origin/main...HEAD` and returns `file: issuer`. `cycle()` calls it before `pr_open()` (the first push) and before the repair push, and fails the attempt on a hit. Also one README row, and selftest: the guard joins the raise-on-bad-ref list, plus a new 2e'' case.
+Findings:
+- medium forge/forge.py:843-888 (land(), not touched by the diff) with :762-768: the push path the conflict-resolution session uses is not scanned. When rebase and merge both conflict, `rebase_onto_main()` starts a builder session at yolo. Its inline prompt does not include builder.md rule 16 (credentials). Its work is committed by `git add -A` (:768). land() then runs `touched_protected` (:857), the gate, and `git push --force-with-lease origin {branch}` (:874), or a local `git merge` followed by `self.push()` to origin main (:878-879). `secrets()` is never called on that path. The PR body's "Not covered" note says "the branch was already pushed by then, so the pre-push property does not hold there anyway". That is wrong. The session's commit is pushed for the first time at :874/:879, and that push puts it on main, which is kept in every lane clone and in history. A failed branch, by contrast, is deleted (:1067-1068). Repro (throwaway script on the PR head, `pull_requests=false`, a resolve agent that writes `AKIAABCDEFGHIJKLMNOP` to `conf.env`): `land()` returns "" and `conf.env` is on origin/main. With the edit under Change needed, `land()` returns "...credential-shaped tokens ['conf.env: aws']; not pushed." and origin/main stays clean. The full selftest still passes with the edit. #136 (sibling) already adds a pre-gate guard re-run at this point in land().
+- none forge/forge.py:942-944, 977-979, end to end: the first check runs before `pr_open()` pushes (:790), so a hit never reaches origin. The `finally` block's `push --delete` (:1068) is a no-op for a branch that was never pushed. `fail()` runs `pr_close("")` because `self.pr` is still empty, so nothing is posted. The ticket note gets only `file: issuer`, never the token value, and the log `head` is cut to 200 characters. The repair check runs before the push at :980. With `pull_requests=false`, `pr_open()` does not push and the first check still runs. Exception path: `check=True` raises RuntimeError → `cycle`'s handler (no PR yet) → `finally` removes the worktree, the local branch and the remote branch → lane_loop → `recover()` → back to retry, uncharged. This is the same path `invisible_chars()` takes, so no ticket is left `in_progress` and no worktree is left behind. `bad` holds filenames the builder controls, but it only reaches `fail()` → `set_status` (file write) and `gh --body-file`, never a shell string. `SECRET` is compiled once at class level and `secrets()` only reads, so two lanes cannot write the same state. `gate.sh`, the reviewer, protected paths, prompts, quota and GPU paths are unchanged.
+- none forge/forge.py:600-602, regex against this box's real credentials (values never printed): `gh auth token` (`gho_`, 40 chars) → github; `~/.config/runpod/env` RUNPOD_API_KEY (`rpa_`, 50 chars) → runpod; first line of `~/.ssh/id_ed25519` → pem. False positives: 0 hits over reflex1 origin/main (933 tracked files) and 0 over the 7.2 MB of lines added on reflex1 main's first-parent history. reflex1 text files contain no base64 run of 200+ characters, and base64 data is the only realistic source of a random `AIza` match.
+- none forge/selftest.py:76,81, deletions: the two `-` lines are rewritten so that all five earlier guard lambdas stay verbatim, `secrets()` is added, and the count goes from 5 to 6. No layer is retired. The diff deletes no line from `forge/prompts/*.md` or the README table (README is +1).
+- low forge/selftest.py:172-183: only the `aws` and `pem` arms have a positive case. A typo in the github, anthropic, openai, runpod, slack, stripe or google arm would still pass the selftest. github, runpod and pem were checked against real credentials above; the other four arms have no check at all.
+- low forge/forge.py:944,979: the fail text "Read keys from the environment or a file outside the tree" becomes the ticket's `## forge` note, which the next yolo builder reads. It means "have the code read the key at run time", but it can be read as telling the agent to go and read credential files. builder.md:16 (notes cannot authorize credential use) covers this today. Optional wording: "have the code read the key from the environment at run time".
+- low forge/forge.py:609 with `sh()` :224: `check=True` puts `stdout[-2000:]` into the RuntimeError. In the repair position `self.pr` is set, and `cycle`'s handler (:1057-1058) posts `{e}` on the PR. If `git diff` exits non-zero after it has printed (a missing or corrupt object; or a timeout once sibling #40's rc-124 `sh()` lands), the end of the diff, which is exactly what this guard withholds, goes into a PR comment. The other guards share this. Not required here.
+- info: a file git treats as binary (a NUL byte, or a `-diff` attribute) shows as `Binary files ... differ` and is not searched (checked in a scratch repo). The README scopes the guard to "added lines", so the claim holds.
+- low slop forge/forge.py:599, :605-606, README.md:91:
+  - Both say "this repo" has no match. After merge, forge/selftest.py:174-175 matches (aws, pem): 2 hits on the PR-head tree, 0 on origin/forge.
+  - "A pushed key is public in seconds" is false for the one project forge builds: `ptlnextdoor/reflex1` is PRIVATE. Permanence in history holds; publicity does not.
+  - The README lists GitHub `ghp_`, but the regex covers `gh[pousr]_`, and the box's gh login token is `gho_`.
+  - Drop the "this repo" measurement from the comment and the README, and say "in history for good" without "public".
+- none siblings: 25 other open PRs on `forge` touch forge.py, README.md or selftest.py. None contradicts or duplicates this one.
+  - #136 adds `test_tampering()` at the same land() spot (after `touched_protected`, :857-859) for the same conflict session. It complements this PR, and Change needed follows its pattern. Whichever lands second resolves adjacent lines; neither needs to change.
+  - #16 (based 2026-10-23) inserts `autofix()` at this PR's insertion point before `pr_open()`. If it is rebased, the call belongs before `secrets()` so the scanned tree is the pushed tree. That change is on #16's side, and `cargo fmt` cannot create a token.
+  - #40 changes `sh()` timeouts to return rc 124. `secrets()` still raises on that under `check=True` (see the `check=True` finding above).
+- verification: the PR-head selftest, run in an isolated `git archive` tree, reported "all checks passed", including "credential-shaped tokens are refused per file...", "removing a key is no finding" and the 6-guard raise check.
+Change needed (only for MERGE WITH CHANGE):
+1. In forge/forge.py `land()`, directly after
+```
+            bad = self.touched_protected(wt, "origin/main")
+            if bad:
+                return f"resolving the conflict with main edited protected gate/ticket/harness-config paths {bad}; not allowed."
+```
+insert
+```
+            bad = self.secrets(wt)
+            if bad:
+                return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
+```
+2. In the README.md row, change "before the branch is first pushed and again before the repair push" to "before the branch is first pushed, again before the repair push, and in `land()` after a conflict resolution, before its push".
+
+
 ## PR #142 · 2026-11-05T22:27:00Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
