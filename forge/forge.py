@@ -239,11 +239,15 @@ class Forge:
             # cycle 28's builder and reviewer quoted the steward's `usage_limit_reached` bullet in LEARNINGS.md,
             # 5 of 264 sessions match in stdout and none of those was a provider error. Matching the whole
             # output takes the vendor out of every role's chain for the rest of the cycle on the first such
-            # session that also exits non-zero (a timeout is rc=124).
+            # session that also exits non-zero (a timeout is rc=124). An unreachable or 5xx provider ends the
+            # same way: omp retries a transient error 10 times and then exits 1 with "Retry budget exhausted
+            # after 10 retries: Couldn't connect to ..." on stderr (measured: 590 s against a refused base URL,
+            # nothing else written); without the match that session was a charged attempt with no diff, three
+            # of them blocked the ticket, and the vendor stayed first in every chain.
             # shortcut: _agent_once keeps the last 6 KB, so a refusal behind 6 KB of stderr noise loses the
             # marker and reads as a plain failure; widen that tail if a provider ever gets chatty on stderr.
             err = text.partition("\n[stderr]\n")[2]
-            if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", err, re.I):
+            if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota|Retry budget exhausted", err, re.I):
                 self.exhausted[model.split("/")[0]] = time.time()
                 self.log(f"quota: {model} exhausted; trying the next model for {role}")
                 continue

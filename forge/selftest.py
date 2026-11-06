@@ -720,6 +720,16 @@ with tempfile.TemporaryDirectory() as d:
     rc, text = f.agent("builder", "p", repo)
     check("the provider's own refusal on stderr falls back to the other vendor",
           ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
+    ran.clear(); f.exhausted.clear()
+    outs["a/b"] = (1, "\n[stderr]\nWorking...\nRetry budget exhausted after 10 retries: Couldn't connect to 127.0.0.1:9 (connection refused). Check that the server is running and reachable.\n")
+    rc, text = f.agent("builder", "p", repo)
+    check("omp giving up on an unreachable provider falls back to the other vendor",
+          ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
+    ran.clear(); f.exhausted.clear()
+    outs["a/b"] = (1, "\n[stderr]\nWarning: MCP server \"consensus\" failed to connect: ECONNREFUSED: Unable to connect.\nWorking...\n")
+    rc, text = f.agent("builder", "p", repo)
+    check("a connection warning from an MCP server, with a failed turn, keeps its vendor",
+          (rc, ran, f.exhausted) == (1, ["a/b"], {}), f"{ran} {f.exhausted}")
 
 # 11. A cycle that does not land must take its attempt branch off the remote; a branch already merged into
 # local main must stay (land() keeps it as the only copy when the merge commit did not reach origin/main).
