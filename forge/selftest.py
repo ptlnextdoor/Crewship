@@ -255,7 +255,7 @@ with tempfile.TemporaryDirectory() as d:
     comments: list[str] = []
     f.pr_comment = lambda pr, text: comments.append(text)
     f.reviewed = ("abc123", f.patch_lines(git("diff origin/main...HEAD", wt)))  # what the reviewer approved
-    why = f.land(wt, "land", "0001-x", "builder")
+    why = f.land(wt, "land", "0001-x", "builder", "")
     check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
     # The first pass rebased cleanly (nothing posted); the second landed the conflict session's "both", which
     # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced.
@@ -399,7 +399,7 @@ with tempfile.TemporaryDirectory() as d:
     git(f"worktree add -q -b landed {wt} main", repo)
     (wt / "src.rs").write_text("fn main() {}\n"); git("add -A", wt); git("commit -qm work", wt)
     git("push -q origin landed", wt)
-    why = f.land(wt, "landed", "0001-x", "builder")
+    why = f.land(wt, "landed", "0001-x", "builder", "")
     check("a branch landed by the local merge is deleted from the remote",
           why == "" and "landed" not in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
 
@@ -408,7 +408,7 @@ with tempfile.TemporaryDirectory() as d:
     git("add -A", Path(d) / "wt2"); git("commit -qm work2", Path(d) / "wt2")
     git("push -q origin unpushed", Path(d) / "wt2")
     f.push = lambda: None  # the merge commit never reaches origin
-    why = f.land(Path(d) / "wt2", "unpushed", "0002-y", "builder")
+    why = f.land(Path(d) / "wt2", "unpushed", "0002-y", "builder", "")
     check("a branch whose merge did not reach the remote is kept",
           why == "" and "unpushed" in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
 
@@ -743,7 +743,7 @@ with tempfile.TemporaryDirectory() as d:
           note[-300:])
 
     verdict[0] = "VERDICT: APPROVE"
-    f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
+    f.land = lambda wt, branch, tid, builder, ticket_text: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
     f.cycle()
     check("a branch merged into main is left for land() to decide",
           "forge/l1-" in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
@@ -873,9 +873,49 @@ with tempfile.TemporaryDirectory() as d:
     f.agent = resolve
     f.pr = ""
     f.gate = lambda cwd: (True, "")  # the gate is not the check under test; it also cannot check itself
-    why = f.land(wt, "b", "0001-t", "builder")
+    why = f.land(wt, "b", "0001-t", "builder", "")
     check("a conflict resolved by editing the gate does not land",
           "gate.sh" in why and "not to touch" not in git("show origin/main:gate.sh", repo), f"{why!r}")
+
+# 16b. The same session is told to "build and run the tests the conflicted files touch", and its commit is
+# gated but never reviewed. The gate passes with a test gone, so dropping one at the merge was the one way
+# past every check this loop has: the pre-gate test guard ran two agent turns earlier.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "a.txt").write_text("base\n")
+    (repo / "lib.rs").write_text("#[test]\nfn keeps() {\n    assert!(true);\n}\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    wt = Path(d) / "wt"
+    git(f"worktree add -q -b b {wt} main", repo)
+    (wt / "a.txt").write_text("branch\n")
+    git("add -A", wt); git("commit -qm 'builder work'", wt)
+    (repo / "a.txt").write_text("other lane\n")
+    git("add -A", repo); git("commit -qm other", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+
+    def resolve(role, prompt, cwd, timeout_min=None):
+        git("merge origin/main", cwd)
+        (cwd / "a.txt").write_text("both\n")
+        (cwd / "lib.rs").write_text("// test dropped while resolving\n")  # the gate still passes without it
+        git("add -A", cwd); git("commit -qm 'forge: merge main'", cwd)
+        return 0, ""
+
+    f.agent = resolve
+    f.pr = ""
+    f.gate = lambda cwd: (True, "")
+    why = f.land(wt, "b", "0001-t", "builder", "status: open\n# t\nFix the parser.\n")
+    check("a conflict resolved by dropping a test does not land",
+          "fewer test functions" in why and "#[test]" in git("show origin/main:lib.rs", repo), f"{why!r}")
+    # The ticket that asks for the removal still lands it: the guard reads the same waivers as the pre-gate run.
+    why = f.land(wt, "b", "0001-t", "builder", "status: open\n# t\nRemove the duplicate test.\n")
+    check("the ticket naming the removal lands the same resolution",
+          why == "" and "#[test]" not in git("show origin/main:lib.rs", repo), f"{why!r}")
 
 # 17. A usage window whose label names one model ("Claude 7 Day (Fable)", 100.0% used right now while
 # "Claude 5 Hour" is at 57.0%) belongs to that model. Taking the block's max marked the whole vendor, so
@@ -1114,7 +1154,7 @@ with tempfile.TemporaryDirectory() as d:
         return 0, ""
 
     f.agent = build_then_messy_review
-    f.land = lambda wt, branch, tid, builder: (at_land.append((git("status --porcelain", wt), git("rev-parse HEAD", wt).strip(), (wt / "src.txt").read_text())), "")[1]
+    f.land = lambda wt, branch, tid, builder, ticket_text: (at_land.append((git("status --porcelain", wt), git("rev-parse HEAD", wt).strip(), (wt / "src.txt").read_text())), "")[1]
     f.cycle()
     check("a reviewer's restored file, scratch and commit do not reach land()",
           at_land == [("", f.reviewed[0], "new\n")], repr(at_land))
