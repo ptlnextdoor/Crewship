@@ -218,8 +218,19 @@ class Forge:
         tmp.replace(self.state_file)
 
     def sh(self, cmd: str, cwd: Path | None = None, timeout: int = 600, check: bool = False) -> subprocess.CompletedProcess:
-        r = subprocess.run(cmd, shell=True, cwd=cwd or self.repo, stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                           timeout=timeout, env=self.env)
+        # Own process group, killed whole on timeout: subprocess.run's kill reaches only `sh -c`, and the cargo and
+        # test binaries gate.sh had started ran on as orphans (reflex1 lane 4, 2026-10-23, both `./gate.sh timed out
+        # after 1800 seconds` cycles), loading the box the other three gates run on and holding the lane's target-dir
+        # lock for the retry that started two minutes later. Same raise as before, so callers are unchanged.
+        p = subprocess.Popen(cmd, shell=True, cwd=cwd or self.repo, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env=self.env, start_new_session=True)
+        try:
+            so, se = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(p.pid, 9)
+            p.communicate()
+            raise
+        r = subprocess.CompletedProcess(cmd, p.returncode, so, se)
         if check and r.returncode:
             raise RuntimeError(f"{cmd} -> {r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
         return r
