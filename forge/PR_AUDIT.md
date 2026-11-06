@@ -2,6 +2,35 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #144 · 2026-11-06T05:36:58Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #144 planner: Done when names one spec-derived edge input
+What it changes: appends one sentence to the `## Done when` line of the ticket template in `forge/prompts/planner.md:23`. Any change that takes input must now have a criterion that runs it on a planner-named edge input, with its expected result, and "the builder's own tests do not count". It also inserts one safeguard row at `forge/README.md:28`. No code, selftest or other prompt is touched.
+Findings:
+- low forge/prompts/planner.md:23 "an edge input you name here from the spec" is required for every input-taking change, but "spec" has no referent: this is the only occurrence of the word in planner.md, and the planner's read list (line 3) is STEERING/SCORE/AGENTS/ROADMAP/PROGRESS/LEARNINGS/tickets. Whatever edge result the planner writes becomes binding. builder.md:20 runs it exactly as written. builder.md:21 refuses to move code toward a value that contradicts `## Done when`. reviewer.md:4 (step 1) PASS/FAILs against it. Nothing checks the value against a source, so an edge behaviour the planner guessed is enforced by both later sessions: wrong-but-conforming code can get APPROVE, or an unsatisfiable line burns attempts up to `max_attempts`. The cited paper's abstract itself reports that a blind audit flagged 34 contracts as stricter than their requirements. This does not bypass the gate or the reviewer, but the rule turns a guess into a contract. The scout's own note (SCOUT.md:3939) lists "a contrived edge criterion" as not checked.
+- low forge/prompts/planner.md:23 "the builder's own tests do not count as this criterion" reads against builder.md:12, which tells the builder to write the test for each acceptance criterion. Taken literally, an edge criterion for library code with no CLI cannot be a test the builder writes, which pushes the planner toward contrived commands or scope (a new bin). The paper's mechanism is that the spec writer fixes the input and the expected result, not the builder. The test body being written by the builder is fine.
+- low forge/README.md:28 "34 of reflex1's 140 tickets name one today" does not reproduce, and the scout's awk is not given. A keyword match over reflex1's `## Done when` sections (empty|boundary|malformed|edge) gives 30, and those hits are mostly output checks, not inputs: "`diff` empty" and "`git status --short` is empty" in 0017, 0024, 0029, 0039, 0041, 0042, 0044. Reading for actual edge inputs finds a handful: 0043 (oversized body), 0053 and 0058 (unknown track name). Separately, "(0.233 to 0.057 per attempt across model families)" overstates the source: the arXiv 2611.08269 abstract gives that pair as one example, from "all three open-weight families". The other figures match the abstract: 73 tasks, preregistered, 0.410 to 0.065, no drop in correct completion, "Self-tests helped less".
+- info forge/forge.py:555,486 The longer ticket text feeds two mechanical guards that read the ticket body before `## forge`. In `test_tampering`, a line matching `\b(remove|delete|drop)\b ... tests?` waives the test-count and assert-count checks. In `unrequested_deps`, any word that names a crate counts as naming it. Measured on reflex1: `drop_ok` matches 1 of 140 ticket bodies (0036, a deliberate "delete `reject_box` and its test") and 0 inside `## Done when`. The new sentence names no crate in reflex1's Cargo.lock. Exposure is low and needs no change.
+- info Deletions: none. The old planner.md:23 text is kept verbatim as a prefix (checked on the base and head blobs). The README deletes no row, and selftest.py is untouched. Placeholders are identical on base and head (`{GATE} {GPU_BUDGET} {GPU_LEFT} {LANES} {MIN_TICKETS} {NEED} {PROJECT} {READY}`), so `prompt()` (forge.py:146-160) renders as before and its missing-placeholder check is unaffected.
+- info Blast radius traced:
+  - No forge.py change: gate.sh, `self.protected`, claim, `recover()`, quota, timeouts, PR create/merge and gpu.py are all untouched.
+  - Planner writes stay confined to `tickets PROGRESS.md ROADMAP.md` by `commit_docs` plus `discard_strays` (forge.py:1137-1150). An edge-input fixture the planner writes anywhere else is reset, so the input has to sit inline in the ticket.
+  - Forge never runs `## Done when` text itself; only the agent sessions do. That adds no new shell path from ticket text. The only model text forge shell-quotes is the title.
+  - Prompt growth is one sentence in planner.md and about one line per ticket.
+- info Sibling PRs on `forge`: 25 open PRs touch forge/README.md, and #31 also touches forge/prompts/planner.md. #31 adds a `touches:` template line and rewrites the Parallelism rule; those are separate hunks from line 23 and do not contradict this PR. The README rows the siblings modify (#8, #20, #28, #84, #86, #136: the gate, vendor, rebase and test-tampering rows) and the rows they add (#16, #19, #23, #25, #31, #39, #40, #42, #44, #47, #48, #79, #83, #85, #99, #111, #117, #139, #140) neither duplicate nor contradict the edge-input row. #140 (old-code runs for file-removing tests) is related in theme but compatible.
+- info The PR body's claims match the diff: two files, no forge.py change, and the paper numbers except the "across model families" wording above. Its selftest claim is not re-run here; the placeholder check was verified directly. The one comment is Copilot's quota notice and makes no claims.
+Change needed:
+1. forge/prompts/planner.md:23: replace the appended sentence (from "When the change takes input" to the end of the line) with:
+   "When the change takes input and a file or doc you can name defines its result on an edge input (empty input, the boundary value, the other input type, a malformed row), at least one criterion runs it on that input with that result and names the source; a test the builder writes counts when this line fixes its input and expected result. Typical inputs alone pass wrong code, and an edge result no source defines is a guess the builder then has to match, so leave that one out."
+2. forge/README.md:28, in the same edit:
+   - Replace "names at least one edge input from the spec (empty, boundary, the other type, malformed) with its expected result" with "names at least one edge input (empty, boundary, the other type, malformed) with its expected result and the file or doc that defines it".
+   - Replace "(0.233 to 0.057 per attempt across model families)" with "(per attempt, for example 0.233 to 0.057, in all three open-weight families)".
+   - Delete "; 34 of reflex1's 140 tickets name one today".
+
+
 ## PR #143 · 2026-11-06T01:32:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
