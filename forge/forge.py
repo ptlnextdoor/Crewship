@@ -830,7 +830,7 @@ class Forge:
     def pr_merge(self, pr: str, branch: str, body: str = "") -> bool:
         """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge.
         `body` is the merge commit's message body (git trailers): the subject stays GitHub's default, which
-        `status_text()` matches on."""
+        `main_gated()` matches on; on the gh path it replaces GitHub's default body (the PR title on reflex1)."""
         if not pr:
             return False
         # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
@@ -858,6 +858,13 @@ class Forge:
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
         the merge re-syncs and re-gates instead of costing the attempt."""
         posted = ""  # the last delta posted: each pass reports against the reviewed patch, once per change
+        # The landing merge is the one commit every landed ticket has, and a clone of the repo keeps it where the
+        # PR body (pr_open's stamp) stays on GitHub: 0 of reflex1's 627 main commits name the model that built
+        # them (arXiv 2606.24429: a PR census and a commit census of the same agents are nearly disjoint).
+        # Read before rebase_onto_main(): its conflict session can run on a fallback model and overwrite
+        # last_model[builder]; the trailer names the model that wrote the reviewed diff (cycle()'s built_by).
+        model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
+        trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}"
         for _ in range(3):
             if not self.rebase_onto_main(wt, builder):
                 return "could not bring the branch up to date with main (conflicts the builder could not resolve)"
@@ -885,11 +892,6 @@ class Forge:
             ok, gout = self.gate(wt)
             if not ok:
                 return f"gate failed after updating from main.\n{gout}"
-            # The landing merge is the one commit every landed ticket has, and a clone of the repo keeps it where the
-            # PR body (pr_open's stamp) stays on GitHub: 0 of reflex1's 627 main commits name the model that built
-            # them (arXiv 2606.24429: a PR census and a commit census of the same agents are nearly disjoint).
-            model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
-            trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
             if self.pr_merge(self.pr, branch, trailer):
