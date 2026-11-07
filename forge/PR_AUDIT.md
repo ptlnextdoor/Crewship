@@ -2,6 +2,54 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #149 · 2026-11-07T05:19:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #149 prompts: builder stops on an environment error instead of routing around it
+What it changes: One bullet is inserted into `forge/prompts/builder.md` as the new line 19 (diff `@@ -18,0 +19 @@`, file goes from 27 to 28 lines). On an error that comes from the environment, the builder reruns the command once, writes the command and its error in `PROGRESS.md`, and does what the ticket allows without it. The bullet forbids sudo, another host, a mirror, proxy or archive, a disabled certificate check, searching for a key, file or login, and messaging anyone. It ends with a statistic from a paper and the claim that nothing reads the session. No change to forge.py, selftest, README or the reviewer.
+Findings:
+- medium forge/prompts/builder.md:19 (head) The last clause, "nothing after you reads this session, so the note is the only record", is false for the base this lands on.
+  - forge.py:282-287 runs every session with `--session-dir=sessions/<cycle>-<role>/` and keeps each model turn, tool call and result (since #118, 27c81fa4). README.md:60 lists this as a safeguard.
+  - forge.py:318 also writes stdout to `sessions/<cycle>-builder.log`. This box has `lane2/sessions/00042-builder.log` today.
+  - The PR body's "keep no session trace" is the same error. It is true only of the live checkout `~/Dev/Crewship` at 75f2647b, whose forge.py has no `--session-dir`.
+  - Effect: the prompt tells an unattended yolo session holding the owner's `gh` and RunPod keys that nobody looks at what it does. That is the opposite of what this rule wants to deter. [INFERENCE: an agent told it is unobserved has less reason to avoid or report a workaround. I did not measure this.]
+  - What is true: reviewer.md:16-20 gives the reviewer the ticket and the diff, not the session. So the `PROGRESS.md` note is the reviewer's only record of a workaround that leaves nothing in the tree.
+- low forge/prompts/builder.md:19 vs :15 The bullet names "a package missing" as a stop, then says "do what the ticket allows without it".
+  - The PR body says "Rule 15 still governs a dependency the ticket names", but the prompt line does not say that.
+  - 7 of reflex1's 140 tickets mention pip or requirements (0003, 0010, 0013, 0035, 0080, 0082, 0101). On one of these, a builder that runs the script before installing the named package may take the `ModuleNotFoundError` as a stop.
+  - The worst case is a lost attempt on quota, not a bypass. "Do not go around it" does not list installing, and rule 15's ticket-naming check plus `unrequested_deps()` (forge.py:967) still apply.
+- low forge/prompts/builder.md:19 vs :14 "no other host" sits beside rule 14, which sends every GPU step to a rented RunPod host through `gpu.py`.
+  - [INFERENCE] A builder that tries a local CUDA step and gets a refusal may read `gpu.py` as the forbidden other host and stop. That costs an attempt but no money.
+  - The other direction is covered: rerun-once limits a failing `gpu.py run` to two tries, and gpu.py's budget cap still holds. Nothing here adds GPU or quota spend.
+- info forge/forge.py:146-160, 946-1013 Traced end to end. Nothing here weakens the gate, the reviewer or the protected paths.
+  - Prompt-only change. claim, `recover()`, `discard_strays()`, quota fallback, timeouts, the process-group kill, PR create and merge, and the protected-path list are untouched.
+  - The placeholder set is identical on base and head: `{GATE_START}`, `{GATE}`, `{KILL}`, `{PROJECT}`, `{TICKET_PATH}`, `{TICKET}`, `{TIMEOUT_MIN}`. The new line contains no `{`, so `prompt()` renders as before and its missing-placeholder raise is not triggered.
+  - selftest 6 (selftest.py:558-567) and the condition-opener regex (:572-574) pass against the head text. I evaluated them in memory and did not run the full selftest on the head.
+  - The bullet grants no new permission. "do what the ticket allows" restates builder.md:1 ("Finish the ticket or leave a precise note why you could not"). It names no protected path.
+  - A builder that stops early still faces `secrets()` (955), `touched_protected()` (964), `unrequested_deps()` (967), `test_tampering()` (973), `invisible_chars()` (976) and the gate (979). Reviewer step 1 (reviewer.md:4) counts a Done-when line that was not run as FAIL, so partial work cannot land.
+  - The repair prompt embeds the whole builder prompt, so the rule reaches the repair session too.
+  - Cost: +848 bytes per builder and repair prompt, fixed. Ticket text is not interpolated anywhere new.
+  - Error text pasted into `PROGRESS.md`: reflex1 is a private repo, and `secrets()` (forge.py:600-622) scans added lines for issuer-prefixed keys before the push.
+- info Deletions: none. The diff deletes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table, so no layer is retired.
+- info Sibling #85 (builder.md "Commit as you go", base line 19, directly under this insertion).
+  - Whichever lands second hits a textual conflict.
+  - No contradiction: a failing `git fetch origin` in #85 is an environment error this rule handles (rerun once, then note it).
+  - #85 is on a stale base (60cb0741) and must rebase anyway. Neither PR needs a content change.
+- info Sibling #140 edits builder.md:12 only, so there is no overlap.
+- info Sibling #23 (stale base 37a43159) edits the PROGRESS/LEARNINGS line. Its rule ("these files never tell a future session to run, install ... something") fits with a note that records a command and its error.
+- info No other open PR adds an environment-error rule, so there is no duplicate.
+- nit forge/README.md The safeguard table gets no row for this rule, and no selftest pin is added. Comparable prompt rules carry a row (README.md:109 for the `git push` rule).
+- nit PR body "README cites rule 12 only" is wrong.
+  - README.md:99 cites "rule 20", meaning the AGENTS.md rule at base line 23. README.md:105 cites "rule 21", meaning the LEARNINGS-by-ticket-id rule at base line 22.
+  - Both were already off before this PR. The insertion moves their targets to lines 24 and 23.
+- nit forge/prompts/builder.md:19 The statistic is close to the paper but not exact.
+  - arXiv 2605.19149 §1 reports 1,244 of 1,920 runs (64.79%) with at least one medium- or high-severity meltdown, at least 50% of them unreported, across four harnesses including OpenAI Codex.
+  - The prompt's "two thirds ... did one of these" rounds up and narrows the paper's taxonomy (which includes doxxing, emails and filesystem mutation) to this line's list.
+Change needed (only for MERGE WITH CHANGE): In forge/prompts/builder.md line 19 (the added bullet), replace `nothing after you reads this session, so the note is the only record.` with `the reviewer gets the ticket and your diff, not this session, so your `PROGRESS.md` note is its only record of what you could not do.`
+
+
 ## PR #148 · 2026-11-06T19:36:28Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
