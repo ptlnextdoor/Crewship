@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #150 · 2026-11-07T11:28:54Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #150 prompts: reviewer step 7 greps for a duplicate of each added symbol
+What it changes: one line, forge/prompts/reviewer.md:10 (step 7). The old sentence stays word for word. The PR appends a duty: for each function, type or script the diff adds, `rg` the repo for its name and for its verb and noun, and name the existing symbol that already does the job. It also appends a parenthetical rationale taken from RepoReuse (arXiv 2609.35357).
+Findings:
+- low forge/prompts/reviewer.md:10. The parenthetical gives the reviewer a base rate that the cited paper did not measure for this setup. It reads "a builder reads less of the repo the longer a ticket runs and leaves duplicated logic in half of multi-step chains by the fifth step, so the second copy is the one to expect". The arXiv 2609.35357 abstract (read) describes a multi-turn benchmark where "requirements are revealed turn by turn and the workspace accumulates across turns", with 50.8% of task chains duplicated by turn 5. A forge builder is a single `omp -p` session on one ticket, given whole (builder.md, forge.py:935-988). That is not a chain of turns, so "the longer a ticket runs" is unsupported. Effect: this priming sits on top of `rg` for generic verbs and nouns, which hits widely in a Rust+Python+JS repo, and pushes toward duplicate claims. The verdict rule (reviewer.md:12) does not cover step 7, so a reviewer that REJECTs on such a claim costs a builder session and a 30-minute review on shared quota (forge.py:1033, :1054; max_attempts bounds it). This does not make bad work more likely to be approved.
+- low forge/prompts/reviewer.md:10. "Check the last one the way the builder was told to before adding anything" points at builder.md:9, which the reviewer never sees. The reviewer prompt is rendered only from reviewer.md (forge.py:146-160, :1032), and the reflex1 worktree has no forge/prompts. The sentence then spells out its own procedure (without builder.md:9's `git log -S`), so the reference adds nothing.
+- info forge/prompts/reviewer.md:10,12. A duplicate the reviewer names has no defined outcome, and the PR body says so ("step 7 is still not a REJECT step by itself"). On APPROVE the finding goes only into the PR comment (forge.py:1043). Nothing reads PR comments later: forge.py has no comment read, and steward.md has no review input. Only a REJECT carries it to the retry (forge.py:1054). The new `rg` work therefore pays off only when the reviewer chooses to reject. Step 7 already worked this way before the PR, so this is not a blocker.
+- info deleted line reviewer.md:10 (old step 7). A word diff (`git diff --word-diff=porcelain`) removes 0 tokens and adds 1 run. The old text survives verbatim and still asks the reviewer about needless abstraction, dead code, heavy dependencies and duplicated logic. No layer is removed. Nothing is deleted from builder.md, selftest.py or the README table.
+- info Traced, no issue:
+  - forge.py is not touched. The change does not reach the gate, protected paths (`touched_protected`, STEERING.md), claim/`recover()`/`discard_strays()`, quota, GPU or the PR flow.
+  - The `{...}` placeholder counts are identical between base 4841b848 and the PR head, so `prompt()` renders as before.
+  - Step 7 still opens with "Will" (the selftest 6 rule on If/When openings passes).
+  - The new text names no protected path and grants no edit; `rg` is read-only, consistent with "Do not edit files".
+  - Cost is +509 characters per review prompt, fixed. Run-time cost is up to 3 `rg` calls per added symbol with no cap. It is bounded by the 30-minute review timeout and the single rerun (forge.py:1033-1041). [INFERENCE: on large diffs this slightly raises the chance of a verdict-less timeout, which is charged as a REJECT.]
+  - `python3 forge/selftest.py` passes on a `git archive pr/150` copy ("all checks passed").
+- info PR body claims checked against reflex1 (`gh api repos/ptlnextdoor/reflex1/issues/comments`, read-only):
+  - 105 "**review by" comments, 99 with a VERDICT line (the body says 108).
+  - None reports a duplicate as a finding.
+  - At least 6 assert "no duplication" / "not duplicated" with no command shown (PRs 46, 48, 60, 63, 78, 112). The direction holds; the counts differ.
+  - "Steps 1-6 each name a command" is not true of step 4, which names none.
+  - "builder.md rule 9" means builder.md line 9, the reuse rule.
+- nit forge/README.md, forge/selftest.py. The new reviewer duty gets no safeguard-table row, unlike comparable reviewer steps (README.md:81, :87, :95). It also gets no pin in selftest.py:556-567, which pins other reviewer rules. A later edit that drops the sentence fails no check. With the change below, the rationale lives only in the PR body.
+- info sibling #23 ("review instruction-file hunks as instructions", base 6a759894, 2026-10-24) rewrites the same line:
+  - It turns step 7 into an instruction-file step, renumbers the old step 7 as 8 (text kept) and extends the reject rule to steps 1-7.
+  - That is a textual conflict on reviewer.md:10, not a contradiction: #150's sentence would ride along in #23's step 8.
+  - #23 is stale, and base reviewer.md:7 (step 4) already carries most of its rule. #23 is the side to change: rebase or close.
+- info siblings #25 (Diff header), #86 (line 1) and #140 (step 3) edit other lines of reviewer.md. No contradiction or duplicate.
+Change needed (only for MERGE WITH CHANGE): in forge/prompts/reviewer.md:10, replace the text the PR appends after "duplicated logic that already exists in the repo." with:
+For the last one, `rg` the repo for the name of each function, type or script the diff adds and for the verb and noun in it, and name the existing symbol that already does the job, if one does; "reuses existing helpers" with no `rg` behind it is a claim, not a finding.
+
+
 ## PR #149 · 2026-11-07T05:19:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
