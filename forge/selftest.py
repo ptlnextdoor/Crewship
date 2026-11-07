@@ -299,6 +299,19 @@ with tempfile.TemporaryDirectory() as d:
     rc, text = f._agent_once("reviewer", "c/d", "high", big, repo, 1)
     check("a 200,000-char prompt reaches the agent", rc == 0 and text.rstrip().endswith("END-OF-PROMPT"), text[-200:])
 
+    # 4g'. A process the session backgrounded with its output redirected does not outlive the session: omp
+    # exits normally, forge kills what is left of its process group (a `cargo run ... --port 8765 &` server
+    # would hold the port for the next lane). The stub writes the stray's pid to a file; the check signals it.
+    (bindir / "omp").write_text(f'#!/bin/sh\nsleep 300 >/dev/null 2>&1 &\necho $! > "{bindir}/stray.pid"\necho done\n')
+    rc, text = f._agent_once("builder", "c/d", "high", "p", repo, 1)
+    stray = int((bindir / "stray.pid").read_text())
+    try:  # SIGKILLed but not yet reaped by init shows as a zombie (state Z); that is killed
+        alive = Path(f"/proc/{stray}/stat").read_text().rsplit(") ", 1)[1][0] != "Z"
+    except FileNotFoundError:
+        alive = False
+    check("a process the session left running is killed when the session exits", rc == 0 and not alive, f"rc={rc} pid {stray} alive={alive}")
+    (bindir / "omp").write_text('#!/bin/sh\nfor a; do case "$a" in @*) cat "${a#@}";; esac; done\n')  # 4k reads the prompt back
+
     # 4h. The steward's SCORE.md edit is committed (its prompt tells it to keep SCORE.md true); code it touches is still discarded.
     # Every path in the steward's `git add` must exist: a missing pathspec makes git add stage nothing.
     git("checkout -q main", repo); git("pull -q origin main", repo)

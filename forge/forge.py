@@ -294,6 +294,14 @@ class Forge:
                                  start_new_session=True, env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
             try:
                 so, se = p.communicate(timeout=timeout)
+                # omp exited, but a server the builder backgrounded with its output redirected outlives it (reflex1
+                # tickets 0009/0018/0025/0034 say `cargo run -p reflex-serve -- --port 8765 &`; LEARNINGS.md: the
+                # sandbox blocks pkill) and holds the port for the next lane's "Done when". Same process group: one kill.
+                try:
+                    os.killpg(p.pid, 9)
+                    self.log(f"agent {role} left processes running after it exited; process group killed")
+                except ProcessLookupError:
+                    pass
             except subprocess.TimeoutExpired:
                 # Measured before the SIGTERM: omp's signal handler appends a session_exit entry to the session
                 # file, so read after the kill every session that got one model reply shows 0 min.
