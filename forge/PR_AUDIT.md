@@ -2,6 +2,35 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #155 · 2026-11-07T23:20:52Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #155 forge: builder previews a computed delete target before running it
+What it changes: Appends one sentence to builder rule 18 (builder.md:18). Before a recursive delete, move or overwrite whose target was not typed out in full, the builder runs the same pipeline with `echo`/`ls -d` in place of the destructive command, reads every printed path, quotes paths, and uses `-print0 | xargs -0`. The PR also adds a safeguard row at README.md:112 and one string check in section 6 of the selftest (selftest.py:580). forge.py is not touched.
+Findings:
+- low forge/prompts/builder.md:18 The new sentence is placed inside the bullet that opens "Outside this worktree (the owner's other repos, datasets, checkpoints)…", and its only example is a `~/Library` path. The PR body explains that rule 18's copy-aside step "never fired because the agent believed the target was its own". That is the same scope judgement the placement now asks the builder to make before the preview applies. In forge the likely case is a computed path the builder believes is inside its worktree, such as `rm -rf "$OUT/..."` with `OUT` empty or `$(dirname "$x")` climbing out. Read by its bullet, the preview can be skipped for exactly that case. The sentence's own wording has no scope, and the README row (README.md:112) states the rule with no scope, so the prompt and README disagree on where it applies. The fix is to name the scope inside the sentence, not to move it to a new bullet: README.md:35/99/106 and forge.py:474/544 cite builder rules by line number, and a new bullet would shift every rule from 19 on.
+- nit forge/prompts/builder.md:18 "is where this week's losses came from" puts a relative date into a prompt every builder and repair session reads for months. It is stale within a week. The Change below drops it.
+- nit forge/prompts/builder.md:18 For an overwrite done by shell redirection (`cmd > "$out"`), replacing "the deleting command" with `echo` keeps the `>`, so the preview itself truncates the target. Not required for this PR. A model that echoes the path, as the sentence's "read every path it prints" implies, avoids it.
+- info forge/prompts/builder.md:18 (deleted line) The diff deletes the old rule 18 line, but the new line starts with it byte for byte (checked: head line 18 `startswith` base line 18 → True). No layer is removed: the copy-aside, restore and PROGRESS-note steps are still in rule 18 and in README row 56. The diff deletes nothing from selftest.py or the README table. The PR body's "No line removed" is accurate in content.
+- info forge/selftest.py:580 I extracted the PR head (751f9386) to a scratch dir and ran `python3 forge/selftest.py` on it: 143 `ok`, 0 `FAIL`, exit 0, "all checks passed". The new check is False on `origin/forge`'s builder.md and True on the head's. The section-6 conditional-opener check still passes, because the sentence is mid-bullet. The selftest check follows the existing section-6 pattern of checking prompt strings.
+- info forge/forge.py:146/963/1005 The set of placeholders in builder.md is unchanged, so `prompt()`'s missing-placeholder refusal is not affected. The prompt grows from 10,440 to 11,064 characters (+624) for every builder session and every repair session, since the repair embeds `bprompt()` whole at :1005. The growth is fixed, not per ticket. Nothing in the text touches the gate, the reviewer prompt, the protected paths (`gate.sh`, `tickets/`, `.forge/`, `STEERING.md`), tests, quota, GPU, the claim race, `recover()` or `discard_strays()`. It adds a precondition to destructive commands and grants no permission.
+- info forge/README.md:112 Checked against the cited sources and repo:
+  - "rule 18" matches how the table cites builder rules (by line number).
+  - The repos it names are real: `~/Dev/reflex1` is `projects/reflex1.toml:3`, and README row 56 already cites `~/code/reflex`.
+  - "same approvals, no sandbox" holds: `--approval-mode=yolo` at forge.py:287, and no sandbox setting in forge.py or omp.yml.
+  - UnderSpecBench (arXiv 2607.02294) matches the description: wrong-target outcomes under target underspecification, and agents "guess".
+  - The Reddit post 1xqfp7m returned HTTP 403, so I could not verify it. Same-week posts of the same class exist (r/ClaudeCode 1xnt15t, "deleted my full local repo + full git").
+  - I did not check Hasan and Biswas (ASE 2026).
+- info siblings: #140 (builder.md:12 Tests rule, README row, a section-6 selftest check) is about tests that delete files. Its rules: such a test stays inside a tempdir it created, and is not run against unfixed code when it resolves an unsettable path. #155 is about shell commands with computed targets. They complement each other: no contradiction, no duplication, and neither needs a content change. Both add a section-6 check, so the second to land may need a trivial textual rebase. #85 (builder.md commit rule) and #23 (a "When done" line that no longer exists on `forge`) do not touch rule 18. The README/selftest-only siblings add rows or checks on unrelated topics and delete no destructive-command coverage: #148, #145, #139, #136, #133, #132, #117, #111, #99, #86, #84, #83, #79, #48, #47, #44, #42, #40, #39, #31, #28, #25, #20, #19, #16.
+- info PR state: `mergeable: MERGEABLE`, `CLEAN`. The base 11135436 differs from `origin/forge` (aea4176b) only in SCOUT.md. The one PR comment is Copilot's quota notice, with no review content. The body has no hidden HTML.
+Change needed: In forge/prompts/builder.md line 18, make two replacements in the appended sentence:
+- Replace `A recursive delete, move or overwrite whose target you did not type out whole` with `In this worktree as well as outside it, a recursive delete, move or overwrite whose target you did not type out whole`.
+- Replace `is where this week's losses came from` with `is how such commands have wiped home directories`.
+Leave the rest of the line unchanged. The selftest strings "replaced by `echo` or `ls -d`" and "`-print0 | xargs -0`" are kept, and no rule numbers shift.
+
+
 ## PR #154 · 2026-11-07T21:20:08Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
