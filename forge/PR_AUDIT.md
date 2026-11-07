@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #154 · 2026-11-07T21:20:08Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #154 forge: secrets() refuses a password typed into a command
+What it changes: adds a `password` group to `Forge.SECRET` (a literal of 8+ chars after `PGPASSWORD=`/`MYSQL_PWD=`/`sshpass -p`, `Authorization: Bearer` + 20 chars, `://user:pass@host.tld`), so `secrets()` refuses it before each push and `redact()` masks it in every posted body; extends selftest 2e'' and README row 92 to match.
+Findings:
+- medium forge/selftest.py:177-183 Three of the five new shapes and quoted literals are not pinned. `secrets()` reports one `file: class` entry per file, and `deploy.md` holds three positives (sshpass, Bearer, URL), so each one hides the others. `MYSQL_PWD=` has no positive anywhere, and the `redact()` check covers only `PGPASSWORD=`. Mutation run on a copy of the PR tree: (a) I deleted the `Authorization: Bearer`, `://user:pass@` and `MYSQL_PWD=` alternatives from forge.py:609-610 and selftest still exited 0 with 0 FAIL; (b) I deleted the optional `['\"]?` so `PGPASSWORD='hunter2hunter2'` and `sshpass -p 'Sup3rSecret!'` no longer match, and selftest still exited 0. After the merge, this selftest is the base selftest that `reviewctl.gate()` runs on every later forge PR (reviewctl.py:118), so a later edit can drop most of the guard with the suite green.
+- low forge/forge.py:603 The comment says "a value that starts with ... or a quote ... passes". That is wrong: `['\"]?` consumes the quote and the literal behind it is refused (my probe: `PGPASSWORD='hunter2hunter2'` and `PGPASSWORD="hunter2hunter2"` both match `password`, and `deploy.md` relies on it). Only a quoted `$…`/`{…}`/`<…>`/`%…`/`(…`/`\…` passes. The PR body repeats the claim. Combined with the finding above, an edit that "fixes" the code to match the comment passes selftest (mutation (b)).
+- low forge/forge.py:604-605 "this repo have no match in any tracked file" stops being true on merge: line 609 matches its own pattern (`PGPASSWORD=|MYSQL_PWD=|sshpass` fits the value class; my scan of every added line in this repo's history found it in d8494620). Traced impact is cosmetic. `forge/projects/` holds only `reflex1.toml`, so no lane runs `secrets()` on Crewship. reviewctl's `Forge.redact()` (reviewctl.py:186,243,250) will mask that line wherever an audit or close note quotes it.
+- low forge/README.md:92 The row overstates coverage. "`://user:pass@` before a dotted host": an IP host is dotted but passes, because the TLD must be `[a-z]{2,}` (`postgres://admin:realpassword@10.0.0.5:5432/db` → no match). An empty user also passes (`redis://:hunter2hunter2@cache.example.com`). The prevents column counts `mysql -p` in the miss this row closes, but forge.py:604 deliberately lets `mysql -p<pass>` through. These are false negatives only; no existing shape is weakened.
+- low forge/forge.py:887,972,1007 A false positive costs a whole builder session as a charged attempt (`secrets()` has no ticket waiver). The fail text ("a fixture needs a value no issuer would mint") does not say what passes for `password`. My probes are refused: `https://user:password@example.com` (the stock URL fixture) and `Authorization: Bearer YOUR_ACCESS_TOKEN_HERE`. Measured exposure is zero. reflex1 `origin/main` (932 tracked files): 0 matches. Every added line in reflex1's local history (`git log --all -p`): 0 matches. Crewship `origin/forge` and `origin/main`: 0 matches. Crewship history has one hit, `PGPASSWORD=postgres` in `fleet/shared-supabase/check.sh` (0cc465d6), which is a true positive under the rule. Acceptable as is.
+- none forge/forge.py:607-610 Traced end to end. `SECRET` is read only by `secrets()` (forge.py:620; called in the `land()` conflict path at 887, before `pr_open()` at 972 and before the repair push at 1007) and by `redact()` (613; used in `set_status()` 399, `gh()` 794 and reviewctl). The new group only adds matches: every earlier alternative is unchanged and tried first, and `m.lastgroup` is `password` (the group holds no inner capture group). No alternative can match whitespace, so a match cannot span lines or eat a `VERDICT` line in a redacted body. There is no nested quantifier, so no ReDoS. The diff adds no new exception path, no shared state, no prompt or protected-path change, and no GPU spend.
+- none forge/selftest.py, forge/README.md No safeguard line is deleted. 2e'' keeps the `pem`/`aws` expectations and the hex/bare-prefix negatives. The new negatives sit in `NOTES.md`, where a password false positive would show up as a separate `NOTES.md: password` entry and fail the check. The word diff of README row 92 shows insertions only. Prompts are untouched.
+- none siblings: 29 other open PRs on `forge` touch forge.py, README.md or selftest.py. None of them touches `SECRET`, `redact()`, `secrets()` or selftest 2e''. The README hunks of #99, #111, #117 and #140 add unrelated rows (adjacent text only). No contradiction and no duplicate.
+- none verification: PR selftest on PR forge.py: exit 0, 0 FAIL. The PR's two new checks FAIL on base forge.py, so the claim holds. Base selftest (what `reviewctl.gate()` runs) on PR forge.py: exit 0.
+Change needed: (1) In forge/selftest.py, right after line 183 (the `redact replaces a typed password with its class` check), add:
+```python
+    for i, s in enumerate(("PGPASSWORD='hunter2hunter2'", "MYSQL_PWD=hunter2hunter2", "sshpass -p 'Sup3rSecret!'",
+                           "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefgh.ijklmnop", "postgres://admin:s3cr3tpass@db.supabase.co")):
+        check(f"redact replaces typed-password shape {i}", "[password redacted]" in f.redact(s), f.redact(s))
+```
+On the PR head, all five checks pass. Under mutation (a), shapes 1, 3 and 4 fail; under mutation (b), shapes 0 and 2 fail.
+(2) In forge/forge.py:602-605, replace "a value that / starts with `$`, `{`, `<`, `%`, `(`, `\` or a quote is a reference or a placeholder and passes, so does / `mysql -p<pass>`, which is also the prompt flag. reflex1 main (627 commits) and this repo have no match in / any tracked file." with "a value that / starts with `$`, `{`, `<`, `%`, `(` or `\`, quoted or not, is a reference or a placeholder and passes (a quoted / literal does not), so does `mysql -p<pass>`, which is also the prompt flag. reflex1 main (627 commits) and this / repo have no match in any tracked file but this pattern's own line."
+
+
 ## PR #153 · 2026-11-07T18:13:38Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
