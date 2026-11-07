@@ -181,6 +181,9 @@ with tempfile.TemporaryDirectory() as d:
     got = f.secrets(repo)
     check("credential-shaped tokens are refused per file with the issuer; hex, bare prefixes and referenced passwords pass", got == ["NOTES.md: pem", "deploy.md: password", "run.sh: password", "src/a.rs: aws"], str(got))
     check("redact replaces a typed password with its class", f.redact("PGPASSWORD=hunter2hunter2 psql -h db.example.com") == "[password redacted] psql -h db.example.com")
+    for i, s in enumerate(("PGPASSWORD='hunter2hunter2'", "MYSQL_PWD=hunter2hunter2", "sshpass -p 'Sup3rSecret!'",
+                           "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefgh.ijklmnop", "postgres://admin:s3cr3tpass@db.supabase.co")):
+        check(f"redact replaces typed-password shape {i}", "[password redacted]" in f.redact(s), f.redact(s))
     git("push -q -f origin work2:main", repo)
     (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm unkey", repo)

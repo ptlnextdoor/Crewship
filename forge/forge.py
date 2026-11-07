@@ -600,9 +600,9 @@ class Forge:
     # token in an `Authorization:` header, or `://user:pass@` before a dotted host, the shapes format-only scanners
     # let through (Apiiro, 2026-11-05: of 1,122 `.claude/settings.local.json` files on GitHub with a real secret,
     # 215 were flagged by neither gitleaks nor TruffleHog, a password typed into a command in most); a value that
-    # starts with `$`, `{`, `<`, `%`, `(`, `\` or a quote is a reference or a placeholder and passes, so does
-    # `mysql -p<pass>`, which is also the prompt flag. reflex1 main (627 commits) and this repo have no match in
-    # any tracked file.
+    # starts with `$`, `{`, `<`, `%`, `(` or `\`, quoted or not, is a reference or a placeholder and passes (a quoted
+    # literal does not), so does `mysql -p<pass>`, which is also the prompt flag. reflex1 main (627 commits) and this
+    # repo have no match in any tracked file but this pattern's own line.
     SECRET = re.compile(r"(?P<aws>AKIA[0-9A-Z]{16})|(?P<pem>-----BEGIN [A-Z ]*PRIVATE KEY-----)|(?P<github>gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"
                         r"|(?P<anthropic>sk-ant-[A-Za-z0-9_-]{32,})|(?P<openai>sk-proj-[A-Za-z0-9_-]{32,})|(?P<runpod>rpa_[A-Za-z0-9]{32,})"
                         r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})"
