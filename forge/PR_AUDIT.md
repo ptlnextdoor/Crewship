@@ -2,6 +2,64 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #151 · 2026-11-07T15:41:09Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #151 forge: landing merge commit carries Builder/Forge trailers
+What it changes: `land()` builds `Builder: <model>\nForge: <version> on <omp release>` after the landing gate. It passes this to `pr_merge()` as `gh pr merge ... --body <trailer>`, and to the local fallback as a second `git merge -m`. The PR also adds README row 101 and one selftest check after 4o (local path only).
+Findings:
+- low forge/forge.py:891 (with :770, :250, :1026, :805): the trailer can name the wrong builder.
+  - Cause: `model` is read after `rebase_onto_main()`. When rebase and merge both conflict, that function runs `self.agent(builder, ...)` (:770). If the builder's vendor was marked exhausted since the build, `agent()` runs the role's fallback and overwrites `last_model[builder]` (:250).
+  - Effect: the trailer names the conflict session's model. The PR body (`pr_open` :805), the reviewer choice and the ticket's "Landed by" note (`built_by` :1026) name the model that wrote the reviewed diff. Two records of the same landing disagree in the one field this PR adds.
+  - Throwaway smoke on the PR-head `forge.py`, real `land()` on the local path. Setup: builder `a/b` with fallback `c/d`, vendor `a` exhausted, another lane pushed a conflicting line. Result: `built_by a/b`, trailer `Builder: c/d`.
+  - Fix check: with the two lines moved above the loop, the trailer reads `Builder: a/b` and the full selftest passes. Between :1026 and the `land()` call at :1062 only reviewer sessions run, so at `land()` entry `last_model[builder] == built_by`.
+  - No safety impact, but it is wrong data. README:63 counts 29 reflex1 cycles that ran this conflict session.
+- low forge/forge.py:831-833: the new docstring says the subject "stays GitHub's default, which `status_text()` matches on". `status_text()` (:1289-1346) reads no git subject; it only reads the lane log and `state.json`.
+  - The one consumer is `main_gated()` :638. Its `Merge pull request #\d+ from \S+/forge/l\d+-` arm decides whether the next builder skips its starting gate run.
+  - Anyone who later changes the subject and trusts this docstring checks the wrong function. The PR body repeats the claim ("`main_gated()` and `status_text()` keep matching").
+- low forge/forge.py:848, README.md:101: `--body` replaces GitHub's default merge-commit body, and neither the PR body nor the README row says so (the row says only "the subject unchanged").
+  - `gh api repos/ptlnextdoor/reflex1` returns `merge_commit_message: PR_TITLE`. reflex1's gh-path landings carry the ticket title as body, e.g. `ca1ce27 ... [0122] Recoveries on the generated training tracks...`. After this PR they carry only the trailers.
+  - The title can still be recovered from the branch slug in the subject and from `tickets/`.
+- ok security trace:
+  - Both paths `shlex.quote` the trailer. Its values are the config's model names or `last_model`, hex hashes, and line 1 of `omp --version`. No ticket text reaches it; the unquoted `'forge: land {tid}'` is pre-existing.
+  - Smoke with a fake `gh`: a body holding `$(touch pwned)`, backticks and quotes arrived as one argv element, unchanged, and no file was created.
+  - The Crewship gh guard (`check_write`) returns at once for `pr` commands. `gh 2.103.0 pr merge --help` lists `-b, --body`.
+  - If GitHub refuses the merge, `pr_merge` returns False and the existing local path lands the work, so nothing is lost.
+  - Untouched: gate, reviewer, protected paths, prompts, claim/`recover()`/`discard_strays()`, quota, GPU.
+  - Added cost: one `omp --version` subprocess per landing pass, up to 3 (30 s timeout, `?` on failure). No model quota, no shared state, and the trailer has a fixed size.
+  - Any raise from `self.version` happens inside `cycle()`'s try, so the PR is closed and `recover()` requeues the ticket, as for any other `land()` exception.
+- ok forge/forge.py:638,898 subject: the local merge's `%s` is still `forge: land <tid>`. In the smoke, `main_gated()` returned `'forge: land 0001-x'` on the merge carrying the trailer.
+  - gh path: the headline is omitted, so GitHub uses its default [INFERENCE: GraphQL `commitHeadline` omitted means default message; not observed live, as the PR body also says].
+- ok forge/selftest.py:424-427:
+  - The PR-head selftest, run in an isolated `git archive` tree, printed "all checks passed" (136 ok).
+  - The new check fails against base `forge.py` (body `'\n'`), so it pins the local path.
+  - The gh path's argv is not asserted: 4f (:290) and 4r (:524) still call `pr_merge` with 2 args, and the `body=""` default exists only for them.
+- none deletions: the diff removes no line from `forge/prompts/*.md` or `forge/selftest.py`, and README is +1 row. The four `-` lines in `forge.py` are modified in place (signature/docstring, gh merge line, `pr_merge` call, local merge line). No check is removed.
+- nit README.md:101 and forge.py:889-890 numbers: "64 of its 80 landings". On reflex1 `origin/main`, first-parent merges are 64 `forge: land` and 16 `Merge pull request`, but only 14 of the 16 match `/forge/l\d+-`; the other 2 are owner docs PRs. So it is 64 of 78. 627 commits and 0 naming a model both check out.
+- sibling #83 ("landing commit carries Ticket/Built-by/Reviewed-by/Forge trailers, one subject on both merge paths") duplicates this PR and contradicts it.
+  - Same mechanism on the same lines: the `pr_merge` signature, the `gh pr merge` line (`-b`), and the local second `-m`.
+  - It uses a different key (`Built-by:` vs `Builder:`).
+  - It sets the gh-path subject to `forge: land NNNN` (`-t`), where this PR keeps the default and its README row says "subject unchanged".
+  - Landing both gives either a conflict or two trailer vocabularies on main.
+  - #83 is the side to change. It was opened 2026-10-29, audited MERGE WITH CHANGE, left open after a failed gate, and sits on a base about 270 lines stale. Close it as superseded, or rebase it onto this PR to add only its extra trailers (`Ticket:`, `Reviewed-by:`, `PR:`) under this PR's key names.
+  - This PR's body does not mention #83, but the duplicate does not lower its verdict.
+- sibling #111 (`--match-head-commit`) changes the same three lines: a required `head` 3rd parameter of `pr_merge`, the gh merge line, and the local `git merge ... {head}`.
+  - This is a textual conflict, not a contradiction. Whichever lands second keeps both arguments.
+  - Pass `body=` by keyword, so a positional `head` cannot silently take the trailer.
+- sibling none: #136 and #84 (`land()` signature), #48 (local-fallback loop, 4o assertion), #132/#133 (`record()`), #145 and #139 overlap only textually. I read all 28 open `forge` PR diffs that touch README.md, forge.py or selftest.py.
+- nit slop: the `land()` comment restates the README row's figures, which matches house style.
+Change needed (only for MERGE WITH CHANGE):
+1. In forge/forge.py `land()`, move the 3-line comment and these two lines from after the gate check (:888-892) to directly after `posted = ""`, before `for _ in range(3):`, one indent level less:
+```
+        model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
+        trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}"
+```
+   End the comment with: "Read before rebase_onto_main(): its conflict session can run on a fallback model and overwrite last_model[builder]; the trailer names the model that wrote the reviewed diff (cycle()'s built_by)."
+2. In the `pr_merge` docstring (forge/forge.py:831-833), replace "`status_text()` matches on" with "`main_gated()` matches on; on the gh path it replaces GitHub's default body (the PR title on reflex1)".
+
+
 ## PR #150 · 2026-11-07T11:28:54Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
