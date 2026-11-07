@@ -170,12 +170,20 @@ with tempfile.TemporaryDirectory() as d:
     check("an added line that reads as a +++ header is still searched", [g[-7:] for g in f.invisible_chars(repo)] == ["U+E0041"], str(f.invisible_chars(repo)))
     git("reset -q --hard origin/main", repo)
     # 2e''. A line the branch adds with a credential-shaped token is refused with the file and issuer before the
-    # push; a bare hex string, a key the branch removes and the key's prefix alone are not.
+    # push; a bare hex string, a key the branch removes and the key's prefix alone are not. A password typed into
+    # a command is refused too; a `$VAR`, `{placeholder}`, `<token>` or short value in the same place is not.
     (repo / "src/a.rs").write_text("const K: &str = \"AKIAIOSFODNN7EXAMPLE\";\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
-    (repo / "NOTES.md").write_text("-----BEGIN RSA PRIVATE KEY-----\nsha 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\nrpa_ sk-ant- ghp_\n")
+    (repo / "NOTES.md").write_text("-----BEGIN RSA PRIVATE KEY-----\nsha 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\nrpa_ sk-ant- ghp_\n"
+                                   "PGPASSWORD=$PGPASSWORD psql\nsshpass -p \"${PASS}\" ssh\nAuthorization: Bearer <token>\npostgres://u:{secret}@127.0.0.1/db\nhttps://user:token@github.com/o/r.git\n")
+    (repo / "run.sh").write_text("PGPASSWORD=hunter2hunter2 psql -h db.example.com\n")
+    (repo / "deploy.md").write_text("sshpass -p 'Sup3rSecret!' ssh root@1.2.3.4\ncurl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefgh.ijklmnop'\npostgres://admin:s3cr3tpass@db.supabase.co:5432/app\n")
     git("add -A", repo); git("commit -qm key", repo)
     got = f.secrets(repo)
-    check("credential-shaped tokens are refused per file with the issuer; hex and bare prefixes pass", got == ["NOTES.md: pem", "src/a.rs: aws"], str(got))
+    check("credential-shaped tokens are refused per file with the issuer; hex, bare prefixes and referenced passwords pass", got == ["NOTES.md: pem", "deploy.md: password", "run.sh: password", "src/a.rs: aws"], str(got))
+    check("redact replaces a typed password with its class", f.redact("PGPASSWORD=hunter2hunter2 psql -h db.example.com") == "[password redacted] psql -h db.example.com")
+    for i, s in enumerate(("PGPASSWORD='hunter2hunter2'", "MYSQL_PWD=hunter2hunter2", "sshpass -p 'Sup3rSecret!'",
+                           "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefgh.ijklmnop", "postgres://admin:s3cr3tpass@db.supabase.co")):
+        check(f"redact replaces typed-password shape {i}", "[password redacted]" in f.redact(s), f.redact(s))
     git("push -q -f origin work2:main", repo)
     (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm unkey", repo)
