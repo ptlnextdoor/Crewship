@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #152 · 2026-11-07T16:44:05Z · REJECT · risk low · gate pass · closed: rejected
+
+Verdict: REJECT
+Risk: low
+
+## PR #152 forge: kill what a session leaves running after it exits
+What it changes: `_agent_once` (forge.py:297-304 on the PR head) now sends SIGKILL to the omp session's process group after a normal `communicate()`. `ProcessLookupError` is swallowed, and any other result logs `agent <role> left processes running after it exited; process group killed`. The PR also adds README safeguard row :111 and selftest 4g' (:302-313). The timeout path is not changed.
+Findings:
+- medium forge/forge.py:297-304, forge/README.md:111 The kill cannot reach the process the PR is written for. omp puts every tool command in its own session, so `killpg(p.pid)` on omp's group misses a backgrounded server.
+  - Which binary: `OMP` resolves to `/home/ubuntu/.local/bin/omp`, version 18.12.6. This audit itself runs on that binary as `omp -p --approval-mode=yolo`. Forge's sessions add only `--config=omp.yml`, which sets nothing but `task.maxRecursionDepth`, and `--session-dir`.
+  - Observed in this session: `/bin/sleep 34 >/dev/null 2>&1 &` from the bash tool had ppid = omp (1676152) and pgid = sid = its own pid (1678009). A foreground `sh -c` showed the same, and so did the eval kernel and its `Popen` child. omp's own group (1676151) held only `timeout` and omp itself. A `cargo run -p reflex-serve ... &` therefore sits in a session `killpg(p.pid, 9)` cannot signal.
+  - Reproduced against the PR head's `_agent_once`. With a stub whose background job runs `setsid` and has done so before the stub exits, the job was still alive after the session (state S, pgid/sid = own pid) and no log line was written. With the PR's own stub shape, the job was killed and the line was logged.
+  - The source the PR cites counts "user processes outside any running exec's process group". That is the set omp creates, and the opposite of what this change kills.
+  - Net effect: the stated failure stays unprevented. README:111 lists it as prevented, and the new log line will read 0, which a later scout will take as "no strays". A false row in the safeguard table hides a gap that is still open.
+  - What a working fix has to reach: every tool process inherits omp's environment (checked: all of omp's env keys except `SHELL` are present in the tool's env). Each lane already sets a unique `FORGE_STATE_DIR=<self.home>` on its sessions, and `sh()` does not set it.
+  - Any rework that does reach a backgrounded `gpu.py run` with SIGKILL skips its `finally: terminate` (gpu.py:153-154). The pod then bills until the reaper deadline, and `reap()` records $0 for it, because `forge_pods()` entries have no `_started` (gpu.py:81-85).
+- low forge/selftest.py:302-313 Check 4g' backgrounds `sleep 300` from `/bin/sh`, so the job stays in the stub's process group. omp's tools never leave a job there, so the check passes while real strays survive. It tests the mechanism, not the property. Confirmed: the check fails on base `forge.py` (`alive=True`). The full selftest passes on the PR head. The restored stub text matches 4g's.
+- low forge/forge.py:300-304 Only `ProcessLookupError` is caught.
+  - A `PermissionError` (EPERM: every process left in the group belongs to another uid, e.g. under `sudo`) reaches the outer `except OSError` at :324-325. That turns a finished session into `failed to start agent: ...` with rc 127, and `out.write_text` replaces the session's stdout/stderr with that message.
+  - It is unreachable today, because the group is empty once omp exits (finding 1). It matters for any rework that keeps this shape.
+- low forge/forge.py:297-299, forge/README.md:111 The ticket evidence is overstated. In `~/Dev/reflex1/tickets`, only 0009 runs a server on port 8765 with `&`. 0018 uses 8766 and 0025 uses 8767, so the "holds the port for the next lane's Done when" collision is not between those tickets. 0034 has no server command at all. All four tickets are `done` or `cancelled`, and no open ticket backgrounds a server. The `LEARNINGS.md:43` pkill note is quoted correctly.
+- none Security trace:
+  - Untouched: the gate, `touched_protected`/protected paths, reviewer selection and verdict, claim, `recover()`, `discard_strays()`, quota fallback, and PR create/merge.
+  - Prompts: the diff changes no prompt text.
+  - Injection: the new log f-string interpolates only `role`, so no ticket text reaches a command.
+  - Kill target: `start_new_session=True` makes `p.pid` the leader of a fresh session, so the kill can never include the lane, the other lanes or the supervisor.
+  - Growth and cost: the change adds at most one log line per session, no prompt growth and no GPU or quota spend.
+- none Deletions: the diff removes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. No layer is retired.
+- none Siblings:
+  - #40, #79 and #148 kill a process group on an `sh()`/`gate()` timeout. That is a different function and a different trigger, so they neither contradict nor duplicate this PR.
+  - #117 edits the `cmd` list in `_agent_once`. #145, #47 and #39 edit `agent()`.
+  - No open PR touches the `communicate()`/kill block this one changes.
+- low slop forge/forge.py:297-299 Three comment lines repeat the README row and the PR body, including the overstated ticket list. "Same process group: one kill." is false for omp's tool processes.
+
+
 ## PR #151 · 2026-11-07T15:41:09Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
