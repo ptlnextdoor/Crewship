@@ -827,8 +827,10 @@ class Forge:
             self.pr_comment(pr, f"**forge: not merged.**\n\n```\n{why[-6000:]}\n```\nThe ticket goes back to the queue with this evidence; the next attempt opens a new PR.")
             self.gh(f"pr close {pr}")
 
-    def pr_merge(self, pr: str, branch: str) -> bool:
-        """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge."""
+    def pr_merge(self, pr: str, branch: str, body: str = "") -> bool:
+        """Merge through GitHub so the PR page shows it and the remote branch goes. False = fall back to a local merge.
+        `body` is the merge commit's message body (git trailers): the subject stays GitHub's default, which
+        `status_text()` matches on."""
         if not pr:
             return False
         # GitHub recomputes mergeability after the push that precedes this call; merging before it has fails on the
@@ -843,7 +845,7 @@ class Forge:
                 self.log(f"PR {pr} conflicts on GitHub; landing it locally instead of waiting")
                 return False
             time.sleep(3)
-        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch", timeout=180)
+        r = self.sh(f"gh pr merge {pr} -R {self.gh_repo} --merge --delete-branch --body {shlex.quote(body)}", timeout=180)
         if r.returncode:
             self.log(f"gh pr merge failed: {r.stderr.strip()[:200]}")
             return False
@@ -883,12 +885,17 @@ class Forge:
             ok, gout = self.gate(wt)
             if not ok:
                 return f"gate failed after updating from main.\n{gout}"
+            # The landing merge is the one commit every landed ticket has, and a clone of the repo keeps it where the
+            # PR body (pr_open's stamp) stays on GitHub: 0 of reflex1's 627 main commits name the model that built
+            # them (arXiv 2606.24429: a PR census and a commit census of the same agents are nearly disjoint).
+            model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
+            trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
-            if self.pr_merge(self.pr, branch):
+            if self.pr_merge(self.pr, branch, trailer):
                 return ""
             self.sync_main()
-            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' {branch}").returncode == 0:
+            if self.sh(f"git merge -q --no-ff -m 'forge: land {tid}' -m {shlex.quote(trailer)} {branch}").returncode == 0:
                 self.push()
                 # `gh pr merge --delete-branch` cleans the remote branch; this fallback path never did, and 64 of
                 # reflex1's 106 remote forge branches are landed leftovers. Only once the tip is in origin/main,

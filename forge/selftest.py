@@ -421,6 +421,10 @@ with tempfile.TemporaryDirectory() as d:
     why = f.land(wt, "landed", "0001-x", "builder")
     check("a branch landed by the local merge is deleted from the remote",
           why == "" and "landed" not in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
+    # The landing merge names the builder model in a trailer: the git log is the record a clone keeps.
+    body = git("log -1 --format=%b origin/main", repo)
+    check("the landing merge commit names the builder model and forge version in trailers",
+          "Builder: a/b" in body and f"Forge: {f.version} on " in body, repr(body))
 
     git(f"worktree add -q -b unpushed {Path(d) / 'wt2'} main", repo)
     (Path(d) / "wt2" / "other.rs").write_text("fn other() {}\n")
