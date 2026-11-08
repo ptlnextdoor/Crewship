@@ -43,6 +43,8 @@ OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 # sub-agent took 84% of one prompt's cost in a per-agent trace, X 2026-10-30; Cloudflare's reviewers
 # tried a tool they could not use in 57-76% of sessions). A setting, not a tool allowlist: a tool
 # rename in a later omp cannot stop sessions from starting (PR #105's audit).
+# `skills.enabled: false` drops the owner's user-scope skill list (29 entries, 1,060 tokens, plus the
+# "MUST read skill://<name> first" rule) from every session; no forge prompt names a skill.
 OMP_CONFIG = Path(__file__).with_name("omp.yml")
 UTC = dt.timezone.utc
 # gpu.py appends one line per terminated pod here and refuses a run whose estimated cost exceeds

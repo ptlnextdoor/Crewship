@@ -1,2 +1,8 @@
 task:
   maxRecursionDepth: 0
+# No skills: the lanes run as the owner, so every session would otherwise load the owner's user-scope
+# skills (29 entries, about 1,060 tokens, measured 2026-11-08) behind "Matching skill -> MUST read
+# skill://<name> first"; none is named by a forge prompt, and a reviewer reading `ponytail-review`
+# ("use for 'review my PR'") follows rules reviewer.md did not write.
+skills:
+  enabled: false
