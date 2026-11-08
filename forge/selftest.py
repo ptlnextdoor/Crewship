@@ -321,10 +321,10 @@ with tempfile.TemporaryDirectory() as d:
     # 0098-twice is the same ticket attempted on two lanes: its attempt number is the count across both
     # histories, so the per-attempt tally has to pool them (a retry is claimed by whichever lane is free).
     (Path(d) / "s/lane2/state.json").write_text(json.dumps({"cycle": 3, "merged": 0, "failed": 1, "history": [
-        {"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-31T00:00:00Z", "why": "reviewer did not approve: x"},
-        {"cycle": 4, "ticket": "0098-twice", "result": "failed", "at": "2026-10-31T01:00:00Z", "why": "gate failed"}]}))
+        {"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-20T00:00:00Z", "why": "reviewer did not approve: x", "model": "anthropic/claude-opus-5-5"},
+        {"cycle": 4, "ticket": "0098-twice", "result": "failed", "at": "2026-10-31T01:00:00Z", "why": "gate failed", "model": "anthropic/claude-opus-5-5"}]}))
     f.state["history"] = f.state.get("history", []) + [
-        {"cycle": 5, "ticket": "0098-twice", "result": "merged", "at": "2026-10-31T02:00:00Z"}]
+        {"cycle": 5, "ticket": "0098-twice", "result": "merged", "at": "2026-10-31T02:00:00Z", "model": "anthropic/claude-opus-5-5"}]
     seen_state: list[str] = []
     def steward_agent(role, prompt, cwd, timeout_min=0):
         seen_state.append(prompt)
@@ -339,6 +339,11 @@ with tempfile.TemporaryDirectory() as d:
     check("steward sees merged/attempts by attempt number, pooled across lanes",
           "#1 0/2" in seen_state[0] and "#2 1/1" in seen_state[0],
           "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")))
+    # Same model, two ISO weeks (10-20 is W43, 10-31 is W44): a provider-side change under one model name is
+    # visible only with a time axis; the version and model rows pool every week.
+    check("steward sees merged/attempts per model per ISO week",
+          "anthropic/claude-opus-5-5 2026-W43 0/1 (0-79%), 2026-W44 1/2" in seen_state[0],
+          "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder model per ISO week")))
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")

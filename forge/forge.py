@@ -1336,6 +1336,17 @@ class Forge:
         # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
         # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
         out.append("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts: " + ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
+        # the model tally split by ISO week: `version` and `harness` move only when forge or omp changes, so a
+        # change on the provider's side under one model name (arXiv 2307.09009: GPT-4's code-generation
+        # formatting errors rose between March and June 2023 under the same name) shows in no other row.
+        # Same caveat again: different tickets per week, not a controlled comparison.
+        by_week: dict[str, dict[str, list[int]]] = {}
+        for h in (h for s in states for h in s.get("history", [])):
+            t = by_week.setdefault(h.get("model") or "pre", {}).setdefault(dt.date.fromisoformat(h["at"][:10]).strftime("%G-W%V"), [0, 0])
+            t[0] += h["result"] == "merged"
+            t[1] += 1
+        out.append("merged/attempts per builder model per ISO week (a provider-side change under one model name shows here, not in the version row): "
+                   + ("; ".join(f"{v} " + ", ".join(f"{wk} {rate_interval(m, n)}" for wk, (m, n) in sorted(ws.items())) for v, ws in by_week.items()) or "-"))
         # merged/attempts by the ticket's own attempt number, pooled across lanes (a retried ticket is claimed
         # by whichever lane is free): `cycle()` runs builder_hard from attempt 3, and from attempt 1 on a
         # `difficulty: hard` ticket, so no bucket is a single effort level.
