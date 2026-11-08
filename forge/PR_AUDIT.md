@@ -2,6 +2,30 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #158 · 2026-11-08T15:21:12Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #158 status: merged/attempts and lane-minutes per builder role
+What it changes: `record()` stores `role` on each history entry: the `builder`/`builder_hard` key of `last_model` that ran. `status_text()` (the `status` command and the steward's `{STATE}`) gets a new row with merged/attempts and lane-minutes per role, printed through a shared `minutes()` formatter. Also adds a README paragraph, and the selftest 4h fixture gets `role`/`secs` plus one check.
+Findings:
+- medium forge/selftest.py:324-327 The fixture rewrite removes the selftest's only history entries shaped like legacy data. On base, the three 4h entries had no `secs` and reached `status_text()` through `steward()`. So if the `if "secs" in h` guard were dropped, the selftest raised KeyError and failed. I ran that mutation on origin/forge and got `KeyError: 'secs'`. With the PR's fixture, the same mutation still prints "forge selftest: all checks passed". Live data has this shape: all 122 entries in ~/.local/state/forge/reflex1/{state.json,lane2,lane3,lane4/state.json} lack `secs` and `model`, and every entry will lack `role`. This layer prevented a crash in `status_text()` on legacy entries. On lane 1 that crash would hit run()'s `except Exception`: `recover()` plus exponential backoff on every steward cadence, and `forge.py status` would die. After this PR it rests on the `if "secs" in h` line in forge.py:1338 and on `h.get("role") or "pre"` at :1335, and no test covers either. The PR body does not name this layer as retired.
+- low forge/README.md:157 The example `builder_hard 9/21 (24-64%)` is not what the code prints: `rate_interval(9, 21)` returns `9/21 (24-63%)` (ran it). `40/61 (53-76%)` matches.
+- info forge/forge.py:1157 Write side traced. `cycle()` clears `last_model` at claim (949) and picks exactly one of builder/builder_hard (952-954). `agent()` sets `last_model[role]` only after a run that hit no quota limit (250). Both record() paths in cycle() (`fail()` and the merge at 1081) run after the builder session. The conflict session in `rebase_onto_main()` (778) runs under the same role key. `QuotaExhausted` never reaches `record()`. So `role` is the escalation level that ran, and `pre` covers only entries written before the field existed, as the README says. A selftest cycle through `build_on_fallback` recorded `{'role': 'builder', 'model': 'e/f'}`. No selftest check pins the stored `role`: the new check (selftest.py:349) reads only hand-written entries.
+- info No prompt, gate, reviewer, protected-path, claim, recover/discard_strays, PR/merge, timeout, GPU or quota path is touched. `role` is a config key, not ticket text, and never reaches a shell command. Each lane writes only its own state.json, and `status_text()` reads every lane's file read-only. Growth: one short field per entry under the existing 200-entry cap, and one steward-prompt line with one bucket per builder role plus `pre`.
+- info forge/selftest.py: no `check()` is removed or weakened. The three replaced lines only gain `role`/`secs`. The #1/#2, ISO-week and per-guard assertions keep their strings, and the selftest on the PR tree passes ("all checks passed").
+- low sibling #132 ("record the builder's effort per attempt, split the model tally by it") duplicates this PR. It writes the same `role, model = next(...)` line in `record()` and stores `effort`, the configured `thinking` of that role. It also renames the existing model row's keys to `model:effort` and edits an existing check to `g/h:high`. Under reflex1.toml (builder=high, builder_hard=xhigh) both PRs split the same attempts. #132 is the side that should change: close it, or cut it down to reading effort from cfg at display time via #158's `role`. Renaming the keys splits one model's legacy and new entries across two rows, and #132 sits on a stale base (`record()` at 1072, against 1150 here). This does not lower this verdict.
+- info sibling #133 adds `reviewer` on the same `self.state["history"] = ...` line. The change is additive with no contradiction: whichever lands second rebases.
+- nit forge/forge.py:1153-1156, 1344-1347 The Gao and Peng citation and its rationale appear three times: in the `record()` `#` comment, in the `status_text()` comment, and in the README. Both comments hardcode reflex1.toml values ("xhigh, 90 min", "the 75-min builder"), where the README correctly says "its own `timeout_min`". The other history fields are documented in `record()`'s docstring; this one gets a separate `#` block after it.
+Change needed (only for MERGE WITH CHANGE): Keep one legacy-shaped entry in the 4h fixture and assert how it tallies, and fix the README number:
+- forge/selftest.py:324: change the line to `{"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-20T00:00:00Z", "why": "reviewer did not approve: x", "model": "anthropic/claude-opus-5-5"},` (no `role`, no `secs`).
+- forge/selftest.py:347-348: change the comment to `# The same three attempts by effort level: one builder failure (20 lane-minutes), one entry from before role/secs (pre, rate only) and one builder_hard merge at 90 min; the model row pools them under one name, so only this row can show what the escalation costs per merge.`
+- forge/selftest.py:350: change the line to `"builder 0/1 (0-79%) 20 min, 0 merges" in seen_state[0] and "builder_hard 1/1 (21-100%) 90 min/merge" in seen_state[0] and "pre 0/1 (0-79%)" in seen_state[0],`
+- forge/README.md:157: change `9/21 (24-64%)` to `9/21 (24-63%)`.
+I checked this on a scratch copy: the selftest passes, and with the `if "secs" in h` guard dropped it fails again with `KeyError: 'secs'`.
+
+
 ## PR #157 · 2026-11-08T11:44:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
