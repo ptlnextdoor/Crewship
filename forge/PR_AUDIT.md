@@ -2,6 +2,51 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #159 · 2026-11-08T16:21:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #159 forge: skills.enabled false in omp.yml, no user-scope skills in lane sessions
+What it changes: `forge/omp.yml` gains `skills.enabled: false`, so the builder, reviewer, planner and steward sessions `_agent_once` starts with `--config=forge/omp.yml` (forge.py:289) no longer list or load the owner's plugin skills. It also adds a comment in forge.py (:46-47) and in omp.yml, a new README safeguard row (:105) and an edited Files row (:124).
+
+Findings:
+- low forge/README.md:105 The new safeguard row names a failure this change does not prevent: "ponytail's `shortcut:` comment convention reached `reflex1/crates/reflex-vision/src/lib.rs` and ticket 0010".
+  - Where the rule comes from: `shortcut: <the limit>, <when to upgrade>` is line 42 of `skills/ponytail/SKILL.md`. The ponytail pi-extension does not get that file through omp's skills discovery. `hooks/ponytail-instructions.js:9,88` reads it with `fs.readFileSync`, and `pi-extension/index.js:230-252` appends it as "PONYTAIL MODE ACTIVE" in `before_agent_start` whatever `skills.enabled` says.
+  - Smoke test: I ran the same `omp -p --config=<overlay>` argv on claude-haiku-4-5 and asked the model what its system prompt contains. With the base overlay it named 25 skills and said "PONYTAIL MODE ACTIVE" was present. With the PR overlay it answered "NONE, YES": no skills list, but the mode prompt is still there.
+  - The `shortcut:` lines are real: they are at `~/Dev/reflex1/crates/reflex-vision/src/lib.rs:51` and in `tickets/0010-vision-preprocess.md:13`.
+  - So the safeguard table now says a gap is closed when the surface that produced the cited evidence still reaches every lane session. A later audit or scout reading the table would take it as covered. The PR body's "Not changed" paragraph says this correctly; the permanent row does not.
+- low forge/README.md:105 "Every session runs with `skills.enabled: false`" is broader than the code. `reviewctl.py:91` (the PR audit), `reviewctl.py:157` (the fix session) and `systemd/forge-scout.service:9` start omp without `--config`, so they still load the skills. This audit session lists 26 of them, `ponytail-review` among them. The reviewer the row uses as its motivating example is closest to the PR audit, and the audit keeps the skills.
+- info The mechanism holds on omp 18.12.6. I traced it in `cli.js`:
+  - The overlay is parsed in `#Ue` and merged into the settings in `#Ie`.
+  - Session setup calls `eAt` with `YE.get(settings)`, and `eAt` calls `TI`, which starts with `let{enabled:n=!0,...}=e; if(!n) return {skills:[],warnings:[]}`. That covers user, project and extension skill roots alike.
+  - The system-prompt template renders the "Matching skill → MUST read" line and `<skills>` only under `{{#if skills.length}}`.
+  - The `skill://` handler throws `Unknown skill` when the list is empty.
+  - The overlay file parses: `yaml.safe_load` gives `{'task': {'maxRecursionDepth': 0}, 'skills': {'enabled': False}}`. omp with a bogus model got as far as model lookup (rc 1, "not found"), so the overlay is not what fails.
+- low forge/omp.yml:8 If the setting stops working, nothing reports it. Unknown overlay keys are ignored: an overlay with `skills.enabledXYZ` and `nosuchgroup.x` also reached model lookup. If a later omp renames `skills.enabled`, the skills come back with no error, and no selftest checks the key. This is the accepted tradeoff against `--no-skills`, which fails loudly when the flag is removed (rc 2, attempts charged); PR #105/#106 made the same choice. No change needed.
+- info Gate, reviewer and protected paths: nothing weakened.
+  - The forge.py diff is two comment lines.
+  - There are no changes to any prompt, `gate.sh` handling, `touched_protected`/`HARNESS_CONFIG` (forge.py:443-455), the claim, `recover()`, `discard_strays()`, the timeout/killpg path, PR create/merge, quota fallback or `gpu.py`. No ticket text reaches the argv, and the overlay is a constant read-only file the lanes share.
+  - What the reviewer loses: the owner's user-scope skills (`ponytail-review`, `caveman-review`, `verify-and-stop`, ...). None is named in `forge/prompts/*.md` (grep for "skill": 0 hits) or in the safeguard table, so `reviewer.md` stays the whole contract.
+  - Project-level skill directories inside a worktree also stop loading, which narrows what a diff can put into the reviewer's context.
+- info Deletions: the only `-` line is the Files-table `omp.yml` row (README:124), which this PR rewrites. Nothing is deleted from `forge/prompts/*.md`, `forge/selftest.py` or the safeguard table.
+- info Spend: one prompt-cache miss when the change lands, then a smaller prefix on every session. My haiku-4-5 smoke went from a 10,314-token first-turn prefix to 9,758 (556 fewer); the PR cites 1,060 on its own measurement, so the saving depends on the model. No GPU path and no new model call.
+- info Version stamp: `version` (forge.py:126-133) hashes forge.py and the four prompts but not omp.yml. The two comment lines at forge.py:46-47 are therefore the only thing that moves the stamp, so `status` can separate sessions before and after this change. Keep them.
+- nit forge/README.md:105, forge/forge.py:46, forge/omp.yml:3 "29 entries" is the number discovered: caveman 22, ponytail 6 and i-have-adhd 1 SKILL.md files, 3 of them hidden. The list sessions see has 26 entries. The same measured figures (29 entries, 1,060 tokens) appear in three places and will drift.
+- info Checks I ran:
+  - On a copy of base plus the PR diff: `python3 -m py_compile forge/forge.py` passes, and `python3 forge/selftest.py` printed "forge selftest: all checks passed".
+  - GitHub reports the PR as MERGEABLE.
+  - The PR body has no HTML comments, and the only PR comment is Copilot's quota notice.
+- info Siblings: no other open PR touches `forge/omp.yml`.
+  - I read the diffs of all 28 open `forge` PRs that touch forge.py or README.md: #148 #145 #140 #139 #136 #133 #132 #117 #111 #99 #86 #85 #84 #83 #79 #48 #47 #44 #42 #40 #39 #31 #28 #25 #23 #20 #19 #16. #124 touches only gpu.py.
+  - A grep for skill, omp.yml, OMP_CONFIG, `--config=`, `--no-extensions` and maxRecursionDepth hits only unchanged context lines in #99, #111 and #117.
+  - #117 changes the `_agent_once` argv (`--no-title`) and inserts a README row two rows below this one. The overlap is textual only: the two neither contradict nor duplicate each other.
+
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:105 (the row this PR adds), make two replacements:
+- Replace "Every session runs with `skills.enabled: false` in `forge/omp.yml`:" with "Every builder, reviewer, planner and steward session runs with `skills.enabled: false` in `forge/omp.yml` (reviewctl's audit and fix sessions and the scout unit start omp without the overlay and still list them):".
+- Replace "; ponytail's `shortcut:` comment convention reached `reflex1/crates/reflex-vision/src/lib.rs` and ticket 0010 (SCOUT 10-23)." with ". Not covered: the ponytail extension reads `skills/ponytail/SKILL.md` itself and appends it as \"PONYTAIL MODE ACTIVE\" to every session whatever `skills.enabled` says, so its `shortcut:` comment rule (in `reflex1/crates/reflex-vision/src/lib.rs` and ticket 0010, SCOUT 10-23) still reaches every lane."
+
+
 ## PR #158 · 2026-11-08T15:21:12Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
