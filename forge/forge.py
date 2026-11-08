@@ -226,13 +226,18 @@ class Forge:
             raise RuntimeError(f"{cmd} -> {r.returncode}\n{r.stdout[-2000:]}\n{r.stderr[-2000:]}")
         return r
 
-    def agent(self, role: str, prompt: str, cwd: Path, timeout_min: int | None = None) -> tuple[int, str]:
+    def agent(self, role: str, prompt: str, cwd: Path, timeout_min: int | None = None, avoid: str = "") -> tuple[int, str]:
         """Run one headless omp session for a role. On a provider quota error, try the role's
-        `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
+        `fallback` model, then any role with a model from another vendor. `avoid` is a model this
+        session may not run on: the reviewer never runs on the model that built the diff, which the
+        role split (`reviewer` vs `reviewer_alt`) alone does not give - with an Opus-only window spent the
+        builder runs its Fable fallback, and with Codex out `reviewer_alt` falls back to Fable too, so one
+        model would approve its own work; no other model left means QuotaExhausted, the ticket requeued
+        uncharged, not a self-review. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
         for model in chain:
-            if self.spent(model):
+            if self.spent(model) or model == avoid:
                 continue
             rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
             # The provider writes its quota refusal to stderr ("Codex error event: The usage limit has been
@@ -1049,14 +1054,14 @@ class Forge:
                                                    f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown)
-            rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
+            rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30, avoid=built_by)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             if rc == 124 and not verdict:
                 # a review that stalls to its timeout without a verdict is a harness failure, not a finding:
                 # 4 of the first 22 reflex1 reviews did, and each cost the ticket a whole attempt. One rerun.
                 self.log(f"review of {tid} timed out with no verdict; rerunning once")
                 self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
-                rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
+                rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30, avoid=built_by)
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
             self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}` of {reviewed}**\n\n{review[-12000:]}")

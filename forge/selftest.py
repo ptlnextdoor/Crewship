@@ -782,7 +782,7 @@ with tempfile.TemporaryDirectory() as d:
     # head, and in 3 of reflex1's 10 REJECT reviews the old `rout[-3000:]` dropped all or all but one FAIL line.
     verdict = ["- **FAIL** - `cargo test -p x` exits 101 on input `probe.json`\n" + "detail " * 500
                + "\nMust change: fix the probe\nVERDICT: REJECT\n[stderr]\nWorking...\n"]
-    def build_or_review(role, prompt, cwd, timeout_min=None):
+    def build_or_review(role, prompt, cwd, timeout_min=None, avoid=""):
         (cwd / "src.rs").write_text(f"fn main() {{}} // {role}\n")
         return 0, verdict[0]
     f.agent = build_or_review
@@ -996,7 +996,7 @@ with tempfile.TemporaryDirectory() as d:
     turns: list[str] = []
     prompts: list[str] = []
 
-    def build_then_rewrite_the_gate(role, prompt, cwd, timeout_min=None):
+    def build_then_rewrite_the_gate(role, prompt, cwd, timeout_min=None, avoid=""):
         turns.append(role); prompts.append(prompt)
         if len(turns) == 1:
             (cwd / "a.txt").write_text("the work\n")    # a real diff, nothing protected
@@ -1039,7 +1039,7 @@ with tempfile.TemporaryDirectory() as d:
     f.plan = lambda: None
     turns: list[str] = []
 
-    def build_then_take_main(role, prompt, cwd, timeout_min=None):
+    def build_then_take_main(role, prompt, cwd, timeout_min=None, avoid=""):
         turns.append(role)
         if role == "reviewer":
             return 0, "VERDICT: APPROVE"
@@ -1078,7 +1078,7 @@ with tempfile.TemporaryDirectory() as d:
     f.plan = lambda: None
     seen: list[str] = []
 
-    def build_big_then_review(role, prompt, cwd, timeout_min=None):
+    def build_big_then_review(role, prompt, cwd, timeout_min=None, avoid=""):
         if role == "reviewer":
             seen.append(prompt)
             return 0, "VERDICT: APPROVE"
@@ -1105,7 +1105,7 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "tickets/0002-u.md").write_text("status: open\n\n# u\n")
     git("add -A", repo); git("commit -qm t2", repo); git("push -q origin main", repo)
 
-    def build_on_fallback(role, prompt, cwd, timeout_min=None):
+    def build_on_fallback(role, prompt, cwd, timeout_min=None, avoid=""):
         f.last_model[role] = "e/f" if role == "builder" else "c/d"  # what agent() records after a quota fallback
         return build_big_then_review(role, prompt, cwd, timeout_min)
 
@@ -1155,7 +1155,7 @@ with tempfile.TemporaryDirectory() as d:
     f.plan = lambda: None
     at_land: list[str] = []
 
-    def build_then_messy_review(role, prompt, cwd, timeout_min=None):
+    def build_then_messy_review(role, prompt, cwd, timeout_min=None, avoid=""):
         if role == "reviewer":
             (cwd / "note.txt").write_text("probe\n"); git("add note.txt", cwd); git("commit -qm 'reviewer: probe'", cwd)  # a commit, moving HEAD
             git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
@@ -1238,6 +1238,31 @@ with tempfile.TemporaryDirectory() as d:
     check("a prompt file that lost a placeholder stops the session instead of running it without the input",
           "the diff" in filled and "{DIFF}" in refused and "{TICKET}" not in refused,
           f"filled={filled!r} refused={refused!r}")
+
+# 27. The reviewer never runs on the model that built the diff. The role split (`reviewer_alt` when the
+# vendors match) assumes the builder ran its configured model: with an Opus-only window spent the builder
+# runs its Fable fallback, and with Codex out `reviewer_alt` falls back to Fable too, one model approving
+# its own work. No other model left is QuotaExhausted (ticket requeued uncharged), not a self-review.
+with tempfile.TemporaryDirectory() as d:
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{d}"\nstate_dir="{d}/s"\n'
+                   f'[roles.builder]\nmodel="anthropic/claude-opus-5-5"\nfallback=["anthropic/claude-fable-5-1"]\n'
+                   f'[roles.reviewer_alt]\nmodel="openai-codex/gpt-6-astra"\nfallback=["anthropic/claude-fable-5-1"]\n')
+    f = forge.Forge(cfg)
+    f.log = lambda m: None
+    ran: list[str] = []
+    f._agent_once = lambda role, model, thinking, prompt, cwd, timeout_min: (ran.append(model), (0, "VERDICT: APPROVE"))[1]
+    f.exhausted = {"anthropic:opus": 0.0}
+    f.agent("builder", "p", Path(d))
+    f.agent("reviewer_alt", "p", Path(d), avoid=f.last_model["builder"])
+    f.exhausted["openai-codex"] = 0.0
+    try:
+        f.agent("reviewer_alt", "p", Path(d), avoid=f.last_model["builder"])
+        refused = False
+    except forge.QuotaExhausted:
+        refused = True
+    check("the reviewer skips the model that built the diff and stops rather than self-review",
+          ran == ["anthropic/claude-fable-5-1", "openai-codex/gpt-6-astra"] and refused, f"{ran} refused={refused}")
 
 print()
 if fails:
