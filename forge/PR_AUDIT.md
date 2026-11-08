@@ -2,6 +2,70 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #156 · 2026-11-08T09:43:55Z · REJECT · risk low · gate pass · closed: rejected
+
+Verdict: REJECT
+Risk: low
+
+## PR #156 forge: fall back when omp gives up retrying a provider error
+What it changes: `agent()` adds `auto-retry gave up|overloaded` to the stderr regex that marks a vendor in `self.exhausted` and moves down the role's chain. It renames the log line to `quota: <model> refused (<token>)` and rewords two docstrings. It adds one check to selftest block 10. PR head 27555cce on base 16729ca8; forge.py and selftest.py only.
+
+Findings:
+- medium forge/forge.py:251-255 (PR head), with cycle() :1042-1044, :1056, :1072-1077 (PR head) and forge/projects/reflex1.toml:54-58. Cross-vendor review now fails open on an overload.
+  - In reflex1 an Opus-built diff goes to `reviewer_alt` (Codex Astra). Astra's only fallback is `anthropic/claude-fable-5-1`, the builder's own vendor.
+  - Base: an Astra session that ends in a give-up returns rc 1 with no `VERDICT`, and `fail()` ends the attempt. That fails closed.
+  - PR: the same session marks `openai-codex`, and the review reruns on Fable. A Fable APPROVE lands.
+  - Probe: I loaded the PR-head and base `forge.py` in memory and called `Forge.agent` with reflex1's roles. Astra was stubbed to rc 1 with stderr `Retry budget exhausted after 10 retries: 503 server_overloaded ...`.
+    - Base: `ran=['openai-codex/gpt-6-astra'] rc=1`.
+    - PR: `ran=['openai-codex/gpt-6-astra','anthropic/claude-fable-5-1'] rc=0 last=fable`. The log line read `refused (overloaded)`.
+  - The exact Codex overload wording is [INFERENCE]. omp's own error table (cli.js) maps `server_overloaded`, `model_overloaded` and `overloaded` codes to 503, so the token is plausible on that side.
+  - The PR body says "Semantics unchanged" and does not name this trigger. It is the fail-open that the #145 audit (forge/PR_AUDIT.md:371-377) asked to keep off the review roles, and this PR has no such guard.
+- low forge/forge.py:246-251 and selftest.py:756. The headline token is never printed by `omp -p`, and the comment describes a mechanism omp does not have. I checked omp 18.12.6 `dist/cli.js`:
+  - The retry handler sets `errorMessage = "Retry budget exhausted after ${L} retries: ${a}"` (line 29223).
+  - Print mode (`SWd`, line 60936) writes that `errorMessage` to stderr and exits 1 (line 60946).
+  - `auto-retry gave up` appears only in the task-tool TUI renderer (lines 1930 and 1937). forge/omp.yml sets `task.maxRecursionDepth: 0`, so even that path is off.
+  - The #145 audit measured the real stderr live: `Working...` followed by `Retry budget exhausted after 10 retries: Couldn't connect to ...`. No reflex1 session log holds either string.
+  - Probe of the PR regex against give-up lines of that shape:
+    - connection refused: no match.
+    - 500 `api_error`: no match.
+    - 529 `overloaded_error`: matches `overloaded`.
+    - 429: matches the existing `rate_limit` token.
+  - So the fix covers only overload give-ups, not the "5xx and timeouts" the comment and body claim.
+  - The selftest fixture `auto-retry gave up after 5 attempts: 529 Overloaded` (no `Working...` line) is not omp output. It passes on either token, so it pins invented text.
+- low forge/forge.py:253 (vendor-wide mark), with cycle() :1042-1044 and :1056 (PR head), lane_loop :1295-1298 (PR head) and reflex1.toml:34-58. In reflex1, an Opus builder overload now always ends in a Codex build that is thrown away.
+  - `anthropic` is marked for the whole vendor, so Fable is skipped and Codex Sol builds (up to 75 min) and the gate runs.
+  - `built_by` is now Codex, so the reviewer is `reviewer` (Opus, then Fable). Both count as spent, so `QuotaExhausted` is raised. `cycle()` closes the PR, `finally` drops the worktree and branch, and `recover(quota=True)` puts the ticket back without charging an attempt.
+  - Probe: builder `ran=['anthropic/claude-opus-5-5','openai-codex/gpt-6.1-sol']`, `exhausted=['anthropic']`, then `reviewer -> QuotaExhausted`.
+  - During an incident this repeats every cycle on all four lanes. Nothing blocks the ticket, and only the 80% Codex floor and the deadline cap the spend.
+  - Quota marks already take this path on base. Here a single model's incident triggers it: the cited incident is Fable 5.1 only, and the PR still marks the whole vendor. That goes against README:76's rule that a model-scoped signal marks the model.
+  - The body's "costs at most the rest of the cycle on the other vendor" leaves out that this rest is a build that can never be reviewed.
+- low forge/forge.py:251. The bare word `overloaded` matches anywhere on stderr. In print mode that includes omp's `Warning: MCP server "<x>" failed to connect: <error>` lines, and per the #145 audit 8 of 83 reflex1 logs carry MCP warnings.
+  - With any rc != 0, including a builder timeout (rc 124), an MCP server error containing that word would mark the vendor. The role would then rerun on the first session's uncommitted edits with the first render's `{KILL}` (shortcut at :966 PR head).
+  - [INFERENCE] I found no such MCP message in the logs. #145 avoided connection words for this reason and pinned an MCP check.
+- low docs and logs now contradict the code:
+  - README:69 still says a session marks its vendor "only on a quota error in its stderr", and selftest.py:720-723 still says "only on the provider's own refusal". Neither is updated.
+  - Renaming the log line drops it from the documented fallback count `grep "exhausted; trying the next model"` (SCOUT.md:1501), so overload fallbacks are silently missing from it. #145 kept the line for this reason.
+  - An overload that empties a chain is still logged "quota: no model left" (:1296). `recover()` still writes the ticket note "no model had quota", so a provider incident gets recorded as quota.
+  - PR body: Fable is reflex1's planner and steward model and only the reviewers' fallback; Opus is the reviewer (reflex1.toml:28-63).
+- none security trace:
+  - The regex runs over omp's stderr, and `m.group(0)` is one of the fixed alternatives, so no ticket text reaches a shell or f-string.
+  - `exhausted` lives on each lane process's own instance, so two lanes never write the same state.
+  - The QuotaExhausted path closes the PR, removes the worktree and branch, and sets the ticket to `retry`. Nothing is left `in_progress`.
+  - There is one log line per event. Gate, protected paths, prompts, `discard_strays()`, PR/merge and GPU are untouched.
+  - The PR deletes nothing from forge/prompts/*.md, selftest.py or the README table, so it retires no layer.
+- sibling #145 (base `forge`; same `agent()` regex line, same selftest block 10, README:69) is a duplicate. It does the same thing with `Retry budget exhausted`, the line `omp -p` actually prints, measured on this box.
+  - That token covers every give-up, overload included, so #156 adds nothing #145 lacks.
+  - #145 keeps the log line and updates README:69. Its audit is MERGE WITH CHANGE and is waiting for the owner.
+  - #156 is the side to change: close it as a duplicate.
+- sibling #47 (base `forge`; `agent()`) also duplicates this, and it contradicts #156: it does not mark the vendor and it matches `text[-3000:]`, which includes stdout. #47 is the stale side (older `agent()`, breaks README:69's stderr-only rule), as the #57 and #145 audits found (PR_AUDIT.md:3960, :406-410).
+- sibling #39 (marks expire after an hour) and #20 (`reviewer_alt` tries Grok before Fable) complement this area without contradiction. #20 would make the first finding's fallback cross-vendor first, but Fable stays the last resort.
+- sibling #7, #136, #148, #40 and #16 touch nearby forge.py or selftest.py hunks but other functions or sections: text conflicts only.
+
+Not checked: I did not run the full selftest on the PR head. The new check's pass on the PR and fail on base was traced in the code and reproduced with the in-memory probe. The incident URL in the body was not opened; it is motivation only.
+
+Change needed: none (REJECT). Close as a duplicate of #145.
+
+
 ## PR #155 · 2026-11-07T23:20:52Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
