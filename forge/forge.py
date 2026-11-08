@@ -52,7 +52,7 @@ GPU_LEDGER = Path.home() / ".local/state/forge/gpu-ledger.jsonl"
 
 
 class QuotaExhausted(Exception):
-    """Every model available to a role hit its provider's usage limit."""
+    """Every model available to a role hit its provider's usage limit or its errors outlasted omp's retries."""
 
 
 def now() -> str:
@@ -225,8 +225,8 @@ class Forge:
         return r
 
     def agent(self, role: str, prompt: str, cwd: Path, timeout_min: int | None = None) -> tuple[int, str]:
-        """Run one headless omp session for a role. On a provider quota error, try the role's
-        `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
+        """Run one headless omp session for a role. On a provider quota refusal, or a provider error omp gave
+        up retrying, try the role's `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
         for model in chain:
@@ -243,9 +243,15 @@ class Forge:
             # shortcut: _agent_once keeps the last 6 KB, so a refusal behind 6 KB of stderr noise loses the
             # marker and reads as a plain failure; widen that tail if a provider ever gets chatty on stderr.
             err = text.partition("\n[stderr]\n")[2]
-            if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", err, re.I):
+            # omp retries a 529/5xx itself and ends with "auto-retry gave up: <error>" on stderr (cli.js 18.12.6
+            # classes overloaded_error, rate_limit_error, 5xx and timeouts as Transient). Without this branch that
+            # session exits non-zero with no diff and fail() charges the ticket an attempt for a provider incident
+            # (Fable 5.1 errored 08:18-08:32 UTC 2026-11-08, status.claude.com/incidents/kw2lxj1th04c; four lanes
+            # would each lose one of three attempts). The mark clears on the next quota_ok() like a quota one.
+            m = re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota|auto-retry gave up|overloaded", err, re.I)
+            if rc != 0 and m:
                 self.exhausted[model.split("/")[0]] = time.time()
-                self.log(f"quota: {model} exhausted; trying the next model for {role}")
+                self.log(f"quota: {model} refused ({m.group(0)}); trying the next model for {role}")
                 continue
             self.last_model[role] = model
             return rc, text

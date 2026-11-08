@@ -751,6 +751,12 @@ with tempfile.TemporaryDirectory() as d:
     rc, text = f.agent("builder", "p", repo)
     check("the provider's own refusal on stderr falls back to the other vendor",
           ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
+    ran.clear()
+    f.exhausted.clear()
+    outs["a/b"] = (1, "\n[stderr]\nauto-retry gave up after 5 attempts: 529 Overloaded\n")
+    rc, text = f.agent("builder", "p", repo)
+    check("a provider error omp stopped retrying falls back like a refusal",
+          ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
 
 # 11. A cycle that does not land must take its attempt branch off the remote; a branch already merged into
 # local main must stay (land() keeps it as the only copy when the merge commit did not reach origin/main).
