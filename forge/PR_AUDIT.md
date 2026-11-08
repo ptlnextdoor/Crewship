@@ -2,6 +2,53 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #157 · 2026-11-08T11:44:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #157 forge: status tallies merged/attempts per builder model per ISO week
+What it changes: `status_text()` gets one new read-only row: merged/attempts per builder model (`model or "pre"`), split by the ISO week of each history entry's `at`, with a Wilson interval per cell. Because `status_text()` is also the steward's `{STATE}`, the row reaches the steward prompt too. The PR also adds a README paragraph (README.md:155) and selftest 4h check :344. The check gives the 4h fixture rows a `model` and spreads them over two weeks.
+Findings:
+- none forge/forge.py:1339-1349 The gate, the reviewer and the protected paths are untouched. The diff changes `status_text()`, README prose and the selftest 4h fixture/check, and nothing else.
+  - Not changed: no prompt file, `gate.sh` handling, `touched_protected`, claim, `recover()`, `discard_strays()`, `sh()`/killpg, PR create/merge, quota or `gpu.py` line.
+  - Path to an agent: the new string reaches one only through steward():1158 `prompt("steward", STATE=self.status_text())`. That is the same path the existing model row already uses.
+  - Content: the model names come from `last_model` via record():1153, never from ticket text. Nothing goes to a shell.
+  - Side effects: the row reads `all_states()` and writes nothing, so no two lanes share new state. It starts no new agent session and has no GPU or quota path.
+- low forge/forge.py:1345 This is the first code to parse `at`. Before, `at` was only used as a sort key. `dt.date.fromisoformat(h["at"][:10])` raises ValueError on a malformed value.
+  - Forge-written data never triggers it: every entry is written by record():1154 through now() (`%Y-%m-%dT%H:%M:%SZ`).
+  - A hand-edited state.json could. Then `forge status` crashes. In steward() the error comes after cycle() has finished, and lane_loop:1293 catches it (log, `recover()`, backoff). No ticket stays `in_progress` and no worktree is left behind.
+  - No change asked.
+- low forge/forge.py:1343-1349 Prompt growth is bounded. record():1154 caps history at 200 entries per lane, so the row has at most 800 entries. It has one cell per distinct (model, week) pair.
+  - Live reflex1 today: 122 entries, all in 2026-W43, so the row is one cell.
+  - At that pace (about 30 attempts per lane per week) a lane keeps about 7 weeks. With a few models that is a few dozen cells of about 25 characters.
+  - Side effect of the same cap: once a lane passes 200 entries, the oldest week shown for each model holds only the lanes that still keep it. That leftmost cell is partial and skewed by lane, at the edge of exactly the week-to-week comparison this row exists for.
+  - The by_try row has a `shortcut:` comment (:1342-1343) for the same cap; this block has none. The impact is low because the interval widens as n shrinks.
+- low forge/README.md:155 The README example says `2026-W45 12/16 (50-89%)`. The code prints `12/16 (51-90%)` (`rate_interval(12, 16)` on the PR head), so the README shows output the code does not produce. See Change needed.
+- nit forge/forge.py:1348 The row's label goes into every steward prompt and overstates the row: "(a provider-side change under one model name shows here, not in the version row)".
+  - At reflex1's volume a weekly cell's interval is about ±20-30 points (the selftest's `1/2 (9-91%)`), so only a large change would clear it.
+  - The "two weeks differ only when their intervals clear each other" caveat is in the README (:155) but not in the line the steward reads. The steward can only commit docs (`commit_docs`/`discard_strays` at :1160-1161), so the blast radius is wording in PROGRESS.md.
+  - The rationale is stated three times: the comment at :1339-1342, README:155 and selftest :342-343. That matches repo style; no change.
+- info forge/selftest.py:324-325,327 (base) The three deleted lines are fixture rows that were rewritten, not checks that were removed. The same three entries gain `"model": "anthropic/claude-opus-5-5"`, and 0099-other's `at` moves from 10-31 to 10-20.
+  - What the old rows exercised in 4h that the new rows do not: `status_text`'s `or "pre"` default for entries without a model. No check ever asserted it.
+  - The checks that read these rows still pass on the new ones. The PR-head STATE dump contains `0099-other: failed`, `reviewer did not 1`, `#1 0/2` and `#2 1/1`.
+  - At 4h, f.state holds one entry, so moving 0099-other to 10-20 keeps it in the last-8 list.
+  - What still covers `pre`: the `f.status()` call at selftest.py:1121 (PR head). Its first history entry has model None, and the run printed `pre 2026-W45 1/1 (21-100%)`. That only proves it does not crash; nothing asserts `pre` before or after this PR.
+  - Live: the 122 model-less entries print `pre 2026-W43 85/122 (61-77%)`.
+  - This is a display default, not a safeguard. The PR body names the fixture change ("gives the lane-2 history entries a `model` and two weeks") but not the 4h model-less coverage it drops.
+- info Verification:
+  - I exported head a3037550 with `git archive` (no checkout). `py_compile` passes, and the full `selftest.py` reports "all checks passed".
+  - The head selftest run against base 5c9d2a2b `forge.py` fails exactly one check, the new one. The fixtures use fixed dates, so the check is deterministic.
+  - `%G-W%V` handles the year boundary (2026-12-31 gives 2026-W53, 2027-01-04 gives 2027-W01), and weeks are zero-padded, so `sorted()` is chronological.
+  - Read-only smoke: PR-head `forge.py status --config ~/.config/forge/reflex1.toml` prints `merged/attempts per builder model per ISO week (...): pre 2026-W43 85/122 (61-77%)`.
+  - The body has no HTML comments. The one PR comment is Copilot's quota notice. The body's claim "Output only; no cycle, gate, prompt or config path changes" matches the diff.
+- info Siblings: I read the diff of every open PR on `forge` that touches forge.py, README.md or selftest.py: #148, #145, #140, #139, #136, #133, #132, #117, #111, #99, #86, #85, #84, #83, #79, #48, #47, #44, #42, #40, #39, #31, #28, #25, #23, #20, #19, #16. #124 touches only gpu.py.
+  - #133 inserts its `by_pair` row at the same point, right after the model row. #132 rewrites the model row's key to `model:effort`, and its label, on the line just above this insertion. Both overlaps are textual: whichever PR lands second rebases. Neither contradicts this PR or duplicates it.
+  - One interaction: if #132 lands, the model row splits by effort while this row stays on the bare model. README:155's "The model line is repeated per ISO week" then reads loosely. The PR that lands second should fix that wording when it rebases.
+  - #99 and #132 edit selftest 4i, not the 4h fixture this PR changes. Every other sibling's README hunks are in the safeguard table (line 92 or earlier), not the `status` paragraphs.
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:155, replace "`anthropic/claude-opus-5-5 2026-W45 12/16 (50-89%), 2026-W46 ...`" with "`anthropic/claude-opus-5-5 2026-W45 12/16 (51-90%), 2026-W46 ...`".
+
+
 ## PR #156 · 2026-11-08T09:43:55Z · REJECT · risk low · gate pass · closed: rejected
 
 Verdict: REJECT
