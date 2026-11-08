@@ -1150,8 +1150,12 @@ class Forge:
         23 to 159 min (median 60) and only forge.log held that. `why` is the first line of a failed attempt's
         cause, the guard that ended it: status counts them per guard; a zero on the gate, reviewer, protected-path or dependency guards means
         the layer in front held, not that the guard can go."""
-        model = next((m for r, m in self.last_model.items() if r.startswith("builder")), None)
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
+        # `role` is builder or builder_hard (xhigh, 90 min, from attempt 3 or a `difficulty: hard` ticket): the
+        # model row pools both effort levels, so whether the escalation earns its minutes shows nowhere else
+        # (Gao and Peng, ICSE 2026, doi 10.1145/3744916.3773250: a turn cap at the baseline's 75th percentile cut
+        # cost 24-68% at the same solve rate, and extending only the tasks that need it cut 12-24% more; this is the per-level number).
+        role, model = next(((r, m) for r, m in self.last_model.items() if r.startswith("builder")), (None, None))
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "role": role, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
@@ -1326,16 +1330,23 @@ class Forge:
             t[1] += 1
         out.append(f"merged/attempts per forge version + omp release (now {self.version} {self.harness}): " + ", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in by_version.items()))
         by_model: dict[str, list[int]] = {}
+        by_role: dict[str, list[int]] = {}
         for h in (h for s in states for h in s.get("history", [])):
-            t = by_model.setdefault(h.get("model") or "pre", [0, 0, 0, 0])  # merged, attempts, secs of every attempt carrying it, merged among those
-            t[0] += h["result"] == "merged"
-            t[1] += 1
-            if "secs" in h:
-                t[2] += h["secs"]
-                t[3] += h["result"] == "merged"
+            for t in (by_model.setdefault(h.get("model") or "pre", [0, 0, 0, 0]), by_role.setdefault(h.get("role") or "pre", [0, 0, 0, 0])):  # merged, attempts, secs of every attempt carrying it, merged among those
+                t[0] += h["result"] == "merged"
+                t[1] += 1
+                if "secs" in h:
+                    t[2] += h["secs"]
+                    t[3] += h["result"] == "merged"
         # lane-minutes per merged ticket, failed attempts included (arXiv 2610.19345: compare models on resources per
         # completed task, not per call); entries written before `secs` existed count in the rate and not in the minutes
-        out.append("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts: " + ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in by_model.items()))
+        def minutes(d: dict[str, list[int]]) -> str:
+            return ", ".join(f"{v} {rate_interval(m, n)}" + (f" {secs // 60 // nm} min/merge" if nm else f" {secs // 60} min, 0 merges" if secs else "") for v, (m, n, secs, nm) in d.items())
+        out.append("merged/attempts per builder model that ran, lane-minutes per merged ticket counting its failed attempts: " + minutes(by_model))
+        # the same split by effort level: builder_hard runs xhigh for 90 min from attempt 3 and on `difficulty: hard`
+        # tickets, and the model row pools it with the 75-min builder, so this is the row that says whether the
+        # escalation merges more per lane-minute or only runs longer (`pre` is an entry written before `role` was recorded)
+        out.append("merged/attempts per builder role (builder, builder_hard), lane-minutes per merged ticket: " + minutes(by_role))
         # the model tally split by ISO week: `version` and `harness` move only when forge or omp changes, so a
         # change on the provider's side under one model name (arXiv 2307.09009: GPT-4's code-generation
         # formatting errors rose between March and June 2023 under the same name) shows in no other row.
