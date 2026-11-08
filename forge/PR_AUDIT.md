@@ -2,6 +2,56 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #160 · 2026-11-08T22:32:58Z · MERGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE
+Risk: low
+
+## PR #160 forge: the reviewer never runs on the model that built the diff
+What it changes: `agent()` gains `avoid=""` and skips a chain entry equal to it, the same way it skips a spent one (forge.py:229, :240). `cycle()` passes `built_by` to both review calls (:1057, :1064), so when no other model is left the result is `QuotaExhausted` instead of a self-review. Also selftest check 27, `avoid=""` on six review-path stubs, and an extended README row 36.
+
+Findings:
+- info forge/forge.py:229-259,1057,1064: I traced it end to end with a real `cycle()` and real `agent()`, stubbing only `_agent_once`. Setup: reflex1's roles in a scratch git fixture, `exhausted={"anthropic:opus"}`, and Astra returning rc 1 with `Codex error event: The usage limit has been reached` on stderr.
+  - Base 8881c89b: the builder ran on Fable, then `reviewer_alt` ran Astra (refused) and then Fable, which APPROVED. Result: MERGED. One model reviewed its own diff.
+  - PR 79e60a84: the builder ran on Fable, Astra was refused, Fable was skipped, and `QuotaExhausted(reviewer_alt)` was raised.
+  - Exception path after the raise: the worktree is removed, the local and remote `forge/` branch is deleted (:1105), and the PR is closed with the error when PRs are on (:1095). `lane_loop` then calls `recover(quota=True)` (:1302), which sets the ticket to `status: retry` and adds a `## forge-quota` note. No history entry is written and no attempt is charged. Nothing is left `in_progress`.
+  - A single `avoid` is enough even when a repair session ran: within a cycle, `exhausted` only grows (:254), and `quota_ok()` runs only between cycles (:1293). So an earlier builder-role model is always spent once a later one ran.
+  - The full selftest at the PR head (extracted to a scratch dir) exits 0, "all checks passed", including check 27.
+- info deletions: no layer is retired. The old README:36 rule cell and its prevents cell are each kept word for word as the prefix of the new cells (checked: `startswith` is True for both). The vendor split is still enforced at :1043-1045. The six deleted selftest lines are stub signatures (:785, :999, :1042, :1081, :1108, :1158), re-added with `avoid=""`. No check was removed, and `forge/prompts/*.md` is untouched.
+- info security checklist: the diff does not touch `gate.sh` handling, protected paths, `touched_protected`/`unrequested_deps`/`test_tampering`, prompts, the claim race, `discard_strays()`, PR creation or merge, timeouts, or GPU.
+  - `avoid` is a config model string compared with `==`. It never reaches a shell or an f-string command.
+  - `exhausted` and `last_model` are per-lane process state, so the diff adds no shared state.
+  - No prompt or log grows.
+  - The reviewer gets less room to approve: the one thing removed is a same-model review.
+- low forge/forge.py:240,259 (with :1105, :1220): the new trigger fires after the builder session and the gate have run, so a build that passed the gate is thrown away.
+  - What is lost: the branch is deleted from origin and the retry rebuilds from scratch.
+  - `## forge-quota` requeues do not count toward the interruption cap (`recover` counts only `## forge-recover `, :1220), so the same ticket can be rebuilt each time this happens.
+  - Why the waste is bounded: `quota_ok()` pauses every lane when `anthropic:opus` and a Codex window are both over the floor (:355). So a Fable builder only starts while Codex is under the floor. The case then needs Codex to run out during the cycle (or a `rate_limit` string on stderr), which costs about one discarded build per lane per such event.
+  - reflex1's forge.log: 0 of 125 reviewed cycles had a Fable-built diff (102 Opus-built reviewed by Fable, 23 by Astra), so this has not happened on record.
+  - The policy matches reflex1.toml:57's own premise ("Fable is a different model than the Opus builder"). No change required.
+- low slop forge/forge.py:230-231: the docstring line the diff rewrote still says "then any role with a model from another vendor". `agent()` does not do that: it walks only `[r["model"]] + r["fallback"]` and then raises `QuotaExhausted` (:259), which is exactly the outcome this PR adds. A reader is told a cross-role fallback comes first.
+  - The five new docstring lines also repeat README:36 and check 27's comment, so the same reasoning is written in three places.
+- low forge/README.md:36: the prevents cell names self-approval ("one model approving its own blind spots"), but its citation is arXiv 2609.04270's 35% vs 2% false-rejection rate. That figure measures self-review rejecting correct work, which is how README:54 quotes it, not approving bad work. The number supports avoiding self-review because of lost attempts, not the harm the row names.
+- low forge/forge.py:240,1301: a model skipped because of `avoid` gets no log line. The stop then reads "quota: no model left for reviewer_alt", and the PR is closed as "cycle error: QuotaExhausted: reviewer_alt", even though Fable had quota. Neither forge.log nor `status` (which gets no history entry) can tell this stop from a real quota stop.
+- info forge/selftest.py:1242-1265: check 27 calls `agent()` directly. Nothing in the selftest asserts that `cycle()` passes `avoid=built_by` at :1057/:1064, so dropping that argument keeps the selftest green. My `cycle()` probe above covers that path. Not required.
+- info siblings (open PRs on `forge` touching README.md, forge.py or selftest.py; diffs read, nothing checked out):
+  - #20 and #86 also rewrite README:36. The overlap is textual, not a contradiction:
+    - #20 puts `xai-oauth/grok-build` ahead of Fable in `reviewer_alt.fallback`, so with both merged this case runs Grok instead of raising.
+    - #86 names `built_by` in the reviewer prompt.
+    - Whichever lands second merges the row text.
+  - #47 edits the same skip line in `agent()` and adds a lookahead, `any(m.split("/")[0] not in self.exhausted for m in chain[i+1:])`. Rebased onto this PR, that lookahead would count the avoided Fable as usable: after a 5xx on Astra it would continue, skip Fable and raise `QuotaExhausted` instead of "returns the error as before". #47 is the side to change: use `not self.spent(m) and m != avoid`. Its base also predates `spent()`.
+  - #6 (review loop with a repair round) and #5 (review call gains `NOTES=`) rewrite the review call on an old base. When rebased, each must pass `avoid=built_by`; that is their side to change.
+  - #148 also adds a selftest check numbered `# 27.` (the sh() timeout check). Whichever lands second renumbers.
+  - #136, #139 and #19 add `f.agent` stubs without `avoid`. They only run on the `land()`/`rebase_onto_main()` paths, which never pass it, so there is no TypeError after a merge.
+  - #133, #132, #83, #8, #145 and #39 read or write `last_model`/`exhausted` and are compatible with this PR.
+- none PR text: the body's claims check out against the diff:
+  - six stubs, check 27, README row 36;
+  - "the other agent() callers ... never pass avoid";
+  - arXiv 2609.04270 already cited at README:54;
+  - the selftest passes.
+  The only comment is Copilot's quota notice, which makes no claims.
+
+
 ## PR #159 · 2026-11-08T16:21:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
