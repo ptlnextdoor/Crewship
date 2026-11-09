@@ -110,6 +110,7 @@ class Forge:
         # "vendor" or "vendor:<window label token>" -> when that quota ran out; see spent(). Cleared by the
         # next quota_ok() pass that sees the window back under the floor, not on a timer.
         self.exhausted: dict[str, float] = {}
+        self.meter: dict[str, float] = {}  # "<vendor> <window label>" -> % used at the last quota_ok(); record() stores it
         self.last_model: dict[str, str] = {}  # role -> model that actually ran (after fallback)
         self.cycle_t0 = time.monotonic()  # claim time of the cycle in progress; record() stores the elapsed seconds
         self.reviewed: tuple[str, set[str]] = ("", set())  # (sha, patch_lines) the reviewer approved; see land()
@@ -329,6 +330,7 @@ class Forge:
         # by per-role fallback. A window labelled for one model ("Claude 7 Day (Fable)") is keyed
         # "vendor:<token>" and takes only that model out of the chains (spent()).
         over: dict[str, bool] = {}
+        meter: dict[str, float] = {}
         for block in re.split(r"\n(?=\S)", r.stdout):
             name = block.split("\n", 1)[0].lower()
             vendor = "anthropic" if "anthropic" in name else "openai-codex" if "codex" in name else None
@@ -341,6 +343,9 @@ class Forge:
                 q = re.search(r"\(([^)]+)\)", line.split("%")[0])  # the label's qualifier, e.g. "(Fable)"
                 key = f"{vendor}:{q.group(1).strip().lower()}" if q else vendor
                 over[key] = over.get(key, False) or float(m.group(1)) >= floor
+                label = re.sub(r"[●█░]", "", line.split("%")[0]).rsplit(maxsplit=1)[0].strip()  # "Claude 7 Day (Fable)"
+                meter[f"{vendor} {label}"] = float(m.group(1))
+        self.meter = meter
         for k, is_over in over.items():
             if is_over:
                 self.exhausted.setdefault(k, time.time())
@@ -1151,13 +1156,16 @@ class Forge:
         is the usable proxy for cost when the meter is unreadable (arXiv 2610.39621); reflex1's 80 merges ran
         23 to 159 min (median 60) and only forge.log held that. `why` is the first line of a failed attempt's
         cause, the guard that ended it: status counts them per guard; a zero on the gate, reviewer, protected-path or dependency guards means
-        the layer in front held, not that the guard can go."""
+        the layer in front held, not that the guard can go. `meter` is every plan window's "% used" as
+        quota_ok() read it at this cycle's start: the window is the bill the lanes actually pay, and a week's
+        meter climb against its merges is the only test here of a vendor repricing it (drewhoover.com measured
+        Fable's weekly meter at 1.8x per message between Oct 15 and Nov 5, 2026, with tokens per message flat)."""
         # `role` is builder or builder_hard (xhigh, 90 min, from attempt 3 or a `difficulty: hard` ticket): the
         # model row pools both effort levels, so whether the escalation earns its minutes shows nowhere else
         # (Gao and Peng, ICSE 2026, doi 10.1145/3744916.3773250: a turn cap at the baseline's 75th percentile cut
         # cost 24-68% at the same solve rate, and extending only the tasks that need it cut 12-24% more; this is the per-level number).
         role, model = next(((r, m) for r, m in self.last_model.items() if r.startswith("builder")), (None, None))
-        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "role": role, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "why": why}])[-200:]
+        self.state["history"] = (self.state["history"] + [{"cycle": self.state["cycle"], "ticket": tid, "result": result, "at": now(), "version": self.version, "harness": self.harness, "role": role, "model": model, "secs": int(time.monotonic() - self.cycle_t0), "meter": self.meter, "why": why}])[-200:]
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")

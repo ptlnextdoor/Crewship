@@ -973,6 +973,9 @@ with tempfile.TemporaryDirectory() as d:
     check("a window labelled for one model does not take the rest of the vendor with it",
           keeps_going and pauses and ran == ["anthropic/claude-opus-5-5", "openai-codex/gpt-6.1-sol"],
           f"{ran} {sorted(f.exhausted)}")
+    check("quota_ok keeps each window's % used under its vendor and label",
+          f.meter == {"anthropic Claude 5 Hour": 57.0, "anthropic Claude 7 Day": 60.0,
+                      "anthropic Claude 7 Day (Fable)": 100.0, "openai-codex 5 hours": 90.0}, str(f.meter))
 
 # 18. The repair session after a failed gate is the one place where a gate.sh the agent just rewrote was
 # executed: its edits were read only after the second gate run, so the rewritten oracle ran and posted its
@@ -1111,6 +1114,7 @@ with tempfile.TemporaryDirectory() as d:
 
     f.agent = build_on_fallback
     f.cycle_t0 = forge.time.monotonic() - 86400  # stale start: cycle() must reset it at claim
+    f.meter = {"anthropic Claude 7 Day (Fable)": 12.5}  # what the loop's quota_ok() left before the claim
     f.cycle()
     # The per-version tally hides a lane that fell back to the other vendor mid-day (arXiv 2610.37700: the
     # saving in a planner-coder-reviewer pipeline is choosing the model per task), so the entry names the builder.
@@ -1118,6 +1122,8 @@ with tempfile.TemporaryDirectory() as d:
           f.state["history"][-1].get("model") == "e/f", str(f.state["history"][-1]))
     check("a history entry records the cycle's wall time in seconds",
           isinstance(f.state["history"][-1].get("secs"), int) and 0 <= f.state["history"][-1]["secs"] < 3600, str(f.state["history"][-1]))
+    check("a history entry carries every plan window's % used as read at the cycle's start",
+          f.state["history"][-1].get("meter") == {"anthropic Claude 7 Day (Fable)": 12.5}, str(f.state["history"][-1]))
     # reflex1's 85 merges read median 60 min while its 37 failed cycles held 2,097 of 7,139 lane-minutes: 84 per merge.
     import contextlib, io
     f.state["history"] += [dict(f.state["history"][-1], model="g/h", result="retry", secs=1200, why="reviewer did not approve."), dict(f.state["history"][-1], model="g/h", result="merged", secs=600, why="")]
