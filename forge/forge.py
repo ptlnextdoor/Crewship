@@ -120,7 +120,13 @@ class Forge:
         url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=self.repo, capture_output=True, text=True).stdout.strip()
         m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
         self.gh_repo = c.get("github_repo") or (m.group(1) if m else "")
+        # Every git the loop runs (sh(): add, commit, rebase, merge, push, diff) and every session's git read
+        # the .git/ of the lane's clone, which its worktrees share, which no diff shows and no protected path covers;
+        # a hook or a core.fsmonitor command planted there would run as forge on every later cycle of that lane, until
+        # someone looked. GIT_CONFIG_* outranks every config file, so git never reads either (reflex1 has none).
         self.env = {**os.environ, "PATH": f"{home}/.cargo/bin:{home}/.local/bin:{os.environ.get('PATH', '')}",
+                    "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "/dev/null",
+                    "GIT_CONFIG_KEY_1": "core.fsmonitor", "GIT_CONFIG_VALUE_1": "false",
                     **{k: os.path.expanduser(str(v)) for k, v in c.get("env", {}).items()}}
         if lane > 1 and "CARGO_TARGET_DIR" in self.env:
             self.env["CARGO_TARGET_DIR"] += f"-lane{lane}"

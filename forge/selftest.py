@@ -1285,6 +1285,26 @@ with tempfile.TemporaryDirectory() as d:
           "the diff" in filled and "{DIFF}" in refused and "{TICKET}" not in refused,
           f"filled={filled!r} refused={refused!r}")
 
+# 27. A lane's worktrees share its clone's .git/, nothing diffs it and no protected path reaches it. A session that
+# writes a hook there or sets core.fsmonitor has code run as forge on every later git that lane makes (lemans
+# moved its git state out of the agent's repo for this, Evil Martians 2026-11-03).
+with tempfile.TemporaryDirectory() as d:
+    repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
+    repo.mkdir(); git("init -q -b main", repo)
+    (repo / "f").write_text("a\n"); git("add -A", repo); git("commit -qm base", repo)
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    mark = Path(d) / "ran"
+    (Path(d) / "hooks").mkdir()
+    (Path(d) / "hooks/pre-commit").write_text(f"#!/bin/sh\necho hook >> {mark}\nexit 1\n")
+    (Path(d) / "fsmon").write_text(f"#!/bin/sh\necho fsmonitor >> {mark}\nprintf /\n")
+    for p in ("hooks/pre-commit", "fsmon"): (Path(d) / p).chmod(0o755)
+    git(f"config core.hooksPath {d}/hooks", repo); git(f"config core.fsmonitor {d}/fsmon", repo)
+    f = forge.Forge(cfg)
+    (repo / "f").write_text("b\n")
+    r = f.sh("git add -A && git commit -qm work", cwd=repo)
+    check("a hook or fsmonitor command planted in .git/ does not run under the loop's git",
+          r.returncode == 0 and not mark.exists(), f"rc={r.returncode} ran={mark.read_text() if mark.exists() else ''}")
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
