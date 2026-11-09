@@ -610,17 +610,19 @@ class Forge:
 
     # Token shapes with a fixed prefix the issuer chose so scanners can match them with no context; a bare
     # 32-hex string is not one. `password`: a literal after `PGPASSWORD=`, `MYSQL_PWD=` or `sshpass -p`, a bearer
-    # token in an `Authorization:` header, or `://user:pass@` before a dotted host, the shapes format-only scanners
-    # let through (Apiiro, 2026-11-05: of 1,122 `.claude/settings.local.json` files on GitHub with a real secret,
-    # 215 were flagged by neither gitleaks nor TruffleHog, a password typed into a command in most); a value that
-    # starts with `$`, `{`, `<`, `%`, `(` or `\`, quoted or not, is a reference or a placeholder and passes (a quoted
-    # literal does not), so does `mysql -p<pass>`, which is also the prompt flag. reflex1 main (627 commits) and this
-    # repo have no match in any tracked file but this pattern's own line.
+    # token in an `Authorization:` header, or `://user:pass@` (the user may be empty, as in a redis URL) before a
+    # dotted host or an IP, the shapes format-only scanners let through (Apiiro, 2026-11-05: of 1,122
+    # `.claude/settings.local.json` files on GitHub with a real secret, 215 were flagged by neither gitleaks nor
+    # TruffleHog, a password typed into a command in most; GitGuardian, 2026-11-09: of the file's 5,343 secrets
+    # valid at detection, 1,955 were Postgres connection strings and 116 MongoDB URIs, the largest live bucket);
+    # a value that starts with `$`, `{`, `<`, `%`, `(` or `\`, quoted or not, is a reference or a placeholder and
+    # passes (a quoted literal does not), so does `mysql -p<pass>`, which is also the prompt flag. reflex1 main
+    # (627 commits) and this repo have no match in any tracked file but this pattern's own line.
     SECRET = re.compile(r"(?P<aws>AKIA[0-9A-Z]{16})|(?P<pem>-----BEGIN [A-Z ]*PRIVATE KEY-----)|(?P<github>gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"
                         r"|(?P<anthropic>sk-ant-[A-Za-z0-9_-]{32,})|(?P<openai>sk-proj-[A-Za-z0-9_-]{32,})|(?P<runpod>rpa_[A-Za-z0-9]{32,})"
-                        r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})"
+                        r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})|(?P<huggingface>hf_[A-Za-z0-9]{34})"
                         r"|(?P<password>(?:PGPASSWORD=|MYSQL_PWD=|sshpass -p ?)['\"]?[^\s'\"$<{%(\\]{8,}|Authorization: Bearer [A-Za-z0-9._~+/=-]{20,}"
-                        r"|://[A-Za-z0-9._-]+:[^\s'\"$<{%(\\:@/]{8,}@[A-Za-z0-9.-]+\.[a-z]{2,})")
+                        r"|://[A-Za-z0-9._-]*:[^\s'\"$<{%(\\:@/]{8,}@[A-Za-z0-9.-]+\.(?:[a-z]{2,}|[0-9]{1,3}))")
 
     @staticmethod
     def redact(text: str) -> str:
