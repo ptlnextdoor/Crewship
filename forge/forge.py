@@ -829,6 +829,11 @@ class Forge:
         url = self.gh(f"pr create --base main --head {branch} --title {title} --label forge", cwd=wt, body=body)
         if not url.startswith("http"):
             url = self.gh(f"pr create --base main --head {branch} --title {title}", cwd=wt, body=body)
+        if not url.startswith("http"):
+            # `gh pr create` is not idempotent: a create that failed after GitHub accepted it (the response lost
+            # on the way back) leaves an open PR the retry refuses ("a pull request for branch ... already
+            # exists"), and an empty url runs the whole attempt with no gate, review or close comment on it.
+            url = self.gh(f"pr list --head {branch} --state open --json url --jq '.[].url'", cwd=wt).split("\n")[0]
         if url.startswith("http"):
             self.log(f"PR {url}")
         return url if url.startswith("http") else ""

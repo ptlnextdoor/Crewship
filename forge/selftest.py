@@ -234,6 +234,14 @@ with tempfile.TemporaryDirectory() as d:
     check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
     body = (f.home / "gh-body.md").read_text()
     check("PR body names the forge version and omp release", f"`{f.version}` on `{f.harness}`" in body, body[:120])
+    # A create that GitHub accepted but gh reported as failed: both create calls exit 1, the branch's open PR is
+    # found by `pr list` and the attempt keeps its PR; a branch with no PR stays "".
+    (Path(d) / "bin/gh").write_text('#!/bin/sh\necho "$@" >> "$GH_ARGS.log"\ncase "$2" in create) echo "already exists" >&2; exit 1;; list) [ "$4" = b ] && echo http://pr/7;; esac\n')
+    url = f.pr_open(repo, "b", t, "builder")
+    calls = Path(f"{d}/gh-args.log").read_text().splitlines()
+    check("a failed create falls back to the branch's open PR", url == "http://pr/7" and len(calls) == 3 and calls[2].startswith("pr list --head b --state open"), f"{url} {calls}")
+    check("no PR on the branch after a failed create stays empty", f.pr_open(repo, "c", t, "builder") == "")
+    (Path(d) / "bin/gh").write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_ARGS"\necho http://pr\n')
     f.pr_comment("http://pr", "**gate: FAIL**\nexport RUNPOD_API_KEY=rpa_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 sha 9f86d081884c7d659a2feaa0c55ad015\nrpa_ ghp_")
     body = (f.home / "gh-body.md").read_text()
     check("a credential-shaped token in PR-bound text is replaced by its issuer; hex and bare prefixes pass",
