@@ -912,9 +912,18 @@ class Forge:
                 self.pr_comment(self.pr, f"**landing patch differs from the one reviewed at {sha}** (the sync with main was "
                                          f"resolved after the review; gated, not reviewed)\n\n```\n{delta[:6000]}\n```")
                 posted = delta
-            ok, gout = self.gate(wt)
-            if not ok:
-                return f"gate failed after updating from main.\n{gout}"
+            # `sha` is the commit the gate passed (cycle() reads it right after the gate, before the review). A
+            # rebase onto a main that moved only in tickets/ (other lanes' claim/done/retry commits) leaves a tree
+            # the gate does not read differently, the same trust main_gated() gives the builder's starting run;
+            # re-gating it is 8 to 25 minutes per landing for the answer already on the PR. Any other change
+            # (another lane's code, a conflict session's edit) gates. A `sha` git cannot diff gates too.
+            moved = self.sh(f"git diff --name-only {sha} HEAD", cwd=wt) if sha else None
+            if moved and moved.returncode == 0 and all(f.startswith("tickets/") for f in moved.stdout.split()):
+                self.log(f"gate not rerun: landing tree is the one gated at {sha[:9]}" + (" plus tickets/ status commits" if moved.stdout.split() else ""))
+            else:
+                ok, gout = self.gate(wt)
+                if not ok:
+                    return f"gate failed after updating from main.\n{gout}"
             if self.pr:
                 self.sh(f"git push -q --force-with-lease origin {branch}", cwd=wt, timeout=120)
             if self.pr_merge(self.pr, branch, trailer):
