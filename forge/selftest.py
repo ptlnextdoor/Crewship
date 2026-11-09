@@ -351,9 +351,10 @@ with tempfile.TemporaryDirectory() as d:
           "anthropic/claude-opus-5-5 2026-W43 0/1 (0-79%), 2026-W44 1/2 (" in week_row and week_row.count("min/attempt") == 1 and "90 min/attempt" in week_row,
           week_row)
     # The four attempts by effort level: one builder failure (20 lane-minutes), one entry from before role/secs (pre, rate only), one builder_hard failure without secs and one builder_hard merge at 90 min; the model row pools them under one name, so only this row can show what the escalation costs per merge.
+    role_row = "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder role"))
     check("steward sees merged/attempts and lane-minutes per builder role",
-          "builder 0/1 (0-79%) 20 min, 0 merges" in seen_state[0] and "builder_hard 1/2 (" in seen_state[0] and "90 min/merge" in seen_state[0] and "pre 0/1 (0-79%)" in seen_state[0],
-          "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder role")))
+          "builder 0/1 (0-79%) 20 min, 0 merges" in role_row and "builder_hard 1/2 (9-91%) 90 min/merge" in role_row and "pre 0/1 (0-79%)" in role_row,
+          role_row)
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").
     (repo / "tickets").mkdir(exist_ok=True); t = repo / "tickets/0009-z.md"; t.write_text("status: in_progress\n---\n# z\n")
