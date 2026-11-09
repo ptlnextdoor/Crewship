@@ -1028,7 +1028,7 @@ with tempfile.TemporaryDirectory() as d:
     git(f"clone -q {origin} {repo}", Path(d))
     (repo / "tickets").mkdir()
     (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
-    (repo / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\nexit 1\n")
+    (repo / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\necho 'test t ... FAILED'\nexit 1\n")
     (repo / "gate.sh").chmod(0o755)
     git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
     cfg = Path(d) / "c.toml"
@@ -1048,7 +1048,7 @@ with tempfile.TemporaryDirectory() as d:
     f.cycle()
     note = (repo / "tickets/0001-t.md").read_text()
     check("a repair that changes nothing fails the attempt without a second gate run",
-          "repair changed nothing (rc=124)" in note and runs.read_text().count("run") == 1 and turns == ["builder", "builder"],
+          "repair changed nothing (rc=124)" in note and runs.read_text().count("run") == 1 and turns == ["builder", "builder"] and "test t ... FAILED" in note,
           f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
 
 # 19. A builder that brings main into its branch (merge or rebase - both are normal git hygiene, and the

@@ -1018,7 +1018,7 @@ class Forge:
                     # reflex1). Its one gate failure on record, PR #2, went this way: the repair session died on
                     # Codex's usage limit and the gate reran on the untouched branch. Unchanged-code resubmission
                     # is 28% of trace-less repair retries (arXiv 2611.09212); here it is the whole second gate run.
-                    return self.fail(ticket, f"repair changed nothing (rc={rc}); gate not rerun.\n{out[-1500:]}")
+                    return self.fail(ticket, f"repair changed nothing (rc={rc}); gate not rerun.\n{gout}")
                 bad = self.secrets(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint.")
