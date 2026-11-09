@@ -293,6 +293,21 @@ with tempfile.TemporaryDirectory() as d:
     # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced.
     check("a conflict resolved after the review posts the lines the reviewer never saw",
           len(comments) == 1 and "abc123" in comments[0] and "+both" in comments[0] and "+branch" in comments[0], str(comments))
+    # 4e. The post-rebase gate is skipped only when the landing tree is the gated commit's, give or take tickets/
+    # (another lane's claim/done commits): a lane landing code on main gates again.
+    runs: list[int] = []
+    f.gate = lambda cwd: (runs.append(1), (True, ""))[1]
+    for n, other_file, want in (("2", "tickets/0009-o.md", 0), ("3", "main.txt", 1)):
+        wt2 = Path(d) / f"wt{n}"
+        git("pull -q origin main", repo); git(f"worktree add -q -b land{n} {wt2} main", repo)
+        (wt2 / f"b{n}.txt").write_text("x\n"); git("add -A", wt2); git("commit -qm branch", wt2)
+        f.reviewed = (git("rev-parse HEAD", wt2).strip(), set())  # the commit the gate passed and the reviewer saw
+        git("pull -q origin main", other); (other / other_file).parent.mkdir(exist_ok=True); (other / other_file).write_text(f"{n}\n")
+        git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
+        runs.clear()
+        why = f.land(wt2, f"land{n}", f"000{n}-x", "builder")
+        check(f"landing after main moved in {other_file} {'skips' if want == 0 else 'reruns'} the gate",
+              why == "" and len(runs) == want and git(f"show origin/main:b{n}.txt", repo) == "x\n", why or f"gate runs {len(runs)}")
 
     # 4f. pr_merge waits for GitHub to finish recomputing mergeability after the push, then merges through gh.
     bindir = Path(d) / "bin"; bindir.mkdir()
