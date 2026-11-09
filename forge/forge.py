@@ -1368,14 +1368,19 @@ class Forge:
         # the model tally split by ISO week: `version` and `harness` move only when forge or omp changes, so a
         # change on the provider's side under one model name (arXiv 2307.09009: GPT-4's code-generation
         # formatting errors rose between March and June 2023 under the same name) shows in no other row.
-        # Same caveat again: different tickets per week, not a controlled comparison.
-        by_week: dict[str, dict[str, list[int]]] = {}
+        # Same caveat again: different tickets per week, not a controlled comparison. Beside the rate, the median
+        # lane-minutes per attempt: on LiveNerf's frozen panel a lower effort setting cut output tokens 26-62%
+        # against 4-8 accuracy points, so the volume signal moves first; omp prints no token count and the lanes
+        # are plan-billed, so wall time is the proxy forge has (entries without `secs` count in the rate only).
+        by_week: dict[str, dict[str, list]] = {}
         for h in (h for s in states for h in s.get("history", [])):
-            t = by_week.setdefault(h.get("model") or "pre", {}).setdefault(dt.date.fromisoformat(h["at"][:10]).strftime("%G-W%V"), [0, 0])
+            t = by_week.setdefault(h.get("model") or "pre", {}).setdefault(dt.date.fromisoformat(h["at"][:10]).strftime("%G-W%V"), [0, 0, []])
             t[0] += h["result"] == "merged"
             t[1] += 1
-        out.append("merged/attempts per builder model per ISO week (a provider-side change under one model name shows here, not in the version row): "
-                   + ("; ".join(f"{v} " + ", ".join(f"{wk} {rate_interval(m, n)}" for wk, (m, n) in sorted(ws.items())) for v, ws in by_week.items()) or "-"))
+            if "secs" in h:
+                t[2].append(h["secs"])
+        out.append("merged/attempts per builder model per ISO week, median lane-minutes per attempt (a provider-side change under one model name shows here, not in the version row): "
+                   + ("; ".join(f"{v} " + ", ".join(f"{wk} {rate_interval(m, n)}" + (f" {sorted(secs)[len(secs) // 2] // 60} min/attempt" if secs else "") for wk, (m, n, secs) in sorted(ws.items())) for v, ws in by_week.items()) or "-"))
         # merged/attempts by the ticket's own attempt number, pooled across lanes (a retried ticket is claimed
         # by whichever lane is free): `cycle()` runs builder_hard from attempt 3, and from attempt 1 on a
         # `difficulty: hard` ticket, so no bucket is a single effort level.

@@ -340,10 +340,12 @@ with tempfile.TemporaryDirectory() as d:
           "#1 0/2" in seen_state[0] and "#2 1/1" in seen_state[0],
           "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")))
     # Same model, two ISO weeks (10-20 is W43, 10-31 is W44): a provider-side change under one model name is
-    # visible only with a time axis; the version and model rows pool every week.
-    check("steward sees merged/attempts per model per ISO week",
-          "anthropic/claude-opus-5-5 2026-W43 0/1 (0-79%), 2026-W44 1/2" in seen_state[0],
-          "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder model per ISO week")))
+    # visible only with a time axis; the version and model rows pool every week. W43's entry carries no `secs`
+    # (rate only); W44's two attempts ran 20 and 90 min, so its median is the upper middle, 90.
+    week_row = "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder model per ISO week"))
+    check("steward sees merged/attempts and median minutes per model per ISO week",
+          "anthropic/claude-opus-5-5 2026-W43 0/1 (0-79%), 2026-W44 1/2 (" in week_row and week_row.count("min/attempt") == 1 and "90 min/attempt" in week_row,
+          week_row)
     # The same three attempts by effort level: one builder failure (20 lane-minutes), one entry from before role/secs (pre, rate only) and one builder_hard merge at 90 min; the model row pools them under one name, so only this row can show what the escalation costs per merge.
     check("steward sees merged/attempts and lane-minutes per builder role",
           "builder 0/1 (0-79%) 20 min, 0 merges" in seen_state[0] and "builder_hard 1/1 (21-100%) 90 min/merge" in seen_state[0] and "pre 0/1 (0-79%)" in seen_state[0],
