@@ -1285,9 +1285,9 @@ with tempfile.TemporaryDirectory() as d:
           "the diff" in filled and "{DIFF}" in refused and "{TICKET}" not in refused,
           f"filled={filled!r} refused={refused!r}")
 
-# 27. The lanes share one .git/ (worktrees), nothing diffs it and no protected path reaches it. A session that
-# writes a hook there or sets core.fsmonitor has code run as forge on every later git the loop makes, in every
-# lane (lemans moved its git state out of the agent's repo for this, Evil Martians 2026-11-03).
+# 27. A lane's worktrees share its clone's .git/, nothing diffs it and no protected path reaches it. A session that
+# writes a hook there or sets core.fsmonitor has code run as forge on every later git that lane makes (lemans
+# moved its git state out of the agent's repo for this, Evil Martians 2026-11-03).
 with tempfile.TemporaryDirectory() as d:
     repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
     repo.mkdir(); git("init -q -b main", repo)

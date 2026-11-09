@@ -121,8 +121,8 @@ class Forge:
         m = re.search(r"github\.com[:/]([^/]+/[^/.]+)", url)
         self.gh_repo = c.get("github_repo") or (m.group(1) if m else "")
         # Every git the loop runs (sh(): add, commit, rebase, merge, push, diff) and every session's git read
-        # the common .git/ the lanes share, which no diff shows and no protected path covers; a hook or a
-        # core.fsmonitor command planted there would run as forge in every lane, on every later cycle, until
+        # the .git/ of the lane's clone, which its worktrees share, which no diff shows and no protected path covers;
+        # a hook or a core.fsmonitor command planted there would run as forge on every later cycle of that lane, until
         # someone looked. GIT_CONFIG_* outranks every config file, so git never reads either (reflex1 has none).
         self.env = {**os.environ, "PATH": f"{home}/.cargo/bin:{home}/.local/bin:{os.environ.get('PATH', '')}",
                     "GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "core.hooksPath", "GIT_CONFIG_VALUE_0": "/dev/null",
