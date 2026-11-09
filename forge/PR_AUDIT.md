@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #163 · 2026-11-09T06:16:49Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #163 forge: fail a no-op repair before the second gate run
+What it changes: `cycle()` reads HEAD before the repair session. If HEAD has not moved after forge's `git add -A && git commit ... || true`, the attempt fails as `repair changed nothing (rc=N)` with the session's last 1,500 characters, and the secrets pass, the repair push, the four pre-gate guards and the second gate run are all skipped. The PR also adds README safeguard row 78 and selftest 18b.
+Findings:
+- medium forge/forge.py:1021 The retry loses the gate failure. The note this path writes holds the repair session's tail in place of the gate output. The old path on the same commit wrote `gate still failing after repair.\n{gout}`. A throwaway cycle (gate prints `== test` / `test parser::empty_row ... FAILED`, the repair stub writes nothing and returns rc 124) shows the difference. On base the ticket note is `gate still failing after repair.\n== test\ntest parser::empty_row ... FAILED`. On the PR it is `repair changed nothing (rc=124); gate not rerun.\nTIMEOUT after 4500s (process group killed; ...)`, and the failing test is gone. The next attempt starts from main (builder rule 22) and gets only the ticket notes. With a gated main, GATE_START tells it to skip the starting gate run. So it codes without knowing what failed. The failure text survives in only two places: the first gate comment on the closed PR, which no prompt points to, and `sessions/<cycle>-gate.log` outside the tree, the only copy when `pull_requests=false`. This removes evidence that README rows 40 ("Retry with the failure evidence") and 33 (gate output goes to "the ticket note") promise. A timeout line or provider error describes the harness's problem, not the ticket's. `gout` is still in scope at line 1021: it is the first run's output, which the skipped rerun on the same commit would have repeated.
+- info forge/forge.py:1013-1021 The new branch does not weaken the gate, the reviewer or the protected paths. It only adds a `return self.fail(...)`, so nothing can land through it. HEAD == `failed` means the commit is the one that already passed secrets/touched_protected/unrequested_deps/vulnerable_deps/test_tampering/invisible_chars at lines 979-1002 before the first gate. Nothing is pushed on this path: pr_open already pushed that same commit, and the repair push at 1025 is skipped. So the skipped guards had nothing new to check. `fail()` then:
+  - closes the PR; the body goes through `gh()`'s `redact()`
+  - sets retry/blocked and pushes, so the ticket is not left `in_progress`
+  - charges one attempt, as the old `gate still failing` path did
+  - `finally` removes the worktree and deletes the branch
+  The `why` tally key is `repair changed nothing`, distinct from every other cause. The note is bounded by `out[-1500:]` and `why[-7000:]`. The change adds no shared state, puts no ticket text into a command (`git rev-parse HEAD` is a constant string), and spends no quota or GPU. If both rev-parse calls fail, "" == "" fails the attempt, which is the safe side.
+- info forge/forge.py:1015-1016 Side effect: this closes one variant of an existing hole. When forge's own repair commit fails (the `|| true`), for example because of a pre-commit hook in the shared `.git/hooks` that a yolo session can write, base ran `gate()` on the dirty worktree. `touched_protected()` (line 461) only diffs committed `origin/main...HEAD`, so it did not see the dirty file. Throwaway probe: the repair rewrites gate.sh to `exit 0` and installs a failing pre-commit hook. Base then runs the gate twice (`fail`, `pass`) and starts a reviewer session. The PR runs it once and stops with `repair changed nothing (rc=0)`. One case is still open, and it predates this PR: a session that makes its own commit and then leaves a dirty gate.sh still reaches the gate.
+- low forge/forge.py:1017-1019, forge/README.md:78, forge/selftest.py:1021-1023 The cited case (reflex1 PR #2, repair died on Codex's usage limit) is not what this check catches today. That refusal was on stderr: `sessions/00006-builder.log` and `00007-builder.log` show `[stderr] ... Codex error event: The usage limit has been reached (code=usage_limit_reached)`. `agent()` line 249 matches that when rc≠0, then either moves to the next model in the chain or raises QuotaExhausted, which lane_loop answers with `recover(quota=True)`, a free requeue. Either way that happens before line 1014 [INFERENCE: that session's rc is not on record; with rc 0 it would reach this check]. What actually fires here: a repair that times out having written nothing (18b's rc-124 stub), a non-quota provider error, or a session that decides to change nothing. The behaviour is unaffected; the comment and README overstate the motivation. The arXiv 2611.09212 figure checks out (28% to 8% unchanged resubmissions, BigCodeBench, Qwen2.5).
+- low Flaky gate (stated in the PR body): an identical rerun that would have passed now costs an attempt. Builder rules 19 and 23 make a session that follows its prompt write `PROGRESS.md` and commit. So an unchanged HEAD points to a dead or rule-ignoring session, not to a deliberate "nothing to fix".
+- Deletions: none. The diff only adds lines (README +1, forge.py +7, selftest +33); no line leaves `forge/prompts/*.md`, `forge/selftest.py` or the safeguard table.
+- Siblings: I read the diffs of all 28 open PRs on `forge` that share a file with this one. None contradicts or duplicates it. #99 rewrites the repair-prompt line that this PR inserts lines around. That is a text conflict only: #99's fenced `fail()` note wraps any `why`, this cause included, and #99 is already stale against base (its hunk has `{prompt}` where base has `{bprompt()}`). #79 sends a hung gate into the repair pass, and #47/#145 move non-quota provider failures to the next model. Both are complementary: they change what reaches this check. #84 skips the re-gate in `land()`, a different call site, so it is not a duplicate.
+- nit forge/selftest.py:1024-1040 18b repeats section 18's fixture line for line. That matches house style (each section builds its own tempdir), so no change.
+- Verified: `python3 forge/selftest.py` on base+PR: all checks passed. 18b against base forge.py: FAIL (2 gate runs, `gate still failing after repair`). With the change below: all passed. The added assertion fails on the PR as it stands, and the probe note carries `test parser::empty_row ... FAILED`.
+Change needed: Carry the gate output in place of the session tail. The session's own output stays in its `sessions/<cycle>-builder-2.log`, and the note stays the size of the old `gate still failing after repair.\n{gout}` note.
+- forge/forge.py:1021, change
+  `return self.fail(ticket, f"repair changed nothing (rc={rc}); gate not rerun.\n{out[-1500:]}")`
+  to
+  `return self.fail(ticket, f"repair changed nothing (rc={rc}); gate not rerun.\n{gout}")`
+- forge/README.md:78, change "with the session's tail" to "with the gate output it failed on".
+- forge/selftest.py 18b, change
+  `(repo / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\nexit 1\n")`
+  to
+  `(repo / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\necho 'test t ... FAILED'\nexit 1\n")`
+  and add `and "test t ... FAILED" in note` to the check's condition.
+
+
 ## PR #162 · 2026-11-09T05:41:56Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
