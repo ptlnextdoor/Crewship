@@ -343,7 +343,7 @@ class Forge:
                 q = re.search(r"\(([^)]+)\)", line.split("%")[0])  # the label's qualifier, e.g. "(Fable)"
                 key = f"{vendor}:{q.group(1).strip().lower()}" if q else vendor
                 over[key] = over.get(key, False) or float(m.group(1)) >= floor
-                label = re.sub(r"[●█░]", "", line.split("%")[0]).rsplit(maxsplit=1)[0].strip()  # "Claude 7 Day (Fable)"
+                label = re.split(r"[█░]", line)[0].replace("●", "").strip()  # the text before the bar: "Claude 7 Day (Fable)"
                 meter[f"{vendor} {label}"] = float(m.group(1))
         self.meter = meter
         for k, is_over in over.items():
