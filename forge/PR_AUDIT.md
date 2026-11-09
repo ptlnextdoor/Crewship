@@ -2,6 +2,35 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #165 · 2026-11-09T09:20:35Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #165 forge: pr_open falls back to the branch's open PR when gh pr create fails
+What it changes: when both `gh pr create` calls in `pr_open()` fail, forge now runs `gh pr list --head <branch> --state open --json url --jq '.[].url'` and uses the first URL as the attempt's PR (forge/forge.py:832-836). The PR also adds README row 66 and two selftest checks (selftest.py:237-244). Nothing is deleted.
+Findings:
+- high forge/forge.py:836 The lookup can pick up a fork's PR, and forge would then merge that fork's code. `gh pr list --head` matches on head branch name only, for any head repo and any base. Checked live: `gh pr list -R cli/cli --head patch-1 --state all` returned 5 PRs, all `isCrossRepository=true`, and one targets base `wm/add-guessed-target-host-to-telemetry`. Forge branch names are easy to guess: `forge/l{lane}-{cycle:05d}-{tid}` (line 953; reflex1 PRs #120-#124 follow it). Path through the code: `self.pr` becomes the fork's URL (982). The gate and review comments go there (1005, 1075). In `land()`, line 911 force-pushes the gated sha to origin's branch, which is not the head of the fork's PR. `pr_merge()` sees MERGEABLE (856), and line 863 runs `gh pr merge <fork PR> --merge`. That merges the fork's head, a tree that was never gated, never reviewed and never checked by `touched_protected()` (that check only runs on the local worktree). Before this PR, a double create failure left `pr=""`, `pr_merge` returned False (849), and line 915 merged the gated local branch. Trigger: both creates fail (a GitHub 5xx, a secondary rate limit, or the reused-name case below) while a matching fork PR is open. Exposure today: reflex1 is PRIVATE with 0 forks, so only collaborators could do this. On any public `github_repo`, anyone could. Sibling #111 (`--match-head-commit`) would refuse this merge, but it is open, stale, and not on base.
+- medium forge/forge.py:836 The lookup also picks up a PR left by an earlier run, and the one time on record that both creates failed was exactly this case. reflex1 forge.log, 2026-10-23: at 07:27:45Z lane 3 and at 07:32:13Z lane 2 got "a pull request for branch ... already exists". That happened after a restart put both lanes back to cycle 1 and so reused branch names. Running this PR's exact query on reflex1 today returns https://github.com/ptlnextdoor/reflex1/pull/5. That PR was opened by the earlier run at 05:56; its head 7441a50 (05:46) is not in origin/main, and its only comment is the earlier run's gate PASS (no review). The 07:27 push had failed as non-fast-forward. That run's work landed through the local path as fdcd726, whose second parent is ff5ed65, not 7441a50. With this PR, that attempt's gate PASS and review would have been posted on PR #5, whose head and body (version, cycle, builder) belong to the earlier run. `land()` line 911 pushes `--force-with-lease` after the fetch at line 770. lane3's tracking ref is 7441a50, the same as the remote, so in this case the push would succeed. But nothing checks the push's exit code: if it fails, `gh pr merge` merges 7441a50, code this run never gated and nobody reviewed. `recover()` (1242-1245) now closes an interrupted cycle's PRs on restart. That narrows the window but does not close it: `open_prs` comes from `gh()`, which returns "" on failure, and a state reset can happen with no `in_progress` ticket left.
+- low forge/README.md:66 and the PR body say "no reflex1 case on record". That is true for the lost-response case the PR targets. But the new fallback also fires on the 2026-10-23 reused-name case above, and neither text mentions it. The change below excludes that case (the PR head is not the sha just pushed), and then the row is accurate as written.
+- low forge/selftest.py:239-243 The stub ignores `--jq` and echoes `http://pr/7` for branch `b`. So the checks fix the order of the three gh calls, not which PR gets chosen. I checked the selection itself live (see Change needed). Line 244 restores a stub byte-identical to line 229, so later checks are unaffected. I did not run selftest; I read it through by hand.
+- info forge/forge.py:836 Nothing else new found. `{branch}` is unquoted, but the same value already goes unquoted into lines 815 and 829. The lane number is part of the branch name, so one lane cannot pick up another lane's same-repo PR. No GPU or quota spend. The new call inherits `sh(timeout=120)`, so a `TimeoutExpired` can escape just as it already can from the two create calls; `self.pr` is still "" at that point, so line 1102 has nothing to close. No line is deleted from prompts, selftest or the safeguard table.
+- info sibling #44 ("adopt the PR already open for the branch when `pr create` fails", 2026-10-25, written against an old base where `pr_open` is at line 402, mergeable UNKNOWN) duplicates this PR using `gh pr view <branch>`. Its body blames the 2026-10-23 failures on "the builder opened a PR for its own branch". The log shows forge's own lane 3 opened PR #5 at 05:56:04Z in the earlier run. Only one of the two should land. #44 is the side to change: close it if this one lands. Sibling #111 complements this PR and does not contradict it.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `pr_open()`, replace line 836
+```
+            url = self.gh(f"pr list --head {branch} --state open --json url --jq '.[].url'", cwd=wt).split("\n")[0]
+```
+with
+```
+            # Only this attempt's PR: same repo, into main, at the sha just pushed. `--head` alone also matches fork
+            # PRs and a previous run's PR on a reused branch name, and pr_merge() would merge that head instead.
+            head = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
+            url = self.gh(f"pr list --head {branch} --state open --base main --json url,headRefOid,isCrossRepository "
+                          f"--jq '.[] | select(.headRefOid == \"{head}\" and (.isCrossRepository | not)) | .url'", cwd=wt).split("\n")[0]
+```
+Checked read-only through `sh -c` with `-R` appended the way `gh()` adds it. On Crewship (base `forge` in place of `main`, PR #165's head sha) it prints https://github.com/ptlnextdoor/Crewship/pull/165. With a wrong sha it prints nothing. On cli/cli `--head patch-1 --base trunk` the cross-repo filter prints nothing. The selftest check at line 242 still holds, because the call still starts `pr list --head b --state open` and the stub ignores `--jq`.
+
+
 ## PR #164 · 2026-11-09T08:16:28Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
