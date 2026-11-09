@@ -2,6 +2,31 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #166 · 2026-11-09T10:21:37Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #166 forge: status row for attempt #1 split by builder role
+What it changes: `status_text()` gets one new row: merged/attempts over each ticket's first history entry, split by `role` (builder / builder_hard / pre), filled inside the existing `by_try` loop. In selftest, the lane-2 fixture gains a builder_hard first attempt and there is one new check. README gets one paragraph after the role row.
+Findings:
+- medium forge/selftest.py:353-356 The PR body says the role-row check only "carries the new counts". It actually weakens that check in two ways. (a) The deleted assertion `"builder_hard 1/1 (21-100%) 90 min/merge"` tied the minutes to their bucket. It became two separate substrings, `"builder_hard 1/2 ("` and `"90 min/merge"`, matched anywhere in the steward prompt. builder_hard's lane-minutes per merge is no longer tied to the builder_hard bucket. The row prints `builder_hard 1/2 (9-91%) 90 min/merge`, so the exact string was available. (b) The text `"pre 0/1 (0-79%)" in seen_state[0]` did not change, but the new row now prints the same substring (`builder 0/1 (0-79%), builder_hard 0/1 (0-79%), pre 0/1 (0-79%)`). Nothing checks the role row's `pre` bucket any more. I mutation-tested this in /tmp copies by dropping `pre` from the role row (`minutes({k: v for k, v in by_role.items() if k != "pre"})`). On base e05c1513 this check fails. On the PR head every check passes. The old line caught a role-row regression that mis-buckets entries written before `role` existed, or puts the minutes on the wrong effort level. After this PR no selftest check covers either case; the only other role-row assertion is `builder 0/1 (0-79%) 20 min, 0 merges`. The PR body does not name this layer as retired. Blast radius: the harness's own tests and the status the steward writes into PROGRESS.md; not the project gate.
+- low forge/forge.py:1399-1403, forge/README.md:162 The row label and its comment state as fact that "builder_hard at #1 is a planner-labelled difficulty: hard ticket". That does not always hold. `cycle()` escalates on `attempts(ticket) >= 2` (forge.py:960), which counts `## forge ` notes in the ticket file. This row's `#1` is the ticket's first entry in the kept history, which holds 200 entries per lane (forge.py:1176). The existing shortcut at forge.py:1387-1388 already says a later attempt can read as #1. When that happens, a third-attempt escalation lands in this bucket. The PR inherits this from the loop it shares, so I ask for no change; but the label claims more than the code guarantees, and the steward reads it as fact.
+- low forge/README.md:162 The example `builder 30/48 (49-75%)` is not what the code prints: `rate_interval(30, 48)` returns `30/48 (48-75%)` (checked by importing forge.py at the PR head). `3/9 (12-65%)` is correct.
+- low forge/forge.py:1394 `for t in [by_try...] + ([by_first...] if k == 1 else [])` hides a conditional second bucket inside a list concatenation; `if k == 1:` would be clearer. It mirrors the tuple loop at :1353, so not blocking.
+- info forge/forge.py:1390-1404 The new code only reads `all_states()` history. It writes no file or state, starts no subprocess and puts no ticket text into a command. It reaches the loop only through `steward()` → `prompt("steward", STATE=self.status_text())` (forge.py:1180) and `forge status`. The steward prompt grows by one line. The row's buckets are limited to role names: `record()` stores `role` only from `last_model` keys that start with `builder`, else `pre` (forge.py:1175). There is no new exception path, because `h.get("role")` is safe and the rows above already read `h["result"]`. Untouched: the gate, the reviewer, protected paths, prompts, `recover()`, `discard_strays()`, quota, GPU. The body's claim that the other rows and `record()` did not change is true. `by_try` still counts the same way: the `#1 0/3` and `#2 1/1` checks pass.
+- info Selftest on the PR head (exported with `git archive` to /tmp): `forge selftest: all checks passed`. The new check catches a real bug: making `by_first` count every attempt fails it (`builder_hard 1/2`). The citation arXiv 2604.22750 exists (Bai et al., "How Do AI Agents Spend Your Money?"). The diff deletes no line from forge/prompts/*.md or from the README safeguard table.
+- info Sibling PRs on base `forge` that touch the same three files: 165, 160, 148, 145, 140, 139, 136, 133, 132, 117, 111, 99, 86, 85, 84, 83, 79, 48, 47, 44, 42, 40, 39, 31, 28, 25, 23, 20. None edits the `by_try` loop, the 4h steward fixture or README:160-162, and none duplicates this row. The closest is #132, which splits the model row by effort. Its replacement `record()` line writes no `role` key, because it predates `role` on base. Landed as written, it would turn every new entry into `pre` in both the base role row and this new row. #132 is the side that should change (rebase and keep `role`), not this PR. #133 adds a review-vendor row next to the model row and does not overlap.
+Change needed (only for MERGE WITH CHANGE): in forge/selftest.py, replace the role-row check (lines 354-356) with one that reads only its own line and asserts the full bucket strings:
+```
+    role_row = "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder role"))
+    check("steward sees merged/attempts and lane-minutes per builder role",
+          "builder 0/1 (0-79%) 20 min, 0 merges" in role_row and "builder_hard 1/2 (9-91%) 90 min/merge" in role_row and "pre 0/1 (0-79%)" in role_row,
+          role_row)
+```
+Verified in a /tmp copy: it passes on the PR head and fails on the drop-`pre` mutation. In the same commit, change forge/README.md:162 `30/48 (49-75%)` to `30/48 (48-75%)`.
+
+
 ## PR #165 · 2026-11-09T09:20:35Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
