@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #162 · 2026-11-09T05:41:56Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #162 forge: gate comments collapse the log under a PASS/FAIL summary
+What it changes: the two gate comments `cycle()` posts on the project PR (forge.py:1005 `gate: PASS/FAIL`, :1036 `gate after repair: ...`) now put the verdict in `<details><summary><b>…</b></summary>` and the gate tail in a fenced block inside the `<details>`. It adds a one-line code comment at :1004 and one README row (:99). Head dcfc1110, one commit on 747ca8b4. origin/forge 0638c6bd adds only a scout-notes commit on top of that.
+Findings:
+- low forge/README.md:99 "below 3-6 KB of gate log" contradicts the row's own evidence. I re-measured reflex1 read-only (`gh api --paginate repos/ptlnextdoor/reflex1/issues/comments`): 110 gate comments, 1,247 to 3,537 characters each, 92 of the 110 under 3,000, and none was cut (all under the 5,000-character tail). About 6 KB is `gate()`'s cap (forge.py:423-430: 5,000 tail + 800 key lines + a ~150-character note), and it is reached only on a cut run. The other figures hold: 110 comments (108 PASS, 1 FAIL, 1 after-repair FAIL), median 2,751 (the lower middle value; the two middle values average 2,781.5), p90 3,050, at most 2 per PR. The citation also holds: HN 50421075 is "Hide your slop PR descriptions behind <details><summary>" → simonwillison.net/2026/Nov/9/details-summary/.
+- none forge/forge.py:1005,1036 Security trace: no agent and no code reads these comments.
+  - The reviewer gets only the ticket and the diff (:1052-1055), and reviewer.md:7 forbids `gh pr view`.
+  - The repair session gets `gout` directly (:1012).
+  - reviewctl lists only Crewship PRs on base `forge` (reviewctl.py:59), never the project's PRs.
+  - A grep of forge.py, reviewctl.py, gpu.py, prompts/ and systemd/ finds no parser of `**gate`.
+  - So gate, reviewer, verdict parse, `touched_protected`, landing, claim race, `recover()`, `discard_strays()`, quota fallback, timeouts and GPU are all untouched.
+  - `gout` still reaches GitHub only through `gh()`'s `--body-file`, redacted and capped at 60,000 (:799-802). No ticket or gate text reaches a shell.
+  - The body grows by a constant ~45 characters, with no growth per attempt.
+  - The exception path is the same as before: `pr_comment` → `gh` → `sh(timeout=120)`.
+- info forge/forge.py:1005,1036 Oversight: the builder-influenced gate log (test stdout) is now collapsed on a PASS and on a FAIL that a repair then fixes. A final FAIL still shows its log openly in `pr_close()`'s "forge: not merged" note (`fail()` → :842 with `gate still failing after repair.\n{gout}`). The collapsed text is still in the raw markdown that `gh`/API readers get, and the human page read is after the fact anyway (`land()` merges on reviewer approval). Acceptable.
+- info rendering: `gh api markdown` (gfm, context reflex1) with a real median-size reflex1 PASS log renders `<details><summary><b>gate: PASS</b></summary><pre><code>…</code></pre></details>`. A fence break from a line-start ``` in `gout` was possible before this PR too. 0 of the 110 reflex1 gate bodies have an extra fence line.
+- info measurement: future comments no longer start with `**gate`. A census that filters on that prefix (SCOUT.md:187 used `**gate: FAIL**`) would miss the new comments. Substring filters on `gate: PASS`, `gate: FAIL` and `gate after repair` match both shapes. No code depends on the prefix.
+- info deletions: the only `-` lines are the two old format strings in forge.py. Nothing is deleted from `forge/prompts/*.md` or `forge/selftest.py`, and the README hunk is one `+` row, so no layer is retired.
+- info siblings: 28 other open PRs on `forge` share forge.py or README.md. I grepped every sibling diff for `pr_comment`, `gout`, `pr_close`, `gate: {` and `<details>`. None edits these two lines. #99 edits the repair prompt at :1012 and #84 edits `land()`'s re-gate, both in separate hunks.
+  - `git merge-tree` with the PR head is clean for #160, #148, #145, #139 and #31.
+  - The other siblings conflict because of stale bases (#25 and #28 still carry their base's `gout[-3500:]` lines) or because they append README rows at the same table spot (e.g. #83 and #85). Those conflicts are textual only.
+  - No sibling contradicts or duplicates this PR.
+- info verification: the PR head's `python3 forge/selftest.py` passes ("all checks passed"), and so does base's selftest on the PR tree (what `reviewctl.gate()` runs). `py_compile` is clean. The added lines contain no non-ASCII code points, and the PR body has no HTML comments.
+- nit forge/forge.py:1004 The new code comment repeats the README row's numbers. It sits on only the first of two identical format strings. House style tolerates it.
+Change needed (only for MERGE WITH CHANGE): in forge/README.md:99, second cell, replace `a PR page where the review verdict sits below 3-6 KB of gate log (reflex1:` with `a PR page where the review verdict sits below 1.2-3.5 KB of gate log, up to about 6 KB once `gate()` cuts a long run (reflex1:`
+
+
 ## PR #161 · 2026-11-09T01:35:18Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
