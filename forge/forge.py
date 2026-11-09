@@ -1089,10 +1089,14 @@ class Forge:
             rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
-            if rc == 124 and not verdict:
-                # a review that stalls to its timeout without a verdict is a harness failure, not a finding:
-                # 4 of the first 22 reflex1 reviews did, and each cost the ticket a whole attempt. One rerun.
-                self.log(f"review of {tid} timed out with no verdict; rerunning once")
+            if not verdict and (rc != 0 or not rout.split("[stderr]")[0].strip()):
+                # a review that ends with no verdict and no review is a harness failure, not a finding: the
+                # timeout (4 of the first 22 reflex1 reviews), a session that never started (0065: E2BIG, rc 127),
+                # a provider error that is not a quota refusal (0005 was one before the quota rule, rc 1), or a reply spent whole on thinking
+                # (Fable 5.2 at xhigh and max returned nothing after 128K output tokens, Playcode 2026-11-09;
+                # rc 0, empty stdout). Each cost the ticket a whole attempt as "reviewer did not approve". One
+                # rerun; a prose review with no VERDICT line (rc 0) is still the reviewer's answer and fails as before.
+                self.log(f"review of {tid} ended rc={rc} with no verdict; rerunning once")
                 self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)

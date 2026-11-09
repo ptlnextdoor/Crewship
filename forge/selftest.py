@@ -832,9 +832,23 @@ with tempfile.TemporaryDirectory() as d:
           "exits 101 on input `probe.json`" in note and "Must change: fix the probe" in note and "[stderr]" not in note,
           note[-300:])
 
-    verdict[0] = "VERDICT: APPROVE"
+    # 11b. A review that comes back with no verdict and nothing said (rc 0, empty stdout: a reply spent whole on
+    # thinking, as Fable 5.2 at xhigh/max did on 128K output tokens; or rc 127, a session that never started,
+    # reflex1 0065) is rerun once like the timeout, not charged as "reviewer did not approve".
+    reviews = ["\n[stderr]\nWorking...\n", "VERDICT: APPROVE"]
+    reviewer_runs: list[int] = []
+    def build_or_review(role, prompt, cwd, timeout_min=None):
+        (cwd / "src.rs").write_text(f"fn main() {{}} // {role}\n")
+        if role != "reviewer":
+            return 0, "done"
+        reviewer_runs.append(1)
+        return 0, reviews.pop(0)
+    f.agent = build_or_review
     f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
     f.cycle()
+    check("an empty rc 0 review with no verdict is rerun once and the attempt lands on the second verdict",
+          len(reviewer_runs) == 2 and "status: done" in (repo / "tickets/0004-r.md").read_text(),
+          f"reviewer runs {len(reviewer_runs)}; " + (repo / "tickets/0004-r.md").read_text()[-200:])
     check("a branch merged into main is left for land() to decide",
           "forge/l1-" in git("ls-remote --heads origin", repo), git("ls-remote --heads origin", repo))
 
