@@ -1001,7 +1001,8 @@ class Forge:
             if bad:
                 return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
             ok, gout = self.gate(wt)
-            self.pr_comment(self.pr, f"**gate: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
+            # verdict visible, log collapsed: the review below it is what a reader opens the PR for (reflex1: 110 gate comments, median 2,751 chars)
+            self.pr_comment(self.pr, f"<details><summary><b>gate: {'PASS' if ok else 'FAIL'}</b></summary>\n\n```\n{gout}\n```\n</details>")
             if not ok:
                 # one repair pass before giving up. It is a fresh omp session (no resume), so it gets the
                 # ticket as well as the gate output: spec beats test feedback for repair (arXiv 2610.28834).
@@ -1032,7 +1033,7 @@ class Forge:
                 if bad:
                     return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
                 ok, gout = self.gate(wt)
-                self.pr_comment(self.pr, f"**gate after repair: {'PASS' if ok else 'FAIL'}**\n\n```\n{gout}\n```")
+                self.pr_comment(self.pr, f"<details><summary><b>gate after repair: {'PASS' if ok else 'FAIL'}</b></summary>\n\n```\n{gout}\n```\n</details>")
                 if not ok:
                     return self.fail(ticket, f"gate still failing after repair.\n{gout}")
             # The commit whose diff the reviewer gets, read before its yolo session can move HEAD; land() rewrites it.
