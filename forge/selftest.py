@@ -1018,6 +1018,39 @@ with tempfile.TemporaryDirectory() as d:
           and "{KILL}" not in prompts[1] and re.search(r"killed at \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\d+ minutes", prompts[1]),
           prompts[1][-400:] if len(prompts) > 1 else str(turns))
 
+# 18b. A repair session that leaves the tree as the gate failed it (reflex1 PR #2: the session died on a
+# usage limit) used to get the gate run again on the same commit, 8-25 minutes for the verdict it already
+# had. The attempt fails on the spot with its own cause, and the gate ran once.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    runs = Path(d) / "runs"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    (repo / "gate.sh").write_text(f"#!/bin/sh\necho run >> {runs}\necho 'test t ... FAILED'\nexit 1\n")
+    (repo / "gate.sh").chmod(0o755)
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan = lambda: None
+    turns: list[str] = []
+
+    def build_then_change_nothing(role, prompt, cwd, timeout_min=None):
+        turns.append(role)
+        if len(turns) == 1:
+            (cwd / "a.txt").write_text("the work\n")
+        return 124, "TIMEOUT"
+
+    f.agent = build_then_change_nothing
+    f.cycle()
+    note = (repo / "tickets/0001-t.md").read_text()
+    check("a repair that changes nothing fails the attempt without a second gate run",
+          "repair changed nothing (rc=124)" in note and runs.read_text().count("run") == 1 and turns == ["builder", "builder"] and "test t ... FAILED" in note,
+          f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
+
 # 19. A builder that brings main into its branch (merge or rebase - both are normal git hygiene, and the
 # loop's own prompt tells it to keep up with main) used to be refused as "edits protected gate/ticket paths":
 # the check diffed against the lane's local main, left at the branch point, so every ticket another lane
