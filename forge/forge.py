@@ -917,7 +917,7 @@ class Forge:
             # the gate does not read differently, the same trust main_gated() gives the builder's starting run;
             # re-gating it is 8 to 25 minutes per landing for the answer already on the PR. Any other change
             # (another lane's code, a conflict session's edit) gates. A `sha` git cannot diff gates too.
-            moved = self.sh(f"git diff --name-only {sha} HEAD", cwd=wt) if sha else None
+            moved = self.sh(f"git diff --no-renames --name-only {sha} HEAD", cwd=wt) if sha else None
             if moved and moved.returncode == 0 and all(f.startswith("tickets/") for f in moved.stdout.split()):
                 self.log(f"gate not rerun: landing tree is the one gated at {sha[:9]}" + (" plus tickets/ status commits" if moved.stdout.split() else ""))
             else:
