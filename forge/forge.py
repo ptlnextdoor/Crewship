@@ -260,7 +260,8 @@ class Forge:
             # a config bump to a model released ahead of the catalog (claude-fable-5-2 on 2026-11-09, listed
             # by Anthropic, absent from `omp models` and models.dev) or a typo. Try the next model, mark
             # nothing: the vendor is fine, and the 3 s retry each cycle is the reminder to fix the config.
-            if rc != 0 and re.search(r'^Model ".*" not found', err, re.M):
+            # A review role fails the review as before: reviewer_alt's next model is the builder's vendor.
+            if rc != 0 and not role.startswith("reviewer") and re.search(r'^Model ".*" not found', err, re.M):
                 self.log(f"model: {model} not in omp's catalog; trying the next model for {role}")
                 continue
             self.last_model[role] = model
