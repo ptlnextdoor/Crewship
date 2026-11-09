@@ -322,6 +322,7 @@ with tempfile.TemporaryDirectory() as d:
     # histories, so the per-attempt tally has to pool them (a retry is claimed by whichever lane is free).
     (Path(d) / "s/lane2/state.json").write_text(json.dumps({"cycle": 3, "merged": 0, "failed": 1, "history": [
         {"cycle": 3, "ticket": "0099-other", "result": "failed", "at": "2026-10-20T00:00:00Z", "why": "reviewer did not approve: x", "model": "anthropic/claude-opus-5-5"},
+        {"cycle": 3, "ticket": "0097-hard", "result": "failed", "at": "2026-10-20T01:00:00Z", "why": "gate failed", "model": "openai-codex/gpt-6.1-sol", "role": "builder_hard"},
         {"cycle": 4, "ticket": "0098-twice", "result": "failed", "at": "2026-10-31T01:00:00Z", "why": "gate failed", "model": "anthropic/claude-opus-5-5", "role": "builder", "secs": 1200}]}))
     f.state["history"] = f.state.get("history", []) + [
         {"cycle": 5, "ticket": "0098-twice", "result": "merged", "at": "2026-10-31T02:00:00Z", "model": "anthropic/claude-opus-5-5", "role": "builder_hard", "secs": 5400}]
@@ -335,10 +336,13 @@ with tempfile.TemporaryDirectory() as d:
     f.steward()
     check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
     check("steward sees every lane's attempts and the per-guard tally", "0099-other: failed" in seen_state[0] and "reviewer did not 1" in seen_state[0], seen_state[0][-600:])
-    # The second attempt merged on another lane than the first: pooled, that is #1 0/2 and #2 1/1.
+    # The second attempt merged on another lane than the first: pooled, that is #1 0/3 (0098's first, 0099, 0097) and #2 1/1.
     check("steward sees merged/attempts by attempt number, pooled across lanes",
-          "#1 0/2" in seen_state[0] and "#2 1/1" in seen_state[0],
+          "#1 0/3" in seen_state[0] and "#2 1/1" in seen_state[0],
           "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts by the ticket")))
+    # 0097-hard ran builder_hard on its first attempt (a `difficulty: hard` ticket); 0098-twice's first was builder, 0099 predates `role`.
+    first_row = "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts at attempt #1"))
+    check("steward sees first attempts split by role", "builder 0/1" in first_row and "builder_hard 0/1" in first_row and "pre 0/1" in first_row, first_row)
     # Same model, two ISO weeks (10-20 is W43, 10-31 is W44): a provider-side change under one model name is
     # visible only with a time axis; the version and model rows pool every week. W43's entry carries no `secs`
     # (rate only); W44's two attempts ran 20 and 90 min, so its median is the upper middle, 90.
@@ -346,9 +350,9 @@ with tempfile.TemporaryDirectory() as d:
     check("steward sees merged/attempts and median minutes per model per ISO week",
           "anthropic/claude-opus-5-5 2026-W43 0/1 (0-79%), 2026-W44 1/2 (" in week_row and week_row.count("min/attempt") == 1 and "90 min/attempt" in week_row,
           week_row)
-    # The same three attempts by effort level: one builder failure (20 lane-minutes), one entry from before role/secs (pre, rate only) and one builder_hard merge at 90 min; the model row pools them under one name, so only this row can show what the escalation costs per merge.
+    # The four attempts by effort level: one builder failure (20 lane-minutes), one entry from before role/secs (pre, rate only), one builder_hard failure without secs and one builder_hard merge at 90 min; the model row pools them under one name, so only this row can show what the escalation costs per merge.
     check("steward sees merged/attempts and lane-minutes per builder role",
-          "builder 0/1 (0-79%) 20 min, 0 merges" in seen_state[0] and "builder_hard 1/1 (21-100%) 90 min/merge" in seen_state[0] and "pre 0/1 (0-79%)" in seen_state[0],
+          "builder 0/1 (0-79%) 20 min, 0 merges" in seen_state[0] and "builder_hard 1/2 (" in seen_state[0] and "90 min/merge" in seen_state[0] and "pre 0/1 (0-79%)" in seen_state[0],
           "\n".join(l for l in seen_state[0].splitlines() if l.startswith("merged/attempts per builder role")))
 
     # 4i. A failure with a PR logs its cause, not the PR url (33 of 36 reflex1 RETRY/BLOCKED lines said only "PR: https://...").

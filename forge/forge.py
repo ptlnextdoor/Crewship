@@ -1387,14 +1387,21 @@ class Forge:
         # shortcut: counted over the history kept (200 entries per lane, none before `history` existed, a renamed
         # ticket starts over), so a later attempt can read as #1; record attempts() on the entry if that matters.
         by_try: dict[int, list[int]] = {}
+        by_first: dict[str, list[int]] = {}
         nth: dict[str, int] = {}
         for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"]):
             nth[h["ticket"]] = k = nth.get(h["ticket"], 0) + 1
-            t = by_try.setdefault(k, [0, 0])
-            t[0] += h["result"] == "merged"
-            t[1] += 1
+            for t in [by_try.setdefault(k, [0, 0])] + ([by_first.setdefault(h.get("role") or "pre", [0, 0])] if k == 1 else []):
+                t[0] += h["result"] == "merged"
+                t[1] += 1
         out.append("merged/attempts by the ticket's attempt number (builder_hard from #3, and from #1 on difficulty: hard tickets): "
                    + (", ".join(f"#{k} {rate_interval(m, n)}" for k, (m, n) in sorted(by_try.items())) or "-"))
+        # attempt #1 alone, split by role: builder_hard here is a ticket the planner labelled `difficulty: hard`
+        # (no failure yet), so this row is the planner's label as a predictor, which the role row (pooled with
+        # attempt-3 escalations) and the attempt row (pooled with normal tickets) both hide. Human difficulty
+        # ratings align only weakly with what agents spend (arXiv 2604.22750), so the label is a guess until measured.
+        out.append("merged/attempts at attempt #1 by builder role (builder_hard at #1 is a planner-labelled difficulty: hard ticket): "
+                   + (", ".join(f"{v} {rate_interval(m, n)}" for v, (m, n) in sorted(by_first.items())) or "-"))
         # shortcut: a cause is keyed by its first three words ("builder produced no", "reviewer did not", "merge
         # conflict landing"), which every fail() message in this file keeps distinct; split into a `cause` argument
         # if two messages ever share a prefix. Entries written before `why` existed are not counted.
