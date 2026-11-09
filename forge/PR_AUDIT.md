@@ -2,6 +2,55 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #161 · 2026-11-09T01:35:18Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #161 forge: record every plan window's % used on each history entry
+What it changes: `quota_ok()` now saves each `% used` line from `omp usage` into `self.meter`, keyed `"<vendor> <label>"`. `record()` writes that dict into every history entry as `meter`. The PR also adds two selftest checks, a README paragraph in the status section (:160) and four docstring lines in `record()`.
+Findings:
+- low forge/forge.py:346 The label parse takes the text before the first `%` and drops its last token. That keys correctly only when the percent is the only number on the line. I traced the renderer in omp 18.12.6 (`~/.local/share/crewship/omp/18.12.6/.../dist/cli.js`):
+  - `xNi()` emits an Anthropic limit `label:"Claude Extra Usage"` with `unit:"usd"`, and `h7a()` gives it `usedFraction` once a monthly limit is set.
+  - `ybd()` prints `$used / $limit` before `NN.N% used`.
+  - `Tbd()` builds the line as `      ● {label}  {bar}  {amounts · % used · resets}`.
+  - Result: the PR's expression returns `Claude Extra Usage      $12.30 / $50.00 ·`. That key changes with every reading, so the per-key weekly comparison that README:160 describes breaks for that window once extra usage is on.
+  - The same line raises IndexError when nothing but bullet, bar or spaces comes before the first `%`, i.e. a label that starts with `%`. Path: `quota_ok()` is called at lane_loop:1296, outside the `try`. The lane process exits, and `run()` restarts it after 30 s (:1268-1270), over and over.
+  - Effect of that crash loop: no ticket is `in_progress` at that point, because `quota_ok()` runs before `cycle()`, and no quota or GPU is spent. But no lane builds anything. omp's current labels cannot produce this.
+  - The live `omp usage` on this box parses correctly today: `anthropic Claude 7 Day` 65.0 and `anthropic Claude 7 Day (Fable)` 73.0.
+  - The change below fixes both problems. Checked on the extra-usage line, the `%`-label line, the check-17 fixture and live output: every key comes out as the bare label.
+- info forge/forge.py:113,333,346-348,1168 Security trace, nothing found.
+  - Only `quota_ok()` writes `self.meter`. Its one call site is lane_loop:1296, and the input is `omp usage` stdout. Only `record()` reads it.
+  - Each lane is its own process and writes only its own `state.json` through `save()` (tmp file, then `replace`), so no state is shared between lanes.
+  - No ticket text, shell or command string reaches this code. It adds no subprocess (`omp usage` already ran every cycle) and no quota or GPU spend.
+  - `over`, `exhausted` and the pause decision are unchanged; the new lines run after `over[key] = ...`.
+  - Untouched: gate, `touched_protected`, protected paths, every prompt, reviewer selection and verdict parsing, claim, `recover()`, `discard_strays()`, `sh()` timeout and killpg, PR create and merge.
+  - Nothing is removed from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. The README hunk is a new paragraph. The only `-` lines in forge.py are the end of the `record()` docstring (kept word for word and extended) and the history dict line (kept, with `meter` added).
+- info forge/forge.py:1168 Growth stays bounded and nothing reaches a prompt.
+  - History is still capped at `[-200:]` per lane. `meter` holds one entry per `% used` line for anthropic/openai-codex (2 today, 4 in the fixture), about 50 bytes each.
+  - The steward gets `status_text()` (:1172), and `board()` (:191) reads only named keys (`at`/`ticket`/`result`, plus `version`/`harness`/`model`/`role`/`secs`/`why` in status). `meter` appears in no prompt or board text.
+  - `forge.py once` (main:1397) runs `cycle()` without `quota_ok()`, so its entry carries `{}` from `__init__`. That correctly reads as "not measured".
+- info forge/selftest.py:976-978,1117,1125-1126 Tests run, in a `git archive` of base ded95080 with this patch applied:
+  - `py_compile` is clean and `selftest.py` passes all checks.
+  - The PR's selftest run against the base forge.py stops with `AttributeError: 'Forge' object has no attribute 'meter'` at the new check-17 assertion, so the parse check really exercises the change.
+  - The second check only tests that `record()` copies an attribute the test set by hand. Existing checks do the same for `secs` and `model`.
+  - With the change below applied, all checks still pass.
+- nit forge/README.md:160, forge/forge.py:1159-1162 "every plan window" overstates what is recorded.
+  - Only `anthropic` and `openai-codex` blocks are recorded; other vendors hit `continue` at :337. The owner's live `Xai Oauth` windows are skipped. That is still accurate for the lanes, since no role in reflex1.toml uses xAI.
+  - With two accounts on one vendor, windows with the same label collide: the last block wins, while `over` ORs both.
+  - Citation checked: drewhoover.com/blog/did-claude-usage-limits-change (2026-11-08) gives 0.41% → 0.76% per message, "1.8x", and weighted tokens per message of 0.69-0.89M. That matches the README and the docstring.
+  - The docstring repeats the README's reasoning, as is usual in this repo.
+- info siblings: I read the diffs of all 28 other open `forge`-base PRs that touch README.md, forge.py or selftest.py (every open PR except #124, which touches only gpu.py).
+  - None records the meter or touches `self.meter`. None contradicts or duplicates this PR.
+  - #132 (`effort`) and #133 (`reviewer`) each rewrite the same history-dict line in `record()` (:1168) and the `f.state["history"] += [...]` selftest line. Both start from a base older than `role`. This is a textual conflict only: whichever lands second keeps every key.
+  - #20 adds `xai-oauth` to the vendor line in `quota_ok()`, and #39 changes the `exhausted` setdefault to a refresh. Both edit lines next to this PR's `quota_ok()` hunk, on the old pre-per-window base, so the overlap is textual only. Once #20 is rebased, xAI windows would enter `meter` as `xai-oauth <label>`, which fits this PR.
+  - #160's selftest hunks are in other functions.
+Change needed (only for MERGE WITH CHANGE): In forge/forge.py:346 replace
+`                label = re.sub(r"[●█░]", "", line.split("%")[0]).rsplit(maxsplit=1)[0].strip()  # "Claude 7 Day (Fable)"`
+with
+`                label = re.split(r"[█░]", line)[0].replace("●", "").strip()  # the text before the bar: "Claude 7 Day (Fable)"`
+
+
 ## PR #160 · 2026-11-08T22:32:58Z · MERGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE
