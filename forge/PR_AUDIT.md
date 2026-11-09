@@ -2,6 +2,71 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #171 · 2026-11-09T19:47:24Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #171 agent: a model omp's catalog lacks moves to the next model in the chain
+What it changes: `Forge.agent()` (forge.py:259-265 at head 49f7dc2c) now handles a session that exits non-zero with a stderr line starting `Model "<x>" not found`, which is omp's catalog refusal before any request. It logs the refusal and moves to the next model in the role's chain, and it marks no vendor exhausted. The PR also adds one README safeguard row (README.md:71) and one selftest check in section 10 (selftest.py:790-795).
+Findings:
+- medium forge/forge.py:259-265 A review role whose model omp does not know now falls through to its fallback. Before this PR the review failed closed. The fallback can be the builder's own vendor, so a config error becomes a same-vendor review that repeats for the rest of the run.
+  - reflex1.toml:54-58 sets `reviewer_alt` to `openai-codex/gpt-6-astra` with fallback `["anthropic/claude-fable-5-1"]`. `cycle()` (forge.py:1068-1070) picks `reviewer_alt` whenever the builder ran on Anthropic, which is every Opus or Fable build.
+  - Base behaviour: an unknown Astra id returns rc 1 with no `VERDICT`. The cycle then ends at forge.py:1098-1103 with `reviewer did not approve`, so nothing lands.
+  - Head behaviour: the same refusal moves the review to Fable, and Fable's `APPROVE` is returned. `exhausted` stays `{}` (by design), so every later review in the run takes the same path.
+  - When the builder itself ran on its Fable fallback, Fable reviews its own diff. `spent()` (forge.py:366-372) skips only the model a model-labelled window names.
+  - I replayed this with a stub `_agent_once` on both trees, with an unknown `openai-codex/gpt-6-2-astra` and Fable answering `VERDICT: APPROVE`. Base gives `(rc 1, ran [astra], no APPROVE)`. Head gives `(rc 0, ran [astra, fable-5-1], APPROVE)`.
+  - The weakened layer is README row 36 (different vendors, against "one model approving its own blind spots"). reviewer.md:1 still tells this reviewer "A builder from a different model family wrote the diff".
+  - The owner accepted same-vendor review only "when Codex is out" (reflex1.toml:57). That is a quota state: it is marked, `quota_ok()` clears it, and it ends. Here the condition is a config error that never clears. The only trace is the lane-log line `model: … not in omp's catalog` and the model name in the review comment. `status` records no reviewer model.
+  - The PR body lists "the review-role chains" under "Not changed" and does not mention reviewers. Its case (planner on `claude-fable-5-2`) does not need this path for review roles.
+- low forge/forge.py:263-268 When every model in a chain is unknown, `agent()` now raises `QuotaExhausted` instead of returning rc 1.
+  - Replay: a steward chain of one unknown model returns rc 1 on base and raises `QuotaExhausted('steward')` on head.
+  - `lane_loop` (1328-1331) then logs `quota: no model left for <role>` and calls `recover(quota=True)`. That requeues the ticket free, and with no cap: line 1249's `not quota` skips the `max_attempts` block. It appends `## forge-quota … no model had quota` to the ticket (1256), commits and pushes to main, then sleeps 15 min. This repeats until the deadline.
+  - It spends no quota. I checked this live: `omp -p --model=anthropic/zz-audit-nonexistent-9 "x"` on omp 18.12.6 gave rc 1, empty stdout, and stderr `Model "…" not found` followed by the `omp models find` hint.
+  - The cost is a cause mislabelled as quota in the log and in the ticket note. The note grows by about 80 B per lane per 15 min, and it is part of the `{TICKET}` text every builder and reviewer prompt gets. Base charged rc 1 as an attempt and blocked the ticket after `max_attempts`.
+  - Not blocking. The README row does not say what happens at the end of the chain.
+- info forge/forge.py:254,263 The PR body says an agent quoting those words in stdout does not match. That holds only while stdout has no `\n[stderr]\n` line. `err = text.partition("\n[stderr]\n")[2]` splits at the first occurrence, and the quota check shares that weakness.
+  - If such a session exits non-zero, it is rerun once on the next model in the chain. That is bounded by the chain length and does not bypass the gate.
+  - omp's refusal writes nothing to stdout. Also requiring an empty stdout (`not text.partition("\n[stderr]\n")[0].strip()`) would match exactly the refusal before any request. That is optional.
+- info Security trace for the paths the diff can reach. Nothing here weakens the gate or the protected paths:
+  - The model id goes into the argv list from config. No ticket text reaches a shell.
+  - `exhausted` is per lane process and is not written, so no new state is shared between lanes.
+  - The refused session runs no tool, so the next model starts in an unchanged worktree.
+  - `QuotaExhausted` from the planner leaves through `with … plan.lock` (688), which releases the flock.
+  - From `cycle()`, the handler (1115-1121) closes the PR and `finally` removes the worktree and branch. `recover(quota=True)` sets the ticket to `retry`, so no ticket is left `in_progress`.
+  - No GPU or protected-path code is touched.
+  - The extra 3 s session takes `sessions/<cycle>-<role>.log`/`.prompt`, which pushes the real session to `-2`. The quota path already does this, and nothing in forge reads `sessions/` back.
+- nit forge/forge.py:237-238 The PR rewrites the docstring but keeps "then any role with a model from another vendor". `agent()` does not do that: the chain is `[model] + fallback` (240).
+- info Deletions: none. The diff removes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table (README +1 row, selftest +6, forge.py docstring reworded plus 7 added lines).
+- info Citations: README's Claude Code reference matches code.claude.com/docs/en/changelog ("Fixed the `fable` (and `best`) model alias erroring on the Anthropic API when the newest Fable model …"). I did not check the `claude-fable-5-2` listing or the models.dev claim.
+- info Siblings: 34 other open PRs on `forge` share a file with this one. I read all their diffs. None duplicates the not-found handling: a grep of all 34 for `catalog|not found|omp models|Model "` finds nothing.
+  - #160 edits the same `agent()` docstring (237-238) and passes `avoid=built_by` to the reviewer call. The only conflict is text in the docstring. It is complementary: it stops the fall-through landing on the exact builder model, but an Opus build reviewed by Fable stays. The Change below is independent of it.
+  - #145 rewrites README row 70, the row this PR inserts after, and the quota regex 4 lines above this insert. That is adjacent text only. #145 marks the vendor on an unreachable provider and #171 marks nothing for one bad id. Both choices fit their failure, so there is no contradiction.
+  - #47 adds a provider-error fall-through guarded "only while a usable model is left, so a chain of one returns the error as before". #171 has no such guard (low finding above), so if both land the loop has two rules for the end of the chain. #47 is the side to rebase: it is stale and written against `model.split("/")[0] in self.exhausted`, which `spent()` replaced. This does not lower this verdict.
+  - #20 (Grok before Fable in `reviewer_alt`) and #133 (reviewer vendor in the tally) would soften the medium finding. They do not conflict with it.
+- info Verified:
+  - `python3 forge/selftest.py` on the PR head (git archive into a temp dir): 0 FAIL.
+  - With the Change below applied: 0 FAIL, including the added check.
+  - The added check against unchanged head: FAIL `['c/d', 'a/b']`.
+Change needed: keep review roles on base behaviour when their model is unknown, so the review fails closed. Three edits:
+- forge/forge.py:263, replace
+  `            if rc != 0 and re.search(r'^Model ".*" not found', err, re.M):`
+  with
+  ```
+              # A review role fails the review as before: reviewer_alt's next model is the builder's vendor.
+              if rc != 0 and not role.startswith("reviewer") and re.search(r'^Model ".*" not found', err, re.M):
+  ```
+- forge/README.md:71, replace "moves the role to the next model in its chain and marks no vendor" with "moves a builder, planner or steward role to the next model in its chain and marks no vendor; a review role fails the review as before, since `reviewer_alt`'s next model is the builder's vendor".
+- forge/selftest.py, after line 795, add:
+  ```
+      ran.clear()
+      f.cfg["roles"]["reviewer"]["fallback"] = ["a/b"]
+      outs["c/d"], outs["a/b"] = (1, '\n[stderr]\nModel "c/d" not found\n'), (0, "VERDICT: APPROVE\n[stderr]\n")
+      rc, text = f.agent("reviewer", "p", repo)
+      check("a review role whose model omp lacks fails the review, not onto its fallback", (rc, ran) == (1, ["c/d"]), str(ran))
+  ```
+
+
 ## PR #170 · 2026-11-09T18:42:10Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
