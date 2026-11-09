@@ -2,6 +2,25 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #164 · 2026-11-09T08:16:28Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #164 forge: median lane-minutes per attempt beside the weekly model rate
+What it changes: in `status_text()`, each (model, ISO week) cell of the `merged/attempts per builder model per ISO week` row gets ` N min/attempt`: the upper-middle `secs` of that week's history entries that have `secs`, divided by 60 with `//`. If no entry in the week has `secs`, the cell keeps the rate only. The README paragraph at line 158 and the existing selftest check are rewritten to match. No cycle, gate, reviewer, prompt, config or `record()` path changes.
+Findings:
+- info forge/forge.py:1375-1383 (PR head): Blast radius traced. Only `status_text()` builds this row. It has two callers: `status()` prints it (forge.py:1326), and `steward()` passes it as `{STATE}` (forge.py:1180 → prompts/steward.md:4). The diff does not touch claim, `recover()`, `discard_strays()`, the gate, the repair, the reviewer, `land()`, the PR calls, the quota code or the protected-path checks. Ticket text never reaches the new output. Its only input is the integer `secs` that `record()` writes from `time.monotonic()` (forge.py:1176). Nothing is shelled out and no state is written; `all_states()` only reads. The steward prompt grows by about 15 characters per (model, week) cell. History is capped at 200 entries per lane (forge.py:1176), so this growth is bounded.
+- info forge/forge.py:1380-1383: No new exception path. The median expression runs only when the week's list is non-empty. Both `record()` call sites (forge.py:1096, 1155) are inside `cycle()`, after `cycle_t0` is set at forge.py:957, so every stored `secs` is an int. A non-int `secs` would already raise in the existing `minutes()` at forge.py:1357, so the steward turn has no new way to fail.
+- info forge/selftest.py:342-348 (old 344-346 deleted): The old check stopped the per-ISO-week split (W43/W44 buckets with their Wilson intervals) from silently dropping out of the steward's STATE. Nothing is retired. The new check asserts the same string plus the trailing ` (`, on the matching line of the same `seen_state[0]`, so the new check implies the old one. It also asserts that W43 shows the rate only (`count("min/attempt") == 1`) and that W44 shows `90 min/attempt` (the upper middle of 20 and 90 min). The renamed check name is not referenced anywhere else in the repo. I ran `forge/selftest.py` on the PR head (`5b1c5666`) in a /tmp copy: all checks passed. I then changed the median to a mean and reran: this check FAILs with `55 min/attempt`, so it tells a median from a mean.
+- info forge/README.md:158: The old sentence is kept whole inside the new one. The safeguard table (README.md:24-115) and `forge/prompts/*.md` are not touched, so no layer is removed. I checked the LiveNerf figures against github.com/ninjahawk/livenerf's README (2026-11-08, day 46 of 60): effort low −62% output tokens and −8.3 points; effort medium −26% and −4.2 points. These match "26-62% ... 4-8 accuracy points".
+- info forge/README.md:158, forge/forge.py:1383 (interpretation, no change required): The minutes pool `builder` and `builder_hard` attempts under one model name. The span also includes gate runs, the cross-vendor review and merge-resolve sessions (README.md:156 says so). The thinking level in the project toml is not part of `version` (forge.py:129-132 hashes only forge.py and the prompts). So an owner-side effort change, or a week with more retries and hard tickets, moves this column the same way a provider-side effort cut would. The README's "a week of long tickets reads as a slow week" covers only part of this.
+- nit forge/forge.py:1383, README.md:158: For an even count, "median" is the upper middle. Only the selftest comment says so. README says "beside each rate", but a week with no `secs` entries shows no minutes; the forge.py comment documents that, the README does not.
+- nit forge/forge.py:1383: The `out.append` is now a three-level nested f-string/join with a conditional. It is about as dense as the existing `minutes()` helper and readable enough.
+- info siblings: I read all 33 other open PRs on `forge` that touch README.md, forge.py or selftest.py. None touches `by_week`, the weekly row, README.md:158 or the selftest's weekly check. #132 (adds effort to the `by_model` key) and #133 (adds a review-vendor row) edit other rows of `status_text()`; they do not contradict or duplicate this PR. #132 would also add the per-attempt effort record that would separate the owner-side confound above.
+Change needed (only for MERGE WITH CHANGE): none
+
+
 ## PR #163 · 2026-11-09T06:16:49Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
