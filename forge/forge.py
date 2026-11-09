@@ -234,8 +234,8 @@ class Forge:
         return r
 
     def agent(self, role: str, prompt: str, cwd: Path, timeout_min: int | None = None) -> tuple[int, str]:
-        """Run one headless omp session for a role. On a provider quota error, try the role's
-        `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
+        """Run one headless omp session for a role. On a provider quota error, or a model omp's catalog
+        lacks, try the role's `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
         for model in chain:
@@ -255,6 +255,13 @@ class Forge:
             if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", err, re.I):
                 self.exhausted[model.split("/")[0]] = time.time()
                 self.log(f"quota: {model} exhausted; trying the next model for {role}")
+                continue
+            # omp refuses a model its catalog lacks before any request (`Model "<x>" not found`, rc 1, ~3 s):
+            # a config bump to a model released ahead of the catalog (claude-fable-5-2 on 2026-11-09, listed
+            # by Anthropic, absent from `omp models` and models.dev) or a typo. Try the next model, mark
+            # nothing: the vendor is fine, and the 3 s retry each cycle is the reminder to fix the config.
+            if rc != 0 and re.search(r'^Model ".*" not found', err, re.M):
+                self.log(f"model: {model} not in omp's catalog; trying the next model for {role}")
                 continue
             self.last_model[role] = model
             return rc, text
