@@ -1010,8 +1010,15 @@ class Forge:
                 # dependencies, files outside the worktree, the formatter), and never said that the branch's
                 # commits are the earlier session's patch - the thing to fix, not to redo (conversational
                 # repair keeps the failed patch next to its feedback so the next one is not the same patch).
+                failed = self.sh("git rev-parse HEAD", cwd=wt).stdout.strip()
                 rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff origin/main...HEAD` is its work; local `main` sits at the branch point) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end, so skip the starting gate run. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. Every rule below still holds.\n\n{bprompt()}\n\nGate output:\n{gout}", wt)
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
+                if self.sh("git rev-parse HEAD", cwd=wt).stdout.strip() == failed:
+                    # The tree the gate just failed would be gated again for the same verdict (8-25 min on
+                    # reflex1). Its one gate failure on record, PR #2, went this way: the repair session died on
+                    # Codex's usage limit and the gate reran on the untouched branch. Unchanged-code resubmission
+                    # is 28% of trace-less repair retries (arXiv 2611.09212); here it is the whole second gate run.
+                    return self.fail(ticket, f"repair changed nothing (rc={rc}); gate not rerun.\n{out[-1500:]}")
                 bad = self.secrets(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint.")
