@@ -2,6 +2,52 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #167 · 2026-11-09T14:34:11Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #167 forge: pin git hooks and fsmonitor off for every git the loop and its sessions run
+What it changes: `Forge.__init__` adds `GIT_CONFIG_COUNT=2`, `core.hooksPath=/dev/null` and `core.fsmonitor=false` to `self.env` (forge.py:127-129 at PR head 45ca0dd). That env reaches every `sh()` and every omp session. The PR also adds README safeguard row 106 and selftest check 27 (a planted hook and fsmonitor must not run under `f.sh("git add -A && git commit")`).
+Findings:
+- low forge/forge.py:124-125, forge/README.md:106 (both cells), forge/selftest.py:1288-1290: "the lanes share one .git/" and "run as forge in every lane" are false. Lane 1 uses the configured checkout. Lane k>1 clones its own `{repo}-lane{k}` (forge.py:87-94). Build worktrees are `git worktree add`ed from that lane's own clone (:960). On this box `~/Dev/reflex1`, `-lane2`, `-lane3` and `-lane4` each have a separate `.git` directory, and `rev-parse --git-common-dir` returns `.git` in each. So a `.git/` plant is shared by one lane's worktrees and its checkout, where the planner and steward run. The pin itself is per-process env, so it covers every lane either way. The wrong text sits in a permanent table that later audits reason from.
+- low forge/README.md:106 and the PR body: the row does not mention what is still open, and the body's "this PR pins the two that fire on the loop's own add/commit/push path" is false. I probed through `Forge.sh()` with a temp repo, comparing base (7fa95a7) with the PR head:
+  - Hooks via `core.hooksPath`, plain `.git/hooks/post-commit` and `core.fsmonitor` all ran on base and none ran on the head. The fix works.
+  - These still run on the head, on the loop's own path:
+    - `filter.x.clean` with `.git/info/attributes` runs on `git add -A`.
+    - `gpg.program` with `commit.gpgsign` runs on `git commit` (rc 128).
+    - `diff.external` runs on `git diff`.
+  - `diff.external` is the serious one. With a `true` driver planted, `secrets()` (:638) went from `['f: aws']` to `[]` on the head. The same patch `git diff` feeds `invisible_chars()` (:604), `test_tampering()` (:571) and the reviewer's `{DIFF}` (:1054); `git diff origin/main...HEAD` printed 0 characters.
+  - `touched_protected()` (:467, `--name-only`) still reported `gate.sh` with the driver planted, so gate protection holds.
+  - The hole is older than this PR. The finding is that the new row reads as if `.git/` command execution were closed. The body's own "Not covered" list omits filter, gpg and diff.external.
+- info traced, no weakening:
+  - The env reaches `sh()` (:230-231) and through it: the gate (:421), the claim commit and push, `sync_main`, `land()`'s merge and push, `gh` (including `gh pr merge --delete-branch`'s local git), `recover()` and `discard_strays()`. Sessions get it through Popen (:303).
+  - No new exception path, shared state, prompt or log growth, quota or GPU spend.
+  - Gate, reviewer, protected paths and prompts are untouched.
+  - A project `[env]` table is spread after the pins and could override them. `~/.config/forge/reflex1.toml` sets no `GIT_*`.
+- info no behavior change on reflex1:
+  - None of the four clones sets `core.hooksPath`, `core.fsmonitor`, a filter, gpg or include.
+  - `.git/hooks` holds `*.sample` files only. There is no LFS in `.gitattributes`, `~/.gitconfig` has no hook setting, and `/etc/gitconfig` is absent.
+  - `gate.sh` runs no git, and reflex1's tracked files never mention hooksPath, fsmonitor or GIT_CONFIG.
+  - A future project that depends on a hook would silently lose it under forge, including inside `gate.sh` (git-lfs uploads objects from its `pre-push` hook; husky sets `core.hooksPath`). The row's "reflex1 has no hook of its own to lose" covers that only for reflex1.
+- nit forge/forge.py:93-94,120: `git remote get-url` and `git clone` run under `os.environ` before `self.env` exists, so "every git the loop runs" is not literal. Only `clone` can run a hook (post-checkout from `init.templateDir`), and only when a lane's clone is missing.
+- info verification:
+  - I extracted the PR head with `git archive` to /tmp (no checkout). `python3 forge/selftest.py` passes all checks.
+  - I ran the head's selftest against base `forge.py`: check 27 fails there ("1 check(s) failed"), so the check is real.
+  - Sources checked: the lemans quote is verbatim (Evil Martians, 2026-11-03), and the arXiv 2509.15572 abstract matches the row's paraphrase.
+- info deletions: none. The diff only adds lines (README +1, forge.py +6, selftest +20), so no layer is retired from `forge/prompts/*.md`, `forge/selftest.py` or the safeguard table.
+- info siblings (base `forge`):
+  - #148 and #160 also add a selftest check numbered "27.". There is no overlap in content; whichever lands second renumbers.
+  - #148, #40 and #79 rewrite `sh()` and keep `env=self.env`, so the pin carries over.
+  - No open PR touches `self.env` or git config. Nothing contradicts this PR.
+- slop: none beyond the wrong text above. The 4-line comment and the row follow the house style.
+Change needed (only for MERGE WITH CHANGE): Text only; leave the code unchanged.
+1. In forge/README.md:106, rule cell, replace "the lanes' worktrees share one `.git/` (`hooks/`, `config`), which no diff shows and `touched_protected()` cannot reach, and reflex1 has no hook of its own to lose" with "a lane's worktrees and its checkout (where the planner and steward run) share that lane's clone's `.git/` (`hooks/`, `config`), which no diff shows and `touched_protected()` cannot reach, and reflex1 has no hook of its own to lose; other `.git/config` keys that run a command are not pinned and still fire on the loop's path: `filter.<driver>.clean` on `git add`, `gpg.program` under `commit.gpgsign` on `git commit`, and `diff.external` on the patch `git diff` that `secrets()`, `invisible_chars()`, `test_tampering()` and the reviewer's `{DIFF}` read (`touched_protected()`'s `--name-only` is unaffected)".
+2. In the same row's prevents cell, replace "plants in the shared `.git/`" with "plants in its lane's `.git/`" and "in every lane" with "in that lane".
+3. In forge/forge.py:124-125, replace "read the common .git/ the lanes share" with "read the .git/ of the lane's clone, which its worktrees share", and "would run as forge in every lane, on every later cycle" with "would run as forge on every later cycle of that lane".
+4. In forge/selftest.py:1288-1290, replace "The lanes share one .git/ (worktrees)" with "A lane's worktrees share its clone's .git/", and "on every later git the loop makes, in every lane" with "on every later git that lane makes".
+
+
 ## PR #166 · 2026-11-09T10:21:37Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
