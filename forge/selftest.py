@@ -787,6 +787,17 @@ with tempfile.TemporaryDirectory() as d:
     rc, text = f.agent("builder", "p", repo)
     check("the provider's own refusal on stderr falls back to the other vendor",
           ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
+    ran.clear()
+    f.exhausted.clear()
+    outs["a/b"] = (1, '\n[stderr]\nModel "a/b" not found\n\nRun `omp models find <pattern>` to search, or `omp models` to list all.\n')
+    rc, text = f.agent("builder", "p", repo)
+    check("a model omp's catalog lacks moves to the next model without marking its vendor",
+          (rc, ran, f.exhausted, f.last_model["builder"]) == (0, ["a/b", "c/d"], {}, "c/d"), f"{ran} {f.exhausted}")
+    ran.clear()
+    f.cfg["roles"]["reviewer"]["fallback"] = ["a/b"]
+    outs["c/d"], outs["a/b"] = (1, '\n[stderr]\nModel "c/d" not found\n'), (0, "VERDICT: APPROVE\n[stderr]\n")
+    rc, text = f.agent("reviewer", "p", repo)
+    check("a review role whose model omp lacks fails the review, not onto its fallback", (rc, ran) == (1, ["c/d"]), str(ran))
 
 # 11. A cycle that does not land must take its attempt branch off the remote; a branch already merged into
 # local main must stay (land() keeps it as the only copy when the merge commit did not reach origin/main).
