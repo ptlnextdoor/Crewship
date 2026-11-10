@@ -25,6 +25,13 @@ HF_HOME = "~/.cache/huggingface"
 
 # Routing (owner, 2026-10-23): Opus 5.5, Fable 5.1, GPT 6.1 Sol and GPT 6 Astra, high effort.
 # Builders alternate vendors by role; the reviewer is always from the other vendor.
+# Fable 5.2 (2026-11-09) is not in any chain here: Anthropic's launch post says it was trained to stay
+# "at about the level of Opus 5.5" on accelerator kernel optimization and LLM architecture work, the
+# surface of 43 of reflex1's 140 tickets (those naming candle, kernels or performance); the post's FrontierCode 2.0
+# numbers compare it at `high` (45.3%) with Opus 5.5 at `max` (45.5%, "roughly half the cost per task"),
+# not with Opus at `high`, which is what builds here; and on Playcode's one prompt at `high` it cost 3.4x
+# Fable 5.1 per task (76k vs 18k output tokens). Revisit when a builder tally (`status`, merged/attempts
+# per model) or a vendor number shows it ahead on this kind of work.
 [roles.planner]
 model = "anthropic/claude-fable-5-1"
 thinking = "xhigh"
