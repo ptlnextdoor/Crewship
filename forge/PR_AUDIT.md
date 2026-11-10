@@ -2,6 +2,58 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #176 · 2026-11-10T14:24:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #176 reviewer: reject a destination the ticket does not name
+What it changes: This PR changes prompts and docs only. Reviewer step 6 (forge/prompts/reviewer.md:9) is renamed "Dependencies and destinations". It now also tells the reviewer to read the diff's added lines for anything that sends bytes out (a URL, host, IP, port, socket call, HTTP or hub client, `git remote`, or a constant decoded into one of those). A destination the ticket does not name is a REJECT, and so is a send whose failure is swallowed. A link in a comment or doc that no code reads passes. The PR also adds a matching safeguard row at forge/README.md:121.
+Findings:
+- medium forge/prompts/reviewer.md:9 (and forge/README.md:121) The new exemption "a link in a comment or a doc that no code reads is not" also lets through a URL added to `AGENTS.md`, `LEARNINGS.md` or `PROGRESS.md`. No code reads those files, but every later builder does:
+  - builder.md:4 has each builder read `AGENTS.md` and `rg` `LEARNINGS.md`/`PROGRESS.md` before touching code, and builders run at `--approval-mode=yolo` (forge.py:304).
+  - Step 4 (reviewer.md:7) flags added lines in those files only when they tell the next session to skip, shorten or work around a check, or to proceed with less oversight. A line like "fetch the tokenizer from https://<host>/… when the hub 429s" is none of those.
+  - The reviewer never sees builder.md:19 ("no other host, mirror, proxy"), so it cannot treat that line as a work-around.
+  - Before this PR, no reviewer text approved such a line. Now step 6 tells the reviewer it passes. That is the cross-session form of the PR's own example (plant the value in one place, act on it later).
+  - The only layer left would be the next builder's prose rules (builder.md:16 and :19).
+  - Closing the gap costs no false REJECTs on reflex1's history: on origin/main (2c39a79) and in all three lane clones, `AGENTS.md` (40 lines), `LEARNINGS.md` (132) and `PROGRESS.md` (206) contain 0 lines with `http(s)://`.
+- low PR body ("Not checked") The claim that "a ticket that adds a dataset or model URL must name it, which the planner's template already asks for" is false.
+  - planner.md:20 asks only for "every crate or package the builder may add or upgrade, with version". A grep of planner.md for url|host|dataset|endpoint|port|destination|hub finds nothing.
+  - builder.md also has no rule for destinations. builder.md:15 covers only the dependency rule.
+  - So the new REJECT relies on the planner's habits, and a builder learns about it only from a REJECT, which costs an attempt.
+  - On reflex1 the effect is small so far: the done tickets that built network code (0009 serve-http, 0018 serve-vision-dir, 0026 compare-serve-upstream) each named 127.0.0.1 or localhost. This does not block the merge.
+- low forge/prompts/reviewer.md:9 The new step has no exception for loopback binds in tests or for in-process sends. Existing reflex1 code matches the listed cues:
+  - `crates/reflex-serve/tests/http.rs:58` `TcpListener::bind("127.0.0.1:0")`
+  - `:70` `TcpStream::connect`
+  - `crates/reflex-serve/src/lib.rs:31` `let _ = reply.send(...)` (a tokio oneshot)
+
+  A literal reviewer will REJECT a new copy of these unless the ticket names the host; reviewer.md:12 ("unless you can state why it cannot matter") is the only way out. This costs attempts on the shared quota but weakens nothing. A blanket loopback exception would open a channel to local daemons, so I ask for no edit here.
+- info Nothing is deleted:
+  - A word diff of reviewer.md:9 shows only the title change ("Dependencies:" to "Dependencies and destinations:") plus the appended sentences. The old step-6 text is kept word for word.
+  - README gains one row and loses none, and selftest.py is untouched, so no layer is retired.
+  - forge.py:497 and :550 still describe "reviewer step 6" correctly.
+- info No loop code changes; traced:
+  - forge.py is unchanged. `prompt()` (forge.py:163-168) fills placeholders with `str.replace`. The new text has no `{` or `}`, and the placeholder counts are the same before and after: {PROJECT} 1, {GATE} 2, {TICKET} 1, {DIFF} 1.
+  - The prompt reaches omp through a file (forge.py:297-298), so the extra 810 bytes (10,721 to 11,531) are a fixed cost with no E2BIG risk.
+  - The new text contains no "VERDICT", so the verdict parse (forge.py:1093, 1112) is unaffected.
+  - Lanes, claim, `recover()`, `discard_strays()`, protected paths, quota, timeouts, GPU and PR merge are all untouched.
+  - The text gives no permission to edit protected paths or to skip tests. Apart from the exemption above, it only adds REJECT conditions inside steps 1-6.
+  - `python3 forge/selftest.py` on a /tmp export of the PR head printed "all checks passed", and again with the change below applied.
+- info The citation checks out. arXiv 2606.05647 (Ye, Zou, Yu, Shi; NeurIPS 2026) exists:
+  - The abstract gives 83/88 (94%) no-monitor developers failing to detect sabotage, and 9/16 sabotage successes despite a correct monitor alert.
+  - The HTML shows the Claude-Haiku-4.5 monitor flagging 16/19 sessions and mentions `SOCKET_RECV_BUFFER`.
+  - The README's "reached the final code in 83 of 88" rewords "fail to detect".
+  - The claim that no reviewer step looked for destinations is true: base reviewer.md contains no url, host, socket, destination or egress.
+- slop forge/prompts/reviewer.md:9 The closing sentence "The gate and the tests cannot see this: a backdoor passes every test because it adds behaviour, it does not change any." repeats reviewer.md:1 ("Your job is what the gate cannot see.") and gives a reason rather than an instruction. It is harmless and could be dropped.
+- sibling #23 (base `forge`, reviewer.md + README.md) contradicts this PR on URLs in memory files. Its step 7 makes a line in `AGENTS.md`/`LEARNINGS.md`/`PROGRESS.md` that tells a later session to "install or fetch something … or API endpoint" a REJECT. This PR's exemption passes such a link. This PR is the side that should change (first finding).
+  - #23 is also stale: base step 4 (reviewer.md:7) already reads those files as instructions, and #23 renumbers the steps and changes "steps 1 to 6".
+- sibling #140 (step 3), #86 (line 1) and #25 (Diff header) edit other lines of reviewer.md, and none contradicts this PR.
+- sibling The other open README siblings (#165, #160, #148, #145, #139, #136, #117, #111, #99, #85, #84, #83, #79, #48, #47, #44, #42, #40, #39, #31, #28) add or edit unrelated rows. A grep of every sibling diff's added lines for exfil/destination/egress/backdoor/2606.05647 finds nothing. These are text conflicts only, with no duplicate.
+Change needed (only for MERGE WITH CHANGE): Make one edit to the exemption clause, in the prompt and in its README row:
+(1) forge/prompts/reviewer.md:9: replace "a link in a comment or a doc that no code reads is not." with "a link in a code comment or a doc that no code reads is not, except in `AGENTS.md`, `LEARNINGS.md` and `PROGRESS.md`: every later builder reads those as instructions (step 4), so a URL, host or endpoint the diff adds there is a destination like any other."
+(2) forge/README.md:121: replace "; a link in a comment or doc that no code reads passes |" with "; a link in a comment or doc that no code reads passes, except one added to `AGENTS.md`, `LEARNINGS.md` or `PROGRESS.md`, which every later builder reads as an instruction |".
+
+
 ## PR #175 · 2026-11-10T07:39:43Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
