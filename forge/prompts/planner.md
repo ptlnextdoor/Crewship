@@ -17,7 +17,7 @@ depends: NNNN, NNNN        (ticket numbers that must be done first; omit the lin
 One paragraph: which SCORE.md number this moves (S1, S2, latency, or a prerequisite named in ROADMAP for one of them), which ROADMAP milestone, and why it is next. A ticket that cannot name a SCORE.md number is not written.
 
 ## Do
-Concrete steps, files, interfaces. Name every crate or package the builder may add or upgrade, with version; the builder is not allowed to pick one itself.
+Concrete steps, files, interfaces. For each file you name, name the existing test (test file and test name) that exercises it, or say that none does, so the builder runs that test while iterating and the full gate once at the end; name the sibling places that need the same change (the other call site, the copy in another crate or script, the doc or bench row), or say there are none. Name every crate or package the builder may add or upgrade, with version; the builder is not allowed to pick one itself.
 
 ## Done when
 Checkable criteria, each a command and its expected result (a test name that passes, a number above a threshold with the command that prints it). No criterion a person must judge by eye. When the change takes input and a file or doc you can name defines its result on an edge input (empty input, the boundary value, the other input type, a malformed row), at least one criterion runs it on that input with that result and names the source; a test the builder writes counts when this line fixes its input and expected result. Typical inputs alone pass wrong code, and an edge result no source defines is a guess the builder then has to match, so leave that one out.
