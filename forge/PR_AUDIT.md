@@ -2,6 +2,48 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #177 · 2026-11-10T15:28:07Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #177 reviewer: a Done-when number printed by code the diff changes is a claim
+What it changes: Adds one sentence pair to the end of reviewer step 3 (`forge/prompts/reviewer.md:6`). A `Done when` number printed by code the diff adds or changes is to be read for what its timer and count cover. Where the branch point already has the printing file, the reviewer restores it, reruns the ticket's command, and requires the two numbers to agree within the spread of two new runs; a speed-up's old number comes from that run. Also adds one safeguard row (`forge/README.md:122`). No code changes.
+Findings:
+- medium forge/prompts/reviewer.md:6 The two added clauses conflict with each other and with the ticket's own baseline, and they have no exception for a ticket that asks to change the measuring file. Traced on reflex1 0085, which merged as f50870d:
+  - The ticket's `## Do` (tickets/0085:12-13) asks for `--conv` and `--per-layer` in `crates/reflex-policy/examples/latency.rs`.
+  - Its `Done when` (line 19) is a speed-up: im2col's `p50_ms` must be "lower than `--conv candle`'s in the same run pair".
+  - The diff changed latency.rs, which the branch point 74d7481 already has, so the new rule applies. Restored, that file's arg loop ends in `_ => return Err("unexpected argument ...")` (lines 14-28), so the ticket's command `--conv im2col` prints no number to agree with.
+  - "a speed-up criterion's old number comes from that run" then overrides the `--conv candle` baseline the ticket names.
+  - Where the old file does run, it is the only file restored, so "that run" times the new library code. The required agreement then makes any old-vs-new speed-up about 1.0x by construction. Where the printing file is also the measured code, restoring it reverts the change, and "require the two numbers to agree" fails every real improvement.
+  - Every failure points toward REJECT, not APPROVE: a ticket that merged today would draw a finding, and line 12 turns that into REJECT unless the reviewer argues it away. Cost: lost attempts and quota, up to `max_attempts` 3, then `blocked`.
+- low forge/prompts/reviewer.md:6 "a threshold read from a constant the diff sets is a finding" has no carve-out for a threshold the ticket names. Step 3's "weakened tolerances" and builder.md:12 ("no lowering numeric tolerances unless the ticket names the new one") both have one, so a ticket-named threshold change becomes a finding the reviewer must argue away under line 12.
+- low forge/README.md:122 The evidence clause "reflex1's 140 tickets carry 161 numeric `Done when` lines, nearly all printed by in-repo tools (`reflex-bench`, `tools/profile_forward.sh`, `tools/vision_score.py`) that tickets also change" is not true of ~/Dev/reflex1 (main at 2c39a79):
+  - `reflex-bench` is not a package yet: gate.sh:21 tests `cargo metadata` for it and line 35 prints "reflex-bench not built yet (M1), skipped".
+  - `tools/vision_score.py` does not exist and has no commit on any branch.
+  - `tools/profile_forward.sh` has one commit, the one that created it (445e053, ticket 0019).
+  - Across all 140 tickets' 526 `Done when` lines, the three names appear in 16 (9, 4 and 3). The 161 figure matches the `Done when` lines that name `bench/results/`, which are committed result files read with `jq`/`ls`. The same claim appears in the PR body's Why section.
+- low forge/prompts/reviewer.md:6 Added review time. Each triggering line needs one old-file run plus one more new run (for the spread), and a Rust bench needs two rebuilds, inside the hard-coded `timeout_min=30` (forge.py:1092). The PR body says this was not measured, and README:45 records 4 timeouts in the first 22 reflex1 reviews. It fails closed: a timeout with no verdict is rerun once (forge.py:1094-1104) and then fails as "reviewer did not approve" (forge.py:1112-1117). Nothing approves without a `VERDICT:` line.
+  - GPU: a rerun that calls `gpu.py` gets the lane env (forge.py:311) and stays under gpu.py's `GPU_BUDGET_USD` ledger cap and the pod reaper (README:52). Most reflex1 GPU numbers are read from committed `bench/results/` files, so rerunning "the ticket's command" there is a `jq`, not a job.
+- none (security trace) Nothing here weakens the gate, the reviewer, or the protected paths:
+  - The only `-` line in reviewer.md is step 3 rewritten. `git diff --word-diff` against 285ae5fb shows one appended span and no deleted word.
+  - The README adds a row and deletes none, and selftest.py is untouched. No prompt line, selftest check or safeguard row is removed, so no layer is retired.
+  - Placeholders are unchanged (`{PROJECT}` 1, `{GATE}` 2, `{TICKET}` 1, `{DIFF}` 1; forge.py:163 would stop a session on a lost one). The prompt grows by a fixed 760 bytes (11731 to 12491).
+  - The restore reuses step 3's existing single exception to "Do not edit files". forge resets the worktree to `reviewed` with `git clean -qfd` before the rerun (forge.py:1102) and after the review (forge.py:1111), so a file left restored never reaches `land()`.
+  - "That file" can never be a protected path, because `touched_protected(wt, "origin/main")` fails any diff touching them before the review runs (forge.py:1015, and 1054 after a repair).
+  - No ticket text reaches a shell (prompts go through `str.replace` and a file, forge.py:168 and :297), and no lane state, claim, `recover()`, `discard_strays()` or landing path changes.
+  - `python3 -m py_compile forge/forge.py` and `python3 forge/selftest.py` on a `git archive` export of the PR head (76a713ea): all checks passed.
+- none (siblings) Four other open PRs on `forge` touch `forge/prompts/reviewer.md`; none contradicts or duplicates this one:
+  - #140 rewrites the same physical line 6 to add a third exception for tests that delete files. Its branch point is 195 commits behind `origin/forge`. The conflict is textual only and the rules do not contradict; whichever lands second rebases, and this PR needs no change.
+  - #86 (line 1), #23 (step 7 and the closing paragraph) and #25 (the Diff header) edit other lines.
+  - The other 21 open PRs that touch `forge/README.md` add or change rows at lines 25-92. None of those rows covers measurement or benchmarks.
+Change needed: In `forge/prompts/reviewer.md` line 6, replace the added text, from "A `Done when` number (a time, a count, a score, a ratio)" to the end of the line, with:
+"A `Done when` number (a time, a count, a score, a ratio) printed by code the diff adds or changes (a bench, a script, a metric function) is a claim in the same way: read the lines that compute it and check that the timer brackets, and the count counts, what the ticket's line names; a timer started after work the quantity includes, a count over a subset, or a threshold the ticket does not name read from a constant the diff sets is a finding with its file:line. Where the branch point already has the file that prints that quantity and the ticket's `## Do` does not ask to change that file, restore that file alone under the same rule, run the ticket's command on it, put the file back, and require the two numbers to agree within the spread of two runs of the new one. A speed-up criterion's old number is the baseline its `Done when` line names; where it names none, it comes from the ticket's command run with every source file the diff changes restored under the same rule, never from PROGRESS.md."
+In the `forge/README.md:122` row, make two edits:
+1. Rule column: replace "where the branch point already prints that quantity it runs that version under the step's restore rule and requires the two numbers to agree" with "where the branch point already has the printing file and the ticket does not ask to change it, it runs that version under the step's restore rule and requires the two numbers to agree; a speed-up's baseline is the one the ticket names, else the branch point's code".
+2. Prevents column: replace the clause from "reflex1's 140 tickets carry 161 numeric" to the end of the cell with "reflex1's 0085 changed `crates/reflex-policy/examples/latency.rs`, the file that prints the `p50_ms` its `Done when` compares".
+
+
 ## PR #176 · 2026-11-10T14:24:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
