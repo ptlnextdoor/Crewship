@@ -2,6 +2,38 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #182 · 2026-11-10T23:42:15Z · MERGE WITH CHANGE · risk low · gate pass · left open: touches ['forge/gpu.py'] (owner decides)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #182 gpu: record the card each pod job ran on
+What it changes: `gpu.py run` runs `nvidia-smi --query-gpu=name` over SSH on the rented pod and prints `gpu: card <name>` before the push (`ssh_base()` split out of `ssh()`, new `card()`). It also appends one sentence to builder.md rule 14 (put the card beside every pod number in `PROGRESS.md`, call a comparison across cards not comparable, rerun with `--gpu "<that card>"` when "Done when" depends on it), adds one README safeguard row and three selftest checks.
+Findings:
+- low forge/gpu.py:122-127 `card()` never reads `returncode`. If the remote command fails but prints to stdout, that text becomes the card name. If ssh fails with empty stdout (rc 255), it returns a bare `unknown`, not the `unknown (<error>)` that README.md:54 and the PR body promise. Evidence: I ran the PR's gpu.py in memory with a stubbed `subprocess.run`. rc 9 with stdout "NVIDIA-SMI has failed because..." came back as that string. A real dead port (`127.0.0.1:1`) returned `'unknown'` in 0.01s. Downstream, the builder writes the error string into `PROGRESS.md` as the card, and rule 14 then treats it as a different card. That is the safe direction, so the harm is a false record, not a weaker gate. Whether nvidia-smi prints its driver error to stdout on a real pod is [INFERENCE]; I did not run it on hardware.
+- info forge/gpu.py:156-169 Traced, no issue. `card()` sits inside `run()`'s `try` (156), after the budget check (152-154), before the push (160) and the job (162). The `finally` at 168 still terminates the pod. `card()` catches `Exception`, and its 120 s `subprocess.run` timeout kills the ssh child. `ssh()` argv is byte-identical to the base: I compared old and new `ssh()` calls under a stub and they match. The argv is constant, and ip/port come from the RunPod API, so no ticket text reaches the command. Cost: one SSH round trip of paid pod time, at most 120 s, before the job. The job timeout (`hours*3600-120`) is computed on its own, so the pod outruns its name deadline by that much more. That overrun already exists (`ssh_target` waits up to 900 s), and `forge-gpu-reap.service` covers it. `card()` keeps no state, so 4 lanes running gpu.py at once are unaffected.
+- info forge/prompts/builder.md:14 The edit only appends. The old rule-14 text is an exact prefix of the new line (+672 chars). I diffed builder.md, README.md and selftest.py line by line: no line is deleted from any of them, so no layer is retired. The added text says nothing about `gate.sh`, `tickets/`, `.forge/`, `STEERING.md`, tests or the gate. The rerun clause adds GPU spend, capped by gpu.py's budget check (gpu.py:152-154) and `GPU_MAX_HOURS = "2"` in projects/reflex1.toml. The ledger today holds $14.88 of the $15 budget (43 entries), so no pod job can run and this PR has no effect until the owner raises the budget.
+- low forge/prompts/builder.md:14 The rule does not cover earlier pod numbers that have no recorded card. That is every `PROGRESS.md` entry before this PR (the PR body says the card was never written there), and `--gpu "<that card>"` cannot be filled in for them. A builder can therefore label any regression against history "not comparable". The reviewer is not weakened: step 1 reruns each "Done when" command itself, and step 3 treats `PROGRESS.md` numbers as claims.
+- low (slop) forge/prompts/builder.md:14, forge/README.md:54 Wording problems:
+  - "consecutive jobs land on different architectures" overstates; the docstring at gpu.py:120 correctly says "can".
+  - "same weights, same seed and same batch spread ... across GPU count, type and batch size" contradicts itself (same batch vs across batch size).
+  - "a priority list of three cards" holds only when `--gpu` is omitted (gpu.py:191).
+- low (slop) forge/selftest.py:627-632 The test patches the global `subprocess.run` with no `try/finally`; the same patch at selftest.py:1037-1047 uses one. It is safe only because `card()` swallows `Exception`. selftest.py:633 ("prints the card before the job") checks that the substring exists, not the order. That matches the existing `gsrc` checks at 621-623.
+- info forge/gpu.py:110-127 This text from a community-cloud host is untrusted: the first line of the host's stdout reaches the builder and is copied into `PROGRESS.md`. That is not a new channel. `ssh()` already streams the whole job stdout uncaptured, `--pull` already copies host files back, and reviewer steps 4 and 6 read added `PROGRESS.md` lines as instructions and destinations.
+- info sibling #124 (gpu: move to RunPod REST v2) Same base blob (`dad07de5`). Both PRs rewrite `ssh()` and the `run()` try block, so git will conflict. #124's `ssh_target` returns `user@host` and drops `root@`, while #182's `ssh_base` hardcodes `root@{ip}`. A resolution that keeps both produces `root@root@host`, and `card()` would hide that as `unknown`. #124 also prints the placed gpu id on the pod line, which overlaps `card()` (nvidia-smi stays the ground truth). Neither PR is wrong on today's base, so whichever lands second must change: it calls `ssh_base(target, port)`/`card(target, port)` with #124's `target`. If this PR lands first, #124 changes. Not counted against this PR.
+- info other siblings I scanned all 35 other open PRs on `forge` that touch README.md, selftest.py or builder.md. None edits the GPU rows (README.md:52-53), the selftest GPU section, or builder.md:14. #23's rule that `PROGRESS.md` describes and never instructs is consistent with recording a card name.
+Change needed (only for MERGE WITH CHANGE): in forge/gpu.py `card()`, replace lines 123-127 with:
+```python
+        r = subprocess.run(ssh_base(ip, port) + ["nvidia-smi --query-gpu=name --format=csv,noheader"],
+                           capture_output=True, text=True, timeout=120)
+    except Exception as e:
+        return f"unknown ({type(e).__name__})"
+    out = r.stdout.strip() if r.returncode == 0 else ""
+    return out.splitlines()[0].strip() if out else f"unknown (rc {r.returncode})"
+```
+I checked this edit in memory. The PR's selftest stubs still give `NVIDIA GeForce RTX 4090` and `unknown (TimeoutExpired)`, rc 9 with stdout gives `unknown (rc 9)`, and a dead port gives `unknown (rc 255)`. That makes README.md:54 true as written.
+
+
 ## PR #181 · 2026-11-10T22:41:58Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
