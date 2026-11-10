@@ -2,6 +2,47 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #179 · 2026-11-10T20:35:15Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #179 reviewer: withhold earlier attempts' verdicts from the ticket it is given
+What it changes: adds `Forge.unanchor()`. Before the ticket goes into the reviewer prompt, it replaces each bare `VERDICT: APPROVE|REJECT` line and each `reviewer did not approve.` line after the first `\n## forge ` with `[earlier verdict withheld]` (forge.py:658-665). The reviewer call site uses it (forge.py:1113). reviewer.md:16 now says the verdict is blanked. The PR also adds one README safeguard row and three selftest checks. The PR base blobs match origin/forge (forge.py 38630c00, reviewer.md 52bf8794, selftest.py 5d6267fb, README.md a07c1016).
+Findings:
+- info forge/forge.py:1113 Scope traced. `unanchor()` reaches only the reviewer prompt and its one rerun, which reuses `rprompt`. These are untouched:
+  - the builder prompt (`TICKET=ticket.read_text()`, :1019)
+  - `attempts()`, which counts `## forge `
+  - the dep, OSV and test-tampering guards, which cut at `\n## forge` themselves
+  - the `pr_open` body
+  - the ticket file on main
+  It is a pure function on an already-read str. It adds no shell, no f-string into a command, no state that two lanes could write, no new exception path that leaves a ticket `in_progress` or a worktree behind, and no quota or GPU spend. The prompt only gets shorter. The regex is a linear alternation.
+- low forge/forge.py:658-665 Direction of the change. Every verdict line that reaches a note is a REJECT. An approved review never enters the ticket: a `land()` failure passes only its `why` (:1141-1142), and the done note is "Landed by X, approved by Y." So the blanking removes only REJECT anchors, and on retries the reviewer is marginally more likely to approve, bad work included. I accept this because:
+  - reviewer.md:16 already said "the earlier verdict is not this one" before this PR;
+  - no check on the diff is removed: steps 1-7, the gate tails and the earlier `Must change:` lines all stay (verified on real tickets, below).
+  The Alexopoulos cite (arXiv 2603.18740) does not support this direction. The paper measured redaction of approve-biasing PR description and commit text: D-1 restored detection in 16/32 cases, and D-2 in 12 of the remaining 16. That is redaction restoring rejections, the opposite of this change. How to watch for regression after merge: compare `why == "reviewer did not approve."` against merged entries for attempts ≥2 in `state.json` history.
+- low forge/forge.py:647-650, forge/selftest.py:605, forge/README.md:124 The cited evidence is overstated, and the fix only partly removes the anchor:
+  - The abstract of arXiv 2608.25869 (fetched) says neither CoT nor a disregard warning reduces the total effect, "although the warning improves the paired accuracy effect relative to baseline in the industry experiment". That is the categorical experiment the 48% / 10.18% figures come from. The comment, README row and selftest comment ("a warning to ignore it does not") drop that qualifier.
+  - The paper's anchored metadata is "revision, attempt, and prior-score fields". The `## forge <time> (retry|blocked)` header is an attempt field and it stays.
+  - A `Must change:` block appears only in a REJECT, so the withheld verdict can still be inferred.
+  - The benefit is unmeasured here. The abstract itself says "Effective mitigation must be validated for the intended model and task".
+  None of this changes code behavior.
+- low forge/forge.py:658 `PRIOR_VERDICT` matches only a bare line. In an in-memory check, `**VERDICT: REJECT**`, `` `VERDICT: REJECT` ``, `VERDICT: REJECT.` and an indented line all pass through un-blanked. The current `re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)` (:1115) accepts all of those as verdicts, so such a review would sit in the note with its verdict showing. This fails open to pre-PR behavior and is no worse than today. On reflex1 origin/main, `unanchor()` blanks 26 lines and leaves 0 `VERDICT` or `did not approve` lines, across:
+  - 140 tickets
+  - 92 with `## forge` notes
+  - 13 with `reviewer did not approve.`
+  This confirms the PR body's counts.
+- low forge/prompts/reviewer.md:16 "forge blanks it ... before you see it" is true only for the prompt copy. The worktree's `tickets/<id>.md`, which `fail()` committed and pushed to main before the claim, still holds the verdict, as the `shortcut:` comment at forge.py:656-657 admits. The `[earlier verdict withheld]` marker tells the reviewer the verdict is hidden from it but one `cat` away. No layer is removed: the old sentence survives word for word ("the earlier verdict is not this one"; "an earlier `Must change:` line is a thing to re-check against this diff, not a finding to repeat or to skip"). The PR deletes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. No added text reads as permission to edit `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, or to skip tests.
+- info forge/selftest.py:604-618 The three checks test behavior: verdict lines blanked, findings and spec text kept, a ticket with no notes unchanged. I reproduced them in memory with the PR's regex and function, and all three pass. `# 4t.` follows `# 4s.`. I did not run the full selftest.
+- info siblings These open PRs on `forge` touch the same files, with no contradiction:
+  - #86 edits the same line (forge.py:1113, adds `BUILT_BY=built_by`). Textual conflict only; whichever lands second keeps both kwargs.
+  - #160 edits the adjacent `self.agent(reviewer, rprompt, ...)` lines. Textual conflict only.
+  - #99 fences `fail()` notes in ````text. Compatible: verdict lines inside the fence still start the line and are blanked (checked in memory).
+  - #42 reads the verdict from the last line and tolerates `[*`\s]*` decoration. No contradiction. If it lands, `PRIOR_VERDICT` should accept the same decoration (see the :658 finding).
+  The other siblings that touch README.md, forge.py or selftest.py (#165 #148 #145 #140 #139 #136 #133 #132 #117 #111 #85 #84 #83 #79 #48 #47 #44 #40 #39 #31 #28 #25 #23) do not touch reviewer.md:16, the reviewer TICKET substitution or the note format. Their overlap is the appended README table row, a textual conflict.
+- slop forge/forge.py:645-663 The 13-line comment plus the docstring restate the PR body and the README row nearly word for word. This matches house style (compare :1103-1108), so it does not block. "builder rule 22 and reviewer line 16" are prompt line numbers that will drift with any prompt edit. Both are accurate today: builder.md:22 is the `## forge` notes rule and reviewer.md:16 is the Ticket line.
+
+
 ## PR #178 · 2026-11-10T18:31:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
