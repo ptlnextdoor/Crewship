@@ -472,7 +472,9 @@ class Forge:
         # `check=True` on the three guard diffs: a `git diff` that fails (bad ref, broken worktree) prints nothing,
         # and nothing matches, so the guard passed with nothing checked. A check that cannot fail is the one an
         # agent loop finds (Copilot Cowork, 2026-11-02: a changed-file list that came back empty passed for weeks).
-        files = self.sh(f"git diff --name-only {base}...HEAD", cwd=cwd, check=True).stdout.split()
+        # `-z`: without it git quotes non-ASCII or spaced names (`"tickets/caf\303\251.md"`), and a quoted name
+        # matches no prefix below and no `^` anchor in HARNESS_CONFIG (selftest 2c').
+        files = self.sh(f"git diff --name-only -z {base}...HEAD", cwd=cwd, check=True).stdout.split("\0")
         return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
 
     def lock_pkgs(self, cwd: Path, rev: str) -> dict[tuple[str, str], list[str]]:
