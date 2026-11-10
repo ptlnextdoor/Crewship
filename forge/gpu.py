@@ -107,10 +107,24 @@ def ssh_target(pod_id: str, wait_s: int = 900) -> tuple[str, int]:
     raise TimeoutError("pod never exposed SSH")
 
 
-def ssh(ip: str, port: int, cmd: str, timeout: int) -> int:
-    base = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=30",
+def ssh_base(ip: str, port: int) -> list[str]:
+    return ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-o", "ServerAliveInterval=30",
             "-p", str(port), f"root@{ip}"]
-    return subprocess.call(base + [cmd], timeout=timeout)
+
+
+def ssh(ip: str, port: int, cmd: str, timeout: int) -> int:
+    return subprocess.call(ssh_base(ip, port) + [cmd], timeout=timeout)
+
+
+def card(ip: str, port: int) -> str:
+    """The card the job actually runs on: --gpu is a priority list, so two runs of one command can land on
+    different architectures, and a number measured on one is not comparable with the other's."""
+    try:
+        out = subprocess.run(ssh_base(ip, port) + ["nvidia-smi --query-gpu=name --format=csv,noheader"],
+                             capture_output=True, text=True, timeout=120).stdout.strip()
+    except Exception as e:
+        return f"unknown ({type(e).__name__})"
+    return out.splitlines()[0].strip() if out else "unknown"
 
 
 def rsync(src: str, dst: str, port: int) -> int:
@@ -142,6 +156,7 @@ def run(a) -> int:
     try:
         ip, port = ssh_target(pod["id"])
         time.sleep(15)
+        print(f"gpu: card {card(ip, port)}")
         for src in a.push or []:
             rsync(src, f"root@{ip}:/workspace/", port)
         rc = ssh(ip, port, a.cmd, timeout=int(hours * 3600) - 120)

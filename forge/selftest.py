@@ -623,6 +623,15 @@ check("gpu has a budget cap", "GPU_BUDGET_USD" in gsrc and "over budget" in gsrc
 check("gpu terminates in a finally block", "finally:" in gsrc and "terminate(pod" in gsrc)
 check("gpu reap exists", callable(getattr(gpu, "reap", None)))
 
+# The card query runs on a pod that is already rented, so a failure reports "unknown" instead of killing the job.
+_real_run = gpu.subprocess.run
+gpu.subprocess.run = lambda *a, **k: subprocess.CompletedProcess([], 0, stdout="NVIDIA GeForce RTX 4090\n")
+check("gpu names the card the job ran on", gpu.card("1.2.3.4", 22) == "NVIDIA GeForce RTX 4090")
+gpu.subprocess.run = lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("ssh", 1))
+check("an unreachable card query costs the job nothing", gpu.card("1.2.3.4", 22).startswith("unknown"))
+gpu.subprocess.run = _real_run
+check("the run prints the card before the job", 'print(f"gpu: card' in gsrc)
+
 # 6. Prompts must keep the rules the loop depends on.
 b = (ROOT / "prompts/builder.md").read_text()
 r = (ROOT / "prompts/reviewer.md").read_text()
