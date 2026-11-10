@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #175 · 2026-11-10T07:39:43Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #175 forge: touched_protected reads NUL-separated names; quoted paths no longer dodge it
+What it changes: `touched_protected()` (forge.py:477) now lists the branch's files with `git diff --name-only -z` and splits on NUL instead of whitespace, so C-quoted names (`"tickets/caf\303\251.md"`) reach the prefix and HARNESS_CONFIG match verbatim. It also adds selftest 2c' and one clause to README row 109.
+Findings:
+- info forge/forge.py:477 This makes the guard stronger at all three call sites: build (1013), repair before its gate run (1052) and the landing conflict resolution (907). Each caller only tests `if bad` and puts `bad` into fail() or a return string. From there it reaches gh through `--body-file` (gh() 816) and the ticket note through set_status (truncated by `why[-7000:]`). No name reaches a shell. I ran base and head on a throwaway repo. `tickets/a"b.md`, `tickets/a\b.md`, `tickets/a<TAB>b.md`, `tickets/a<LF>b.md` and `tickets/café.md` all returned `[]` on base (bypassed) and were all caught on head. `check=True` is kept. `{base}` is the literal "main"/"origin/main" the callers pass, so no ticket text reaches the command.
+- info forge/forge.py:477 The trailing NUL leaves a final `""` element. It matches no `protected` prefix (reflex1.toml and the defaults hold only `gate.sh`, `tickets/` and `.forge/`, plus STEERING.md and the gate) and no HARNESS_CONFIG alternative. The existing exact-set check (selftest "a config that lists neither still protects STEERING.md and the gate", `set(bad) == {...}`) still passes on head, so `""` is not reported.
+- low forge/forge.py:477 New failure mode, and it fails closed. With `-z`, git prints raw bytes, and sh() decodes with `text=True` as strict UTF-8 (the lanes run LANG=C.UTF-8, checked with `systemctl --user show-environment`). So a branch that adds a non-UTF-8 file name now raises UnicodeDecodeError. My probe hit this both for `tickets/caf\xe9.md` and for `src/caf\xe9.rs`, which is outside every protected path; base returned `[]` for both. Path traced: cycle() `except` (1127) closes the PR with "cycle error: UnicodeDecodeError …". `finally` (1135-1143) removes the worktree and the remote branch. lane_loop (1344) calls recover(), which sets the ticket to retry with a `## forge-recover` note. The ticket is blocked once the interruption count reaches max_attempts (1260-1262), with 2/4/8-minute backoff between tries. Net effect: a protected non-UTF-8 name goes from bypass to refused; a non-protected one goes from pass to at most 3 builder sessions and then blocked, with a note that says only "interrupted". This is bounded and safer than base, so no change is required. It is listed so that a "cycle error: UnicodeDecodeError" in forge.log can be recognised.
+- low forge/forge.py:475, forge/README.md:109 (inserted clause), forge/selftest.py:93 The stated reason is wrong; the code is right.
+  - git does not quote a spaced ASCII name. In my probe, `git diff --name-only` printed `tickets/a b.md` and `.omp/RULES x.md` unquoted, and base already caught both, as `tickets/a` and `.omp/RULES`.
+  - git does quote `"`, `\` and control characters whatever core.quotePath says. Selftest 93 instead calls the quoting a core.quotePath matter.
+  - The PR body's "a spaced name also splits into two tokens, neither under the prefix" is false for prefix paths.
+  - The fixture `.omp/RULES — x.md` is quoted because of its em dash, not its spaces.
+  - Risk: with this rationale written down, a later "simplification" to `-c core.quotePath=false` would look equivalent and would reopen the `"`, `\` and control-character bypass shown above.
+- info Deletions: the diff deletes one code line (the old `.stdout.split()` read) and nothing from forge/prompts/*.md or forge/selftest.py. The README row 109 change only inserts text: a character diff of the old and new row shows one insertion at offset 737 and no removed characters. No safeguard layer is retired.
+- info Verification: on the PR head, `python3 forge/selftest.py` gives 158 ok and "all checks passed". Running the head selftest.py against base forge.py fails only 2c': base's list has neither planted name.
+- info Sibling #28 (open, base `forge`) rewrites the same `files = self.sh("git diff --name-only …").stdout.split()` line against a long-gone base (index ef6156b2e: no `base` parameter, no `check=True`). Its intent, diffing against origin/main, is already on base through the callers' `"origin/main"` argument. The two PRs conflict as text, but #28 is the side that should change: close it as superseded, or rebase it keeping `-z`, `split("\0")` and `check=True`. This does not lower #175's verdict. No other open PR on `forge` touches touched_protected, README row 109 or the selftest 2c block; #31's selftest hunk is about ready() and `touches:`.
+- info Slop: no prompt text, no new config, no defensive try/except. The diff is one code line, its comment, one selftest block and one README clause. Worth its size.
+Change needed (only for MERGE WITH CHANGE): correct the stated reason in all three places; no code change.
+- forge/forge.py:475-476. Replace the two comment lines with:
+```
+        # `-z`: without it git quotes a name holding a non-ASCII byte, `"`, `\` or a control character
+        # (`"tickets/caf\303\251.md"`), which matches no prefix below and no `^` anchor in HARNESS_CONFIG (selftest 2c').
+```
+- forge/README.md:109. Replace "since git otherwise quotes a non-ASCII or spaced name" with "since git otherwise quotes a name holding a non-ASCII byte, `"`, `\` or a control character".
+- forge/selftest.py:93. Replace "A non-ASCII or spaced path is quoted by `git diff --name-only` under core.quotePath" with "A path holding a non-ASCII byte (core.quotePath), `"`, `\` or a control character is quoted by `git diff --name-only`".
+
+
 ## PR #174 · 2026-11-10T04:29:42Z · MERGE WITH CHANGE · risk low · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
 
 Verdict: MERGE WITH CHANGE
