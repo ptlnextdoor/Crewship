@@ -601,6 +601,21 @@ with tempfile.TemporaryDirectory() as d:
     check("a config that lists neither still protects STEERING.md and the gate",
           set(bad) == {"STEERING.md", "ci/check.sh"}, str(bad))
 
+# 4t. The reviewer's copy of the ticket withholds earlier attempts' verdicts and keeps their findings: a prior
+# score anchors a judge even as context metadata (arXiv 2608.25869), and a warning to ignore it does not.
+ticket = ("## Do\nParse the `VERDICT: REJECT` line in reviewer output.\n\n"
+          "## forge 2026-11-10 12:00 (retry)\nreviewer did not approve.\n"
+          "FAIL 0001: `cargo test parse` panics on the empty slice\n"
+          "Must change: crates/x/src/parse.rs:12 return Ok(&[]) for an empty input\nVERDICT: REJECT\n")
+u = forge.Forge.unanchor(ticket)
+check("the reviewer's ticket copy withholds an earlier verdict",
+      "\nVERDICT: REJECT\n" not in u and "reviewer did not approve." not in u and u.count("[earlier verdict withheld]") == 2, u)
+check("it keeps the earlier findings and the ticket's own text",
+      "Must change: crates/x/src/parse.rs:12 return Ok(&[]) for an empty input" in u
+      and "FAIL 0001: `cargo test parse` panics on the empty slice" in u
+      and "Parse the `VERDICT: REJECT` line in reviewer output." in u, u)
+check("a ticket with no forge notes is unchanged", forge.Forge.unanchor("## Do\nx\n") == "## Do\nx\n")
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
