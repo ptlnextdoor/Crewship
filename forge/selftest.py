@@ -90,6 +90,14 @@ with tempfile.TemporaryDirectory() as d:
     check("harness config files are protected (nested rules, .omp/, CLAUDE.md, copilot instructions, .cargo/, rust-toolchain)",
           {"crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json",
            ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo"} <= set(bad) and not {"docs/omp.md", "docs/cargo.md"} & set(bad), str(bad))
+    # 2c'. A path holding a non-ASCII byte (core.quotePath), `"`, `\` or a control character is quoted by `git diff --name-only` (`"tickets/caf\303\251.md"`),
+    # and a quoted name matches no prefix and no `^` anchor; the guard reads NUL-separated names so neither dodges it.
+    for p in ("tickets/0002-caf\u00e9.md", ".omp/RULES \u2014 x.md"):
+        (repo / p).parent.mkdir(parents=True, exist_ok=True); (repo / p).write_text("x\n")
+    git("add -A", repo); git("commit -qm t3q", repo)
+    bad = f.touched_protected(repo)
+    check("quoted (non-ASCII, spaced) paths under protected prefixes are still caught",
+          {"tickets/0002-caf\u00e9.md", ".omp/RULES \u2014 x.md"} <= set(bad), str(bad))
     # 2b. A third-party crate new to Cargo.lock is refused before the gate unless the ticket names it or a named
     # crate pulls it in; a version bump of a named crate's dependency passes with it.
     o = Path(d) / "origin"; o.mkdir(); git("init -q --bare", o)
