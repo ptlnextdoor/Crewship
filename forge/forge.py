@@ -907,7 +907,7 @@ class Forge:
         self.sync_main()
         return True
 
-    def land(self, wt: Path, branch: str, tid: str, builder: str) -> str:
+    def land(self, wt: Path, branch: str, tid: str, builder: str, ticket_text: str) -> str:
         """Bring the branch up to date with main, re-gate, merge (through the PR when there is one). Returns "" or
         why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
@@ -934,6 +934,23 @@ class Forge:
             bad = self.secrets(wt)
             if bad:
                 return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
+            # The same session can also weaken a test, bump a crate or hide a code point, and the gate it then
+            # passes cannot see a deleted assertion. These four ran on the builder's and the repair's commits
+            # and never on this one (Brindescu, EMSE 2019: code in a merge conflict is 2x as likely to carry a
+            # bug, 26x when resolving it took manual work; Paixao and Maia, SCAM 2019: 34.21% of rebases change
+            # what was reviewed). Same waivers as before the review: the ticket's own text, `## forge` notes aside.
+            deps = self.unrequested_deps(wt, ticket_text)
+            if deps:
+                return f"resolving the conflict with main added packages to Cargo.lock the ticket does not name: {deps}."
+            deps = self.vulnerable_deps(wt, ticket_text)
+            if deps:
+                return f"resolving the conflict with main left Cargo.lock entries at a version with a public advisory: {deps}."
+            bad = self.test_tampering(wt, ticket_text)
+            if bad:
+                return f"resolving the conflict with main skipped, deleted or stripped tests the ticket does not name: {bad}."
+            bad = self.invisible_chars(wt)
+            if bad:
+                return f"resolving the conflict with main added code points no reader sees {bad}; not allowed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
             # patch (context shifts on any rebase, so a clean one posts nothing).
             sha, lines = self.reviewed
@@ -1137,7 +1154,7 @@ class Forge:
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
                 return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
-            why = self.land(wt, branch, tid, builder)
+            why = self.land(wt, branch, tid, builder, ticket.read_text())
             if why:
                 return self.fail(ticket, why)
             done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
