@@ -642,6 +642,28 @@ class Forge:
         text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[pem redacted]", text, flags=re.S)
         return Forge.SECRET.sub(lambda m: f"[{m.lastgroup} redacted]", text)
 
+    # An earlier attempt's verdict reaches the reviewer inside `{TICKET}`: `fail()` appends the whole review,
+    # its `VERDICT: REJECT` line included, under `## forge <time> (<status>)`. A prior score anchors a judge
+    # even as bare context metadata: across 185,271 LLM-judge evaluations, anchored metadata (revision,
+    # attempt and prior-score fields) shifted ratings toward the anchor, blocked 48% of error corrections and
+    # flipped 10.18% of correct judgments to the assigned wrong label, and neither chain-of-thought nor a
+    # warning to disregard the metadata reduced the effect (Kapetanovic et al., arXiv 2608.25869). The line in
+    # reviewer.md ("the earlier verdict is not this one") is that warning. Redaction is the mitigation that
+    # measured: in LLM-assisted security review, metadata redaction recovered most of the detections adversarial
+    # framing had suppressed (Alexopoulos et al., arXiv 2603.18740). Only the verdict goes: the gate tails and
+    # the earlier `Must change:` lines stay, since builder rule 22 and reviewer line 16 re-check them against
+    # this diff, and the patch they judged is gone anyway (each attempt starts from main).
+    # shortcut: the ticket file in the worktree still holds the verdict, so a reviewer that opens
+    # `tickets/<id>.md` itself reads it; move the review text to the state dir if a review ever quotes it.
+    PRIOR_VERDICT = re.compile(r"^(?:reviewer did not approve\.|VERDICT:[ \t]*(?:APPROVE|REJECT))[ \t]*$", re.M)
+
+    @classmethod
+    def unanchor(cls, ticket_text: str) -> str:
+        """`ticket_text` as the reviewer gets it: each earlier attempt's verdict line blanked. The ticket's own
+        text above the first `## forge` section is untouched, so a ticket that writes about verdicts is intact."""
+        spec, sep, notes = ticket_text.partition("\n## forge ")
+        return spec + sep + cls.PRIOR_VERDICT.sub("[earlier verdict withheld]", notes)
+
     def secrets(self, cwd: Path) -> list[str]:
         """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is
         pushed: a pushed key is public in seconds and in history for good, and the builder's environment holds the
@@ -1088,7 +1110,7 @@ class Forge:
             shown = stat + "\n" + diff[:120000] + ("" if len(diff) <= 120000 else
                                                    f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
-            rprompt = self.prompt("reviewer", TICKET=ticket.read_text(), DIFF=shown)
+            rprompt = self.prompt("reviewer", TICKET=self.unanchor(ticket.read_text()), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             if not verdict and (rc in (124, 127) or not rout.split("[stderr]")[0].strip()):
