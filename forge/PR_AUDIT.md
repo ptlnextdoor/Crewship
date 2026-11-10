@@ -2,6 +2,40 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #173 · 2026-11-10T01:27:57Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #173 planner: name the covering test and sibling places per file in ## Do
+What it changes: adds one sentence to `forge/prompts/planner.md` `## Do` (L20). For each file it names, the planner names the existing test that covers it (or says none does) and the sibling places that need the same change (or says there are none). Adds a README safeguard row for this (L29). forge.py, builder.md, reviewer.md and selftest.py are unchanged.
+Findings:
+- medium forge/prompts/planner.md:20 The PR body says "nothing mechanical reads the new lines". That is false. `test_tampering` (forge.py:562-597, called at :1022 and :1061 on `ticket.read_text()` above `## forge`) waives both the "fewer test functions" count and the "fewer assertion lines" count when `\b(remove|delete|drop)\b[^\n]*\btests?\b` (forge.py:576) matches anywhere on one ticket line. The new sentence puts "test"/"tests" on every file line of `## Do`: reflex1 test paths are `crates/*/tests/*.rs`, and the alternative is "none does". The format is free, so the natural place for the pointer is the end of the step's bullet. Checked by running the real `Forge.test_tampering` on a throwaway repo whose branch deletes a `#[test]` and its `assert`:
+  - ``- `crates/reflex-policy/src/act.rs`: drop the unused `scale` field; covered by `crates/reflex-policy/tests/act.rs` `act_shapes`; siblings: none.`` returns `[]`, so the deletion passes.
+  - The same step without the pointer, or with the pointer before the verb, flags both counts.
+  - Corpus: 37 of reflex1's 385 file-naming `## Do` lines say "test" today, and drop_ok fires on 1 of 140 tickets (0036, a deliberate deletion). 5 tickets (0003, 0036, 0070, 0076, 0137) have a file line with remove/delete/drop that a trailing pointer would turn into a waiver.
+  - Still in place: the skip-marker check (`skip_ok` is not affected), builder.md:12, and reviewer.md steps 3-4, which are prose only. The gate passes because the deleted test no longer runs.
+- low forge/prompts/planner.md:20 Two wording problems.
+  - "the sibling places that need the same change" is under `## Do`. builder.md:8 says every `## Do` requirement holds and that the reviewer checks the diff against all of it. So a planner that has not found the cause turns its guesses into required edits and REJECT grounds. The cited source says "may need".
+  - "or say there are none" puts a negative claim by the planner into the ticket. builder.md:10 and reviewer.md:5 let only `## Out of scope` exclude a sibling, so by the text it excludes nothing. But no line tells either role that the list is a starting point.
+- low forge/prompts/planner.md:20 "so the builder runs that test while iterating and the full gate once at the end" describes builder behaviour that no builder.md rule sets. When main is not gated, `GATE_START` (forge.py:999) asks for a gate run at the start, so "once" is wrong. A planner that copies this into `## Do` creates a requirement (builder.md:8) that conflicts with `GATE_START`. Forge's own gate still runs (forge.py:1028), so this is not a bypass. The cost is a builder that misses a red main and loses an attempt.
+- low forge/README.md:29 The row overstates the source. On byteask.ai/research/byteask-system-cpp, the location, siblings and tests come from a context engine "that understands a codebase the way the project's own build does". ByteAsk also "checks the change against only those tests". The row gives all of the 63-80% token saving to the handed context, and here an LLM planner writes that context. Also, 129 of 144 counts runs, not issues.
+- low forge/forge.py:504-508 (`unrequested_deps`, not changed by this PR) Every word of the ticket counts as naming a crate. More test paths in tickets mean more waivers:
+  - `crates/reflex-vision/tests/tower.rs` makes `tower` and its closure "requested": 44 lock entries, including tokio, mio and socket2.
+  - `crates/reflex-serve/tests/http.rs` does the same for `http`.
+  - The looseness already exists (shortcut comment at :505), and "tower" is already in 18 of 140 tickets and "http" in 14, so this PR adds little. Reviewer step 6 still covers it.
+- info Nothing is deleted. L20 keeps both of its original sentences word for word, the README change is a single added row, and selftest.py is untouched. `prompt()` substitutes with `str.replace`, and the new text has no braces. `python3 forge/selftest.py` on a /tmp copy with the PR applied printed "all checks passed". The planner's edit scope (planner.md:37) is unchanged, so protected paths, lanes, `recover()`, `discard_strays()`, quota and GPU paths are not affected. Prompt growth is per ticket and bounded. The planner already reads every ticket on each turn (planner.md:3).
+- info Sibling PRs on base `forge`:
+  - #31 edits planner.md (a new `touches:` header line and the Parallelism rule). Its hunks differ from this PR's and nothing contradicts. If both land, the siblings named here are "files the builder will edit" under #31's definition, so neither PR's text needs to change.
+  - #20, 23, 25, 28, 39, 40, 42, 44, 47, 48, 79, 83, 84, 85, 86, 99, 111, 117, 136, 139, 140, 145, 148, 160 and 165 add or edit other README rows. None touches this row or the planner, and none duplicates it. #136 edits the test_tampering row, but not the drop_ok waiver.
+Change needed (only for MERGE WITH CHANGE): One commit with two replacements.
+1. Replace forge/prompts/planner.md line 20 with:
+`Concrete steps, files, interfaces. Under each file you name, add two lines of names only, with no step on them (forge reads "remove/delete/drop … test" on one ticket line as permission to delete tests): `Tests: <test file> <test name>` for the existing test that exercises the file, or `Tests: none found`; `Siblings: <file:symbol>, …` for the other places that may need the same change (the other call site, the copy in another crate or script, the doc or bench row), or `Siblings: none found`. Both lines are where the builder starts looking, not requirements: the builder's `rg` once it has the cause, and `## Out of scope`, still decide which siblings change. Name every crate or package the builder may add or upgrade, with version; the builder is not allowed to pick one itself.`
+2. Replace README.md line 29 with:
+`| Under each file it names, the planner's `## Do` adds a `Tests:` line (the existing test that exercises it, or `none found`) and a `Siblings:` line (other places that may need the same change, or `none found`), names only and on their own lines, a starting point rather than a requirement | a session that spends its first half locating: on 144 C++ issue runs ByteAsk (a context engine that derives the location, related places and covering tests from the build, plus a check limited to those tests) fixed as many runs as the same model under Codex CLI (129 of 144 each) on 63-80% fewer tokens, most on little-known projects (preprint, 2026-11-09, vendor's own runs); here an LLM planner writes the pointers, and a step and a test name on one line would trip test_tampering's "remove/delete/drop … test" waiver |`
+With this form, the same throwaway repo flags both counts again, and 0036's "delete `reject_box` and its test …" still waives them.
+
+
 ## PR #172 · 2026-11-09T23:23:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
