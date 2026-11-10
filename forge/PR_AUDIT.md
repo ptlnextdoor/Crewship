@@ -2,6 +2,45 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #180 · 2026-11-10T21:38:40Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #180 builder: a TODO, bug id or Ideas bullet is a note, not work for this ticket
+What it changes: inserts one 636-character sentence into builder rule 8 (`forge/prompts/builder.md:8`). The sentence says an "Ideas" bullet, a `TODO`/`FIXME`, or a bug or ticket id met in code, `PROGRESS.md`, `LEARNINGS.md` or `AGENTS.md` is not to be looked up, investigated or edited for unless the ticket's `## Do` names it. It also adds the matching safeguard row at `forge/README.md:125`. No code changes.
+Findings:
+- medium forge/prompts/builder.md:8 The only exception is "unless this ticket's `## Do` names it", and that collides with the sibling rule (`builder.md:10`). The PR body says rule 10 is left untouched and the sentence covers only unprompted work. The text does not say that: its test is `## Do`, not "unprompted". Here is how the collision happens. Rule 10 has a builder park an out-of-scope sibling under "Ideas" with its file:line. A later ticket with the same bug pattern finds that bullet again, either through step 1's `rg` (the ticket names the file) or through its own rule-10 `rg`. Rule 10 then says fix every instance that `## Out of scope` does not exclude. The new sentence says not to edit for it unless `## Do` names it. The planner's `Siblings:` lines under `## Do` are "a starting point rather than a requirement" (`README.md:29`), so `## Do` may not name it. The reviewer's step 2 (`reviewer.md:5`) counts any hit left alone as a miss, and line 12 turns a step 1-6 problem into a REJECT. Whenever this case comes up, the attempt is lost and the quota is spent. The same overlap exists with rule 24 (`builder.md:24`): rule 23 starts every `LEARNINGS.md` entry with a ticket id (98 lines of reflex1's `LEARNINGS.md` at origin/main 2c39a79 carry 4-digit ids), and rule 24 tells the builder to check stale entries (`rg`, `git log -S`) and correct them. That is the "investigate"/"edit for" the new sentence forbids. This does not weaken the gate or the reviewer: the reviewer side is unchanged and still catches the missed sibling.
+- low forge/prompts/builder.md:8 The sentence calls ids and TODOs in `AGENTS.md` "a past session's note that may already be done or deliberately dropped". `AGENTS.md` is the repo's instruction file, and rule 24 says its rules "stand". reflex1's `AGENTS.md` on origin/main has no 4-digit id, `TODO`, `FIXME` or `bug/` (grep found nothing), so this has no effect today. The sentence only says not to look such an item up, investigate it or edit for it. It does not say to disregard it, so no `AGENTS.md` rule gets looser.
+- none forge/prompts/builder.md:8 Deletion check: the removed line is reproduced byte for byte as the prefix and suffix of the added line. I checked this in a script: it is a pure insertion after "(you may not edit `tickets/`). ". No line is removed from the prompts, `selftest.py` or the safeguard table, so no layer is retired.
+- none forge/prompts/builder.md:8 Security trace:
+  - The change is prompt-only: no `forge.py`, `gate.sh` or `selftest.py` change, so the claim race, `recover()`, `discard_strays()`, timeouts, the PR flow and `gpu.py` are untouched.
+  - The inserted text has no `{...}`, so `prompt()` placeholders are unchanged. Rule 8 still opens with an imperative, so selftest 6 still passes.
+  - `python3 forge/selftest.py` on the PR tree (`git archive` of 67e73896): "all checks passed".
+  - Nothing in the sentence allows editing `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, skipping tests, or a softer review. `reviewer.md` is untouched.
+  - Prompt growth is a fixed +636 characters per builder session and per repair session (the repair gets the whole builder prompt, `README.md:89`). No GPU or quota spend is added.
+  - Side effect: a `TODO` or Ideas bullet written into code or `PROGRESS.md` is now explicitly not work, which narrows one injection path.
+- low forge/README.md:125 The row says reflex1's `PROGRESS.md` "holds 7 "Ideas" bullets with file:line". In reflex1 origin/main, `PROGRESS.md:192-199` does hold 7 bullets, but none has a file:line. They name files (`render_bench.py`, `pod_run.sh`, `train_reflex.py`, `render_laps.py`) and ticket ids. Other claims check out:
+  - reflex1 code has 0 `TODO`/`FIXME` (`git grep` on origin/main).
+  - The Google post (developers.googleblog.com/agent-distraction/, 2026-11-06) matches every figure quoted: 13%, 6%, 83%, 41% (32% + 9%), 57%, 39% edited code, +70% / +77% / +105%, p<0.0001.
+  - DOI 10.1145/3832783.3834359 resolves to dl.acm.org.
+- low forge/README.md:125 and forge/prompts/builder.md:8 Wording:
+  - "memory files" is used nowhere else in the README or prompts.
+  - "That list read from the other side is not work for you" is hard to parse.
+  - Putting statistics in the prompt matches existing rules 8 and 19.
+- none Sibling PRs: I read the diffs of all 25 other open PRs on `forge` that touch `forge/README.md` or `forge/prompts/builder.md`.
+  - Only #140, #85 and #23 touch `builder.md`, and each edits a different bullet (the Tests rule, the commit/merge rule, the PROGRESS/LEARNINGS append rule).
+  - #23 covers the writing side of the notes files, which row 105 already covers on base, so it complements this PR.
+  - #139 (union-merge `PROGRESS.md`) is unrelated.
+  - Every README sibling adds or edits a different table row.
+  - None duplicates or contradicts this rule.
+Change needed:
+- In `forge/prompts/builder.md:8`, replace "so do not look it up, investigate it or edit for it unless this ticket's `## Do` names it;" with "so do not look it up, investigate it or edit for it unless this ticket's `## Do` names it or a rule below sends you there (an instance of the bug or gap this ticket names, a stale `LEARNINGS.md` or `AGENTS.md` line);".
+- In the matching row at `forge/README.md:125`:
+  - Replace "unless this ticket's `## Do` names it" with "unless this ticket's `## Do` names it or the sibling or stale-entry rule sends the builder there".
+  - Replace "7 "Ideas" bullets with file:line" with "7 "Ideas" bullets naming files and ticket ids".
+
+
 ## PR #179 · 2026-11-10T20:35:15Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
