@@ -2,6 +2,58 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #174 · 2026-11-10T04:29:42Z · MERGE WITH CHANGE · risk low · gate pass · left open: touches ['forge/projects/reflex1.toml'] (owner decides)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #174 forge: reflex1 routing note on Fable 5.2 (kernel-work cap, no tally yet)
+What it changes: Adds a 7-line TOML comment (PR head forge/projects/reflex1.toml:28-34) below the routing header. It says why `anthropic/claude-fable-5-2` is in no role chain. No key, model, effort, timeout or fallback changes.
+Findings:
+- none forge/projects/reflex1.toml:28-34. No runtime effect, traced:
+  - `tomllib` parses the PR-head file to a dict equal to base's, with the same six roles.
+  - forge.py reads config only at :79 (`tomllib.loads(cfg_path.read_text())`). `cfg_path` otherwise only goes to the lane subprocess argv (:1291). No prompt, log or PR body includes config text.
+  - The live `~/.config/forge/reflex1.toml` is byte-identical to base's repo copy. `forge@reflex1` is inactive.
+  - Unchanged: gate, reviewer, protected paths, claim race, `recover()`, `discard_strays()`, quota fallback, timeouts, PR and merge paths, GPU.
+  - It deletes no line from prompts, selftest or the README safeguard table. No ticket text reaches anything.
+- info forge/reviewctl.py:38,215,224-225. `projects/` is in `PROTECTED`, so reviewctl leaves this PR open for the owner whatever this verdict says.
+- low forge/projects/reflex1.toml:30 (PR head). The ticket count does not match its label.
+  - "(those naming candle, kernels or performance)": `grep -liE 'candle|kernel|performance' ~/Dev/reflex1/tickets/*.md` returns 22 of 140, not 43.
+  - The 43 comes from the scout's wider grep (SCOUT.md:5409: candle, kernel, perf, SIMD, speedup, latency, throughput). That set reproduces 43 on reflex1 `2c39a79`.
+- low forge/projects/reflex1.toml:28-30 (PR head). The comment presents those 43 tickets as the surface of the vendor's cap. The launch post does not support that.
+  - The quote is real. The Safeguards / "AI research and development" paragraph says "accelerator kernel optimization and improving large language model architectures ... at about the level of Opus 5.5".
+  - The same paragraph also says the training changes "did *not* affect related capabilities like agentic coding, hardware development, and traditional AI or machine learning research". The comment leaves that sentence out.
+  - What the 43 tickets actually cover:
+    - 0 contain "accelerator".
+    - 6 mention CUDA at all. Only 0028 (`reflex-cuda`, the candle forward on a RunPod GPU) is GPU backend work.
+    - The rest are CPU candle, latency and capacity-curve tickets (0020 rayon CPU custom ops, 0037 CPU gemm, 0118 latency split).
+  - The PR's headline reason therefore overstates the case. It sits beside the setting, where the owner and every later scout (scout.md reads `~/Dev/Crewship/forge/`) will take it as the routing rationale.
+- nit forge/projects/reflex1.toml:31-32 (PR head). "not with Opus at `high`, which is what builds here" is half right.
+  - `builder_hard` (reflex1.toml:41-45) runs Opus at `xhigh`. It does so from attempt 1 on `difficulty: hard` tickets and from the 3rd attempt on any ticket (forge.py:984-986).
+  - 11 of the 43 tickets are `difficulty: hard`, and planner.md tells the planner to mark kernel and numerics work hard.
+- nit forge/projects/reflex1.toml:31 (PR head). `Opus 5.5 at max (45.5%, "roughly half the cost per task")` attaches the cost quote to Opus. The post says Fable 5.2 at High costs roughly half of Opus 5.5 at Max.
+- ok Other claims checked:
+  - FrontierCode figures: 45.3% at High against 45.5% for Opus at Max, from the launch post text and table footnote.
+  - Playcode's MacBook SVG prompt at `high`: Fable 5.2 76,158 output tokens / $3.05 against Fable 5.1 17,933 / $0.90, so 3.4x per task. That matches the page. It is a drawing prompt, not coding.
+  - `omp models` lists `claude-fable-5-2`.
+  - `status` prints merged/attempts per builder model (forge.py:1392, :1411).
+  - The PR body has no HTML comments. The one PR comment is Copilot's quota notice.
+- info Siblings: three other open PRs on `forge` touch forge/projects/reflex1.toml. I read each diff. None changes the hunk at :26-27, and none adds `claude-fable-5-2`, so "not in any chain here" stays true whichever of them lands. None contradicts or duplicates this PR.
+  - #20 rewrites the `reviewer_alt` fallback (:54-58).
+  - #25 adds `review_exclude` after :10.
+  - #139 adds `union_merge` after :10.
+- slop: none beyond the two wording errors above. The evidence-in-comment style matches the file's other routing comments (:35, :48, :57).
+Change needed (only for MERGE WITH CHANGE): In forge/projects/reflex1.toml, replace the seven lines the PR adds (from "# Fable 5.2 (2026-11-09) is not in any chain here:" through "# per model) or a vendor number shows it ahead on this kind of work.") with:
+# Fable 5.2 (2026-11-09) is not in any chain here. Anthropic's launch post says it was trained to stay
+# "at about the level of Opus 5.5" on accelerator kernel optimization and LLM architecture work and that
+# agentic coding was not affected; 43 of reflex1's 140 tickets name candle, kernel, perf, SIMD, speedup,
+# latency or throughput, 6 of those mention CUDA and none an accelerator. Its FrontierCode 2.0 score at
+# `high` (45.3%) is level with Opus 5.5 at `max` (45.5%) for "roughly half the cost per task"; the post gives
+# no number against Opus at `high` (builder) or `xhigh` (builder_hard). On Playcode's one prompt at `high` it
+# cost 3.4x Fable 5.1 per task (76k vs 18k output tokens). Revisit when a builder tally (`status`,
+# merged/attempts per model) or a vendor number shows it ahead on this kind of work.
+
+
 ## PR #173 · 2026-11-10T01:27:57Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
