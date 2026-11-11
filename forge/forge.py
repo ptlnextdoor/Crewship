@@ -465,9 +465,17 @@ class Forge:
     # binaries `cargo test` runs, `build.rustc-wrapper` replaces rustc, `build.rustflags` can `--cap-lints`
     # past clippy's `-D warnings`, `[env]` and `[patch]` reach every build, and the toolchain file swaps the
     # compiler. 0 of reflex1's commits touch either; a ticket that needs one is an owner change, like gate.sh.
+    # A *nested* standalone `AGENTS.md` is the same class and was the one gap: the root file is the project's
+    # one context file and builder rule 24 lets a builder correct it, but a second one in a subdirectory is a
+    # new instruction file nobody asked for - omp loads an ancestor and a package-level `AGENTS.md` at
+    # different depths and ranks the closer one *more prominent* (context-files.md, "Across depths, multiple
+    # files survive"), and Codex merges every `AGENTS.md` from the root down to the file it edits, so the
+    # deeper file silently wins where the two disagree (r/ClaudeCode 2026-11-11: a second rules doc stacked on
+    # the first, "then it followed whichever it read last"). reflex1 has exactly one, at the root.
     HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
-                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$")
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
+                                r"|/AGENTS\.md$")  # nested only: paths are repo-relative, so the root file has no slash
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):
