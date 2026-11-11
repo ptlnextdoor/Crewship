@@ -613,7 +613,12 @@ class Forge:
 
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
-    ASSERT_MARK = re.compile(r"^([-+])[^-+].*\b(debug_)?assert\w*")
+    # The lookahead, not `[^-+]`: a class consumes the line's first content character, so an assertion that
+    # starts at column 0 (`+assert branch_ticks(...) == [...]`, how reflex1's tools/*.py scripts check themselves)
+    # carried no second `assert` for `.*` to find and counted as neither added nor removed. 13 of main's 91
+    # commits touching *.py/*.rs count differently under the two, and 15 such lines are in the tree today, so a
+    # branch that strips them passed this guard. `+++`/`---` headers stay out either way.
+    ASSERT_MARK = re.compile(r"^([-+])(?![-+]).*\b(debug_)?assert\w*")
 
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
         """Tests the branch switches off, drops or strips: an added `#[ignore]`/`pytest.skip` marker, fewer test
