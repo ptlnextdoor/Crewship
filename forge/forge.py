@@ -657,7 +657,12 @@ class Forge:
         drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
         assert_ok = drop_ok or re.search(r"\b(remove|delete|drop)\W+(\w+\W+){0,3}?(debug_)?assert", text)
         out, f, net, gone, asserts, added = [], "", 0, 0, 0, 0
-        for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd, check=True).stdout.splitlines():
+        # `split("\n")`, not `splitlines()`: Python also breaks lines at U+2028, U+2029, U+0085, U+000B, U+000C
+        # and U+001C-U+001E, so everything an added line carries after one of those became a separate piece with
+        # no leading `+` and no guard read it. git puts one diff line per `\n` and nothing else.
+        # shortcut: sh() reads with text=True, which turns a bare `\r` into `\n` before this split, so a piece after a CR
+        # in an added line still reaches none of these four readers (Python and rustc honour CR there); read these diffs as bytes once one lands.
+        for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd, check=True).stdout.split("\n"):
             if line.startswith("+++ "):
                 f = line[6:]
             elif m := self.SKIP_MARK.match(line):
@@ -706,7 +711,7 @@ class Forge:
         anywhere. No ticket waiver: no ticket needs text the reviewer cannot see. `rev` is any diff spec, so
         commit_docs() can scan what a planner or steward turn changed on main since its session started, its own commits included (`git diff --cached <HEAD before the session>`)."""
         out, f = set(), ""
-        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.splitlines():
+        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.split("\n"):  # `split`, not `splitlines`: test_tampering
             if line.startswith("+++ "):
                 f = line[6:]
             if line.startswith("+") and (m := self.INVISIBLE.search(line)):
@@ -765,7 +770,7 @@ class Forge:
         keys the loop itself uses (RUNPOD_API_KEY, gh). No ticket waiver: no ticket needs a live key in the tree.
         `rev` is any diff spec, as in invisible_chars()."""
         out, f = set(), ""
-        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.splitlines():
+        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.split("\n"):  # `split`, not `splitlines`: test_tampering
             if line.startswith("+++ "):
                 f = line[6:]
             if line.startswith("+") and (m := self.SECRET.search(line)):
@@ -918,7 +923,7 @@ class Forge:
     @staticmethod
     def patch_lines(diff: str) -> set[str]:
         """The +/- lines of a diff without the file headers: what a reviewer approved, hunk positions aside."""
-        return {ln for ln in diff.splitlines() if ln[:1] in "+-" and not ln.startswith(("+++", "---"))}
+        return {ln for ln in diff.split("\n") if ln[:1] in ("+", "-") and not ln.startswith(("+++", "---"))}  # `split`, not `splitlines`: test_tampering
 
     def rebase_onto_main(self, wt: Path, builder: str) -> bool:
         """Bring the branch up to date with main. Conflicts (another lane landed nearby) go to the builder once."""
