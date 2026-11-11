@@ -1523,6 +1523,28 @@ with tempfile.TemporaryDirectory() as d:
     check("a hook or fsmonitor command planted in .git/ does not run under the loop's git",
           r.returncode == 0 and not mark.exists(), f"rc={r.returncode} ran={mark.read_text() if mark.exists() else ''}")
 
+# 28. A session's git must not be able to push: every role prompt forbids it and nothing refused it before
+# (forge.no_push). Reads must keep working, and the loop's own push must not be caught by it.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    subprocess.run(f"git init -q --bare -b main {origin}", shell=True, check=True)
+    subprocess.run(f"git clone -q {origin} {repo} 2>/dev/null", shell=True, check=True)
+    (repo / "f").write_text("a\n"); git("add -A", repo); git("commit -qm base", repo)
+    cfg = Path(d) / "t.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    senv = forge.no_push(f.env)
+    def run(cmd: str, env: dict) -> subprocess.CompletedProcess:
+        return subprocess.run(cmd, shell=True, cwd=repo, capture_output=True, text=True, env=env)
+    pushed = run("git push -q origin main", senv)
+    forced = run("git push -q --force origin main", senv)
+    read = run("git fetch -q origin && git ls-remote -q origin", senv)
+    ours = run("git push -q origin main", f.env)
+    check("a session's git cannot push origin, and its reads still work",
+          pushed.returncode != 0 and forced.returncode != 0 and read.returncode == 0,
+          f"push={pushed.returncode} force={forced.returncode} read={read.returncode} {read.stderr[-200:]}")
+    check("the loop's own push is not caught by it", ours.returncode == 0, ours.stderr[-200:])
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")

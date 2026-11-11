@@ -25,7 +25,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from forge import Forge  # the lane loop's redaction, so a key quoted by the audit or the gate never reaches GitHub
+from forge import Forge, no_push  # the lane loop's redaction, so a key quoted by the audit or the gate never reaches GitHub
 
 REPO = Path(os.environ.get("REVIEW_REPO", Path.home() / "Dev/Crewship-scout"))
 GH_REPO = os.environ.get("REVIEW_GH_REPO", "ptlnextdoor/Crewship")
@@ -37,6 +37,10 @@ OMP = str(Path.home() / ".local/bin/omp")
 # A PR that touches these is never merged by this loop: they are the safety surface.
 PROTECTED = ("gpu.py", "systemd/", "projects/")
 PROMPT = (Path(__file__).parent / "prompts" / "pr_audit.md")
+# Env prefix for the two sessions this file starts: both read text anyone can write, both are told not to
+# push, and the caller pushes from their result. One source for the value (forge.no_push); the shell-quoting
+# is safe because every part is a bare identifier. reviewctl's own git goes through sh(), without it.
+NO_PUSH = " ".join(f"{k}={v}" for k, v in no_push({}).items())
 
 
 def now() -> str:
@@ -88,7 +92,7 @@ def audit(pr: dict) -> dict:
     log(f"PR #{n}: audit with {MODEL}:{THINKING}")
     pf = STATE / f"pr{n}.prompt.md"
     pf.write_text(prompt)
-    p = sh(f"timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
+    p = sh(f"{NO_PUSH} timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
     (STATE / f"pr{n}.omp.log").write_text(f"exit={p.returncode}\n--- stdout\n{p.stdout}\n--- stderr\n{p.stderr}")
     text = out.read_text() if out.exists() else (p.stdout or "")
     if p.returncode or not text.strip():
@@ -169,7 +173,7 @@ def fix(pr: dict, v: dict) -> tuple[bool, str]:
             "made within those files, change nothing and say why.\n\n"
             "Commit with a message that says what the audit asked for and why. Do not push; the caller pushes and runs the gate.\n"
         )
-        p = sh(f"timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
+        p = sh(f"{NO_PUSH} timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
                cwd=wt, timeout=1300)
         (STATE / f"pr{n}.fix.log").write_text(f"exit={p.returncode}\n{p.stdout}\n{p.stderr}")
         if sh("git status --porcelain", cwd=wt).stdout.strip():
