@@ -795,7 +795,10 @@ class Forge:
             rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
                                                         READY=str(ready), NEED=str(max(self.lanes, need - ready)),
                                                         GPU_LEFT=f"{left:.2f}", GPU_BUDGET=f"{budget:.0f}"), self.repo)
-            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue", base)
+            # Name the model that actually ran (after agent()'s fallback chain), as the PR body does for builders:
+            # the tickets a planner turn writes are this loop's one record of which model shaped the next cycles.
+            planner = self.last_model.get("planner", "unknown")
+            self.commit_docs("tickets PROGRESS.md ROADMAP.md", f"forge: planner refills the ticket queue (planner: {planner})", base)
             self.discard_strays("planner")
             self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
             self.push()
@@ -1298,7 +1301,8 @@ class Forge:
         base = self.sh("git rev-parse HEAD").stdout.strip()
         self.agent("steward", self.prompt("steward", STATE=self.status_text()), self.repo, timeout_min=30)
         self.state["steward_cycle"] = self.state["cycle"]
-        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update", base)
+        steward = self.last_model.get("steward", "unknown")
+        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", f"forge: steward update (steward: {steward})", base)
         self.discard_strays("steward")
         self.push()
 
@@ -1322,7 +1326,9 @@ class Forge:
             self.sh(f"git reset -q --hard {base} && git clean -qfd")
             return
         if here:
-            self.sh(f"git commit -qm '{msg}' || true")
+            # The message now carries a model id from the config or omp's catalog, so quote it rather than
+            # relying on the literal having no shell metacharacter in it.
+            self.sh(f"git commit -qm {shlex.quote(msg)} || true")
 
     def discard_strays(self, role: str) -> None:
         """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""

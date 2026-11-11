@@ -395,12 +395,16 @@ with tempfile.TemporaryDirectory() as d:
     seen_state: list[str] = []
     def steward_agent(role, prompt, cwd, timeout_min=0):
         seen_state.append(prompt)
+        # agent() records the model that actually ran, after its fallback chain; the apostrophe stands for any
+        # shell metacharacter a model id from omp's catalog could carry into the commit message.
+        f.last_model["steward"] = "a/b-5'1"
         (cwd / "SCORE.md").write_text("S1: 0.42 (3 seeds, `cargo run --release -- bench`, 2026-10-24)\n")
         (cwd / "main.rs").write_text("fn main() { panic!() }\n")
         return 0, ""
     f.agent = steward_agent
     f.steward()
     check("steward commits SCORE.md, drops code", "0.42" in git("show origin/main:SCORE.md", repo) and "panic" not in git("show origin/main:main.rs", repo) and not git("status --porcelain", repo))
+    check("steward commit names the model that ran", "(steward: a/b-5'1)" in git("log -1 --format=%s origin/main", repo), git("log -1 --format=%s origin/main", repo))
     check("steward sees every lane's attempts and the per-guard tally", "0099-other: failed" in seen_state[0] and "reviewer did not 1" in seen_state[0], seen_state[0][-600:])
     # The second attempt merged on another lane than the first: pooled, that is #1 0/3 (0098's first, 0099, 0097) and #2 1/1.
     check("steward sees merged/attempts by attempt number, pooled across lanes",
