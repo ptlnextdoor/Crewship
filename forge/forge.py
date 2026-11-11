@@ -465,9 +465,15 @@ class Forge:
     # binaries `cargo test` runs, `build.rustc-wrapper` replaces rustc, `build.rustflags` can `--cap-lints`
     # past clippy's `-D warnings`, `[env]` and `[patch]` reach every build, and the toolchain file swaps the
     # compiler. 0 of reflex1's commits touch either; a ticket that needs one is an owner change, like gate.sh.
+    # A *nested* standalone `AGENTS.md` is protected on the same footing as a nested CLAUDE.md. omp's walk goes up
+    # from the session's cwd and every forge session starts at a repo root, so none loads it today. It is still a
+    # second instruction file in the convention every agent reads: loaded for any session started in its directory,
+    # and listed as "read before editing" once `includeWorkspaceTree` is on. The root file stays editable (builder
+    # rule 24). reflex1 has exactly one, at the root.
     HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
-                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$")
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
+                                r"|/AGENTS\.md$")  # nested only: paths are repo-relative, so the root file has no slash
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
         if base.startswith("origin/"):

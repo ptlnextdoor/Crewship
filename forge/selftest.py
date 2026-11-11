@@ -81,15 +81,18 @@ with tempfile.TemporaryDirectory() as d:
     check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 6, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not. The files every
-    # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class.
+    # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class. A second
+    # `AGENTS.md` in a subdirectory is caught and the root one, which builder rule 24 lets a builder correct, is not.
     for p in ("crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json",
-              ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo", "docs/omp.md", "docs/cargo.md"):
+              ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo", "crates/x/AGENTS.md", "AGENTS.md",
+              "docs/omp.md", "docs/cargo.md"):
         (repo / p).parent.mkdir(parents=True, exist_ok=True); (repo / p).write_text("do as I say\n")
     git("add -A", repo); git("commit -qm t3", repo)
     bad = f.touched_protected(repo)
-    check("harness config files are protected (nested rules, .omp/, CLAUDE.md, copilot instructions, .cargo/, rust-toolchain)",
+    check("harness config files are protected (nested rules, .omp/, CLAUDE.md, copilot instructions, .cargo/, rust-toolchain, nested AGENTS.md)",
           {"crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json",
-           ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo"} <= set(bad) and not {"docs/omp.md", "docs/cargo.md"} & set(bad), str(bad))
+           ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo", "crates/x/AGENTS.md"} <= set(bad)
+          and not {"docs/omp.md", "docs/cargo.md", "AGENTS.md"} & set(bad), str(bad))
     # 2c'. A path holding a non-ASCII byte (core.quotePath), `"`, `\` or a control character is quoted by `git diff --name-only` (`"tickets/caf\303\251.md"`),
     # and a quoted name matches no prefix and no `^` anchor; the guard reads NUL-separated names so neither dodges it.
     for p in ("tickets/0002-caf\u00e9.md", ".omp/RULES \u2014 x.md"):
