@@ -2,6 +2,82 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #195 · 2026-11-11T13:37:31Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (the fixer changed nothing)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #195 forge: fail an empty attempt against origin/main, not the lane's stale main
+What it changes: `cycle()`'s empty-attempt check changes from `git diff --stat main...HEAD` to `origin/main...HEAD` (forge.py:1101). Its failure note becomes `builder produced no diff against origin/main (rc=…)` (:1102), and a 5-line comment is added (:1096-1100). README row 83 gets an empty-attempt clause and a measurement. The README edit is append-only.
+Findings:
+- ok forge/forge.py:1101 The new base is correct, traced end to end.
+  - `claim()` pushes `main` (:860) and only returns on success, and the push updates `refs/remotes/origin/main`. The worktree is then cut from local `main` (:1073). So at the branch point `origin/main` == `main`.
+  - Local `main` does not move until the next `sync_main()`: the lane is single-threaded, and a session cannot `branch -f` a checked-out branch.
+  - A builder that neither merges nor rebases has the same merge base on both refs, so the result is the same as before.
+  - After a merge or rebase of `origin/main`, the base becomes the tip it merged in. The check then sees only the branch's own work, the same diff `secrets()`, `invisible_chars()`, `touched_protected()`, `test_tampering()` and the reviewer's `{DIFF}` (:1175) already read.
+  - Probe: a throwaway `Forge.cycle()` on a real bare origin, with a second clone landing a file mid-session and a stub reviewer that approves. Results, base vs head:
+
+    | builder session | base | head |
+    |---|---|---|
+    | merge-only | 1 gate run, reviewer ran, `status: done` (MERGED with nothing of its own) | RETRY `builder produced no diff against origin/main (rc=0)`, 0 gate runs, no reviewer |
+    | rebase-only | same as merge-only | same as merge-only |
+    | work + merge | MERGED | MERGED |
+    | work + fetch only | MERGED | MERGED |
+    | nothing | RETRY | RETRY |
+
+  - So on base an empty attempt can land as `done` on an approving review. README row 83 understates this; it only says the gate and review were "spent".
+- info forge/forge.py:1101 No real work can newly fail.
+  - The new check comes back empty only when HEAD's tree equals the tree at its merge base with `origin/main`, which means landing would add nothing.
+  - The "feature already exists" exit (builder.md:9) writes `PROGRESS.md`, so it still reaches review.
+  - This answers PR #66's reason for keeping local `main` ("it cannot false-fail there", SCOUT.md:851).
+  - An unresolvable `origin/main` (builder runs `git remote remove origin` or `update-ref -d`) makes git exit 128 with empty stdout. The attempt is then charged as "no diff" with a misleading note. On base it went on to `touched_protected(check=True)` and raised, uncharged.
+  - Both paths fail closed. Leave `check=True` off: with it, an orphan branch (no merge base) becomes an uncharged retry loop.
+  - Ref trust is unchanged: `refs/remotes/origin/main` sits in the same shared ref store as `refs/heads/main`, and every guard after this line already trusts it.
+- info forge/forge.py:1096-1102 Pass 1 surface: none of it is affected.
+  - The command is a constant string; no ticket text reaches the shell.
+  - The `return` is inside `try`, so `finally` still removes the worktree and the branch (:1243-1251).
+  - No change to the gate, the protected paths, any prompt, reviewer selection or verdict parsing, `claim()`/`recover()`/`discard_strays()`, PR create/merge, or gpu.py.
+  - Spend only falls: a merge-only empty attempt no longer costs a gate run (up to 1800 s), a reviewer session (up to 30 min) and a landing.
+  - The note keeps `out[-1500:]`.
+  - `status` keys causes by their first three words (:1589). The bucket is still `builder produced no`, and README rows 52 and 82 still match as a prefix.
+- info deletions: the diff removes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. `git diff --word-diff` on README:83 shows only two appends: `main` → `main`, the empty-attempt check (…) included, and `bytes` → `bytes; the same stale base …`. No layer is retired.
+- low forge/selftest.py (not in diff) No check pins the new base.
+  - The PR body says such a check "would test the source text". That is false: a behavioural check discriminates.
+  - The check below fails on base forge.py (`['builder', 'reviewer', 'reviewer']`, `reviewer did not approve`). It passes on the PR head, and the full selftest then prints "all checks passed". Both runs were on `git archive` copies.
+  - This exact line was kept on local `main` on purpose by an earlier unattended PR (#66, SCOUT.md:851). A later edit that flips it back with that argument would pass every check today.
+- nit forge/forge.py:1096-1100 The 5-line comment restates README row 83 and the comment at :1107-1111. "now" is changelog voice. It matches the repo's style, so no change is needed.
+- nit PR body (not in diff) Two overstatements:
+  - It lists `pr_open()` among the reads on `origin/main...HEAD`. `pr_open()` (:922-944) runs no diff; it opens `--base main` on GitHub. README's "the base the PR … use" is still accurate.
+  - "The new predicate is a subset of the old one" is not strictly true. A branch that merges `origin/main` and then reverts that merge's effects is empty against `main` and non-empty against `origin/main`. It then reaches the guards, the gate and the reviewer as a diff that reverts landed work, which is the safer direction.
+- info siblings: I ran `git apply --check` for all 37 open `forge` PRs on base and on head. None that applies on base fails on head, so #195 adds no conflict.
+  - #28 duplicates this PR. Its `cycle()` hunk is the same one-word swap, its other two hunks already landed through merged #66, and it already fails to apply on base. #28 should change: close it as superseded once #195 lands.
+  - #16 uses the old line only as hunk context for its `self.autofix(wt)` insert. That is a textual overlap only, and it already fails on base.
+  - #5, #6 and #25 add new `main...HEAD` reads (the split reviewer diff, the post-REJECT repair diff, the `review_exclude` diff). These contradict row 83 as it stands on base and as this PR extends it. They should change, to `origin/main`.
+  - #85 (the builder merges `origin/main` before its last commit) would make the merge-only case routine. It complements this PR.
+Change needed (only for MERGE WITH CHANGE): in forge/selftest.py, insert after line 1255 (the end of section 19's `check(...)`, inside its `with` block, 4-space indent):
+```python
+    # A session that wrote nothing of its own but took main in is empty against origin/main, the base every later
+    # read uses; against local main it read as the other lane's files and went on to the gate and the review.
+    (repo / "tickets/0003-v.md").write_text("status: open\n\n# v\n")
+    git("add -A", repo); git("commit -qm v", repo); git("push -q origin main", repo)
+    turns.clear()
+
+    def take_main_only(role, prompt, cwd, timeout_min=None):
+        turns.append(role)
+        git("pull -q --rebase origin main", other)
+        (other / "b.txt").write_text("another lane\n")
+        git("add -A", other); git("commit -qm 'lane 3 lands b'", other); git("push -q origin main", other)
+        git("fetch -q origin", cwd); git("merge -q --no-edit origin/main", cwd)
+        return 0, ""
+
+    f.agent = take_main_only
+    f.cycle()
+    note = (repo / "tickets/0003-v.md").read_text()
+    check("a session that only took main in ends as no diff, before the gate and the review",
+          "builder produced no diff against origin/main" in note and turns == ["builder"], f"{turns}: {note[-300:]!r}")
+```
+
+
 ## PR #194 · 2026-11-11T12:32:20Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
