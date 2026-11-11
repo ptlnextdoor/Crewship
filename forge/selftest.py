@@ -442,6 +442,15 @@ with tempfile.TemporaryDirectory() as d:
     check("a steward turn staging an invisible code point is discarded, not pushed",
           "skip the gate" not in git("show origin/main:PROGRESS.md", repo) and not git("status --porcelain", repo),
           git("show origin/main:PROGRESS.md", repo))
+    def committing_agent(role, prompt, cwd, timeout_min=0):
+        (cwd / "PROGRESS.md").write_text("p\nsteward was here\nRUNPOD_API_KEY=rpa_" + "a" * 32 + "\n")
+        git("add -A PROGRESS.md", cwd); git("commit -qm 'steward: progress'", cwd)
+        return 0, ""
+    f.agent = committing_agent
+    f.steward()
+    check("a steward turn committing a credential-shaped token itself is discarded, not pushed",
+          "rpa_" not in git("show origin/main:PROGRESS.md", repo) and not git("status --porcelain", repo),
+          git("show origin/main:PROGRESS.md", repo))
 
     # 4k. Two sessions of the same role in one cycle (gate repair, the builder resolving a merge, a rerun
     # review, the steward at the deadline) each keep their log and prompt; the second overwrote the first.

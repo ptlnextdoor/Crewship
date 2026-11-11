@@ -626,7 +626,7 @@ class Forge:
         controls in literals and comments; nothing refuses them in Markdown, Python, shell or the PROGRESS.md
         entry the reviewer reads as the builder's claim, and nothing refuses zero-width or tag characters
         anywhere. No ticket waiver: no ticket needs text the reviewer cannot see. `rev` is any diff spec, so
-        commit_docs() can scan what a planner or steward turn staged on main (`--cached`)."""
+        commit_docs() can scan what a planner or steward turn changed on main since its session started, its own commits included (`git diff --cached <HEAD before the session>`)."""
         out, f = set(), ""
         for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.splitlines():
             if line.startswith("+++ "):
@@ -751,10 +751,11 @@ class Forge:
             left, budget = self.gpu_left()
             self.log(f"queue low: planner turn ({ready} of {need} tickets can start now; GPU budget ${left:.2f} left of ${budget:.0f})")
             self.board("planner is writing the next tickets")
+            base = self.sh("git rev-parse HEAD").stdout.strip()
             rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
                                                         READY=str(ready), NEED=str(max(self.lanes, need - ready)),
                                                         GPU_LEFT=f"{left:.2f}", GPU_BUDGET=f"{budget:.0f}"), self.repo)
-            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
+            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue", base)
             self.discard_strays("planner")
             self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
             self.push()
@@ -1248,13 +1249,14 @@ class Forge:
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
+        base = self.sh("git rev-parse HEAD").stdout.strip()
         self.agent("steward", self.prompt("steward", STATE=self.status_text()), self.repo, timeout_min=30)
         self.state["steward_cycle"] = self.state["cycle"]
-        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
+        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update", base)
         self.discard_strays("steward")
         self.push()
 
-    def commit_docs(self, paths: str, msg: str) -> None:
+    def commit_docs(self, paths: str, msg: str, base: str) -> None:
         """Commit a role's doc edits. `git add -A a b c` is all-or-nothing: one path a project does not
         have and nothing at all is staged (the error went to /dev/null), so discard_strays threw the
         whole turn away. Stage the paths that exist; a path the role deleted outright is restored there.
@@ -1266,15 +1268,15 @@ class Forge:
         context file hold about two thirds of the time against 88.3% for the same constraints compiled into
         executable ones (ContextCov, arXiv 2603.00822)."""
         here = " ".join(p for p in paths.split() if (self.repo / p).exists())
-        if not here:
-            return
-        self.sh(f"git add -A {here}")
-        bad = self.secrets(self.repo, "--cached") + self.invisible_chars(self.repo, "--cached")
+        if here:
+            self.sh(f"git add -A {here}")
+        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}")
         if bad:
-            self.log(f"{msg}: staged text carries credential-shaped or invisible characters, discarding: {bad}")
-            self.sh("git reset -q --hard HEAD && git clean -qfd")
+            self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
+            self.sh(f"git reset -q --hard {base} && git clean -qfd")
             return
-        self.sh(f"git commit -qm '{msg}' || true")
+        if here:
+            self.sh(f"git commit -qm '{msg}' || true")
 
     def discard_strays(self, role: str) -> None:
         """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""
