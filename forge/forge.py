@@ -1450,6 +1450,28 @@ class Forge:
                 t[2].append(h["secs"])
         out.append("merged/attempts per builder model per ISO week, median lane-minutes per attempt (a provider-side change under one model name shows here, not in the version row): "
                    + ("; ".join(f"{v} " + ", ".join(f"{wk} {rate_interval(m, n)}" + (f" {sorted(secs)[len(secs) // 2] // 60} min/attempt" if secs else "") for wk, (m, n, secs) in sorted(ws.items())) for v, ws in by_week.items()) or "-"))
+        # Plan-window climb per merged ticket per ISO week: `meter` on each entry is every window's "% used" as
+        # quota_ok() read it at that cycle's start, pooled across lanes in time order because the windows are
+        # shared by all of them. Climb is the sum of rises between consecutive readings of one window; a fall is
+        # the window resetting, not spend. Between engineers, token spend explains little of output (the 90th
+        # percentile of spend was 39 to 240 times the 10th among weeks with similar commit counts), while within
+        # one engineer doubling spend went with about 10% more commits (arXiv 2611.13396, 404 JetBrains
+        # engineers over 5 weeks), so this row is the loop against its own earlier weeks and against no one else.
+        # shortcut: the windows are the owner's too, so the climb counts his sessions as well as the lanes';
+        # split it only if forge ever gets a per-session token count (omp prints none for plan-billed runs).
+        climb: dict[str, dict[str, float]] = {}
+        last: dict[str, float] = {}
+        merges: dict[str, int] = {}
+        for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"]):
+            wk = dt.date.fromisoformat(h["at"][:10]).strftime("%G-W%V")
+            merges[wk] = merges.get(wk, 0) + (h["result"] == "merged")
+            for k, pct in (h.get("meter") or {}).items():
+                if k in last and pct > last[k]:
+                    climb.setdefault(k, {})[wk] = climb.setdefault(k, {}).get(wk, 0.0) + pct - last[k]
+                last[k] = pct
+        out.append("plan-window climb per merged ticket per ISO week (the owner's own sessions burn the same windows): "
+                   + ("; ".join(f"{k} " + ", ".join(f"{wk} +{c:.1f}% / {merges.get(wk, 0)} merged" + (f" = {c / merges[wk]:.1f}%/merge" if merges.get(wk) else "")
+                                                    for wk, c in sorted(ws.items())) for k, ws in sorted(climb.items())) or "-"))
         # merged/attempts by the ticket's own attempt number, pooled across lanes (a retried ticket is claimed
         # by whichever lane is free): `cycle()` runs builder_hard from attempt 3, and from attempt 1 on a
         # `difficulty: hard` ticket, so no bucket is a single effort level.
