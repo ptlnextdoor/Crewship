@@ -1291,6 +1291,28 @@ with tempfile.TemporaryDirectory() as d:
     check("an unreadable omp stamps '?' instead of failing the cycle", f.harness == "?", repr(f.harness))
     forge.OMP = real_omp
 
+    # 21b. The cross-family pick reads the *configured* reviewer model, while a review role's fallback can land
+    # in the builder's vendor, so a quota fallback can put builder and reviewer in one family with nothing
+    # saying so (reflex1 routes both reviewer roles to claude-fable-5-1 when their first model is out).
+    (repo / "tickets/0003-v.md").write_text("status: open\n\n# v\n")
+    git("add -A", repo); git("commit -qm t3", repo); git("push -q origin main", repo)
+
+    def build_same_vendor(role, prompt, cwd, timeout_min=None):
+        f.last_model[role] = "c/x" if role == "builder" else "c/d"   # both chains fell back into vendor `c`
+        if role == "reviewer":
+            return 0, "VERDICT: APPROVE"
+        (cwd / "v.txt").write_text("v\n")
+        git("add -A", cwd); git("commit -qm work", cwd)
+        return 0, ""
+
+    f.agent = build_same_vendor
+    f.cycle()
+    notes = "".join(p.read_text() for p in sorted((repo / "tickets").glob("*.md")))
+    check("a review that fell back to the builder's own vendor says the cross-family check did not run",
+          "approved by c/d (same vendor, no cross-family check)" in notes
+          and "approved by c/d." in notes,   # the cross-vendor cycles above keep the plain note
+          notes[-300:])
+
 # 22. The reviewer is told to run the diff's tests against the old code by restoring a source file from
 # origin/main. A reviewer that forgets `git checkout HEAD -- .` left a dirty worktree for land(): the rebase
 # refuses unstaged changes, the merge too when main touched the file, and the conflict session's `git add -A`

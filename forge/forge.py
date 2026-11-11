@@ -1144,7 +1144,13 @@ class Forge:
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
-            self.pr_comment(self.pr, f"**review by `{self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}` of {reviewed}**\n\n{review[-12000:]}")
+            rev_by = self.last_model.get(reviewer, self.cfg["roles"][reviewer]["model"])
+            # The pick above reads the *configured* reviewer model; a review role's fallback can land in the builder's vendor
+            # (reflex1: reviewer_alt gpt-6-astra -> claude-fable-5-1). Name that where the verdict is read; the verdict is unchanged.
+            kin = "" if rev_by.split("/")[0] != built_by.split("/")[0] else (
+                f"\n\n**same-vendor review**: built by `{built_by}`, reviewed by `{rev_by}`, both from "
+                f"`{rev_by.split('/')[0]}`. The cross-family check did not run.")
+            self.pr_comment(self.pr, f"**review by `{rev_by}` of {reviewed}**{kin}\n\n{review[-12000:]}")
             # The reviewer may restore files from origin/main to run the diff's tests against the old code (step 3).
             # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.
             # Reset to `reviewed`, not HEAD: a review session that committed moved HEAD, and the verdict is for
@@ -1159,7 +1165,7 @@ class Forge:
             why = self.land(wt, branch, tid, builder)
             if why:
                 return self.fail(ticket, why)
-            done_note = f"Landed by {built_by}, approved by {self.last_model.get(reviewer, self.cfg['roles'][reviewer]['model'])}." + (f" PR: {self.pr}" if self.pr else "")
+            done_note = f"Landed by {built_by}, approved by {rev_by}{' (same vendor, no cross-family check)' if kin else ''}." + (f" PR: {self.pr}" if self.pr else "")
             self.sync_main()
             self.set_status(ticket, "done", done_note)
             self.sh(f"git add {ticket} && git commit -qm 'forge: done {tid}'")
