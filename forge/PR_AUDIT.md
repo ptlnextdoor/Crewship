@@ -2,6 +2,88 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #205 · 2026-11-11T23:27:08Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #205 forge: a builder branch cannot add or edit .github/workflows
+What it changes: adds `\.github/workflows` to the directory alternation of `HARNESS_CONFIG` (forge/forge.py:530, PR head) with a 6-line comment (524-529), so `touched_protected()` now lists any path under, or named, `.github/workflows`. Selftest 2c gains `.github/workflows/ci.yml` (expected caught) and `docs/github-workflows.md` (expected not caught).
+Findings:
+- medium forge/forge.py:1157,1163 and 1203,1205 (PR head): the guard runs too late to stop the harm the PR's own comment names ("runs on GitHub's runner when the loop pushes the branch"). At two of its three call sites the loop pushes the branch before the guard runs.
+  - Build path: cycle() calls `pr_open()` at 1157, which runs `git push -q -u origin {branch}` (981) and then `gh pr create`. `touched_protected()` runs only at 1163.
+  - Repair path: `git push -q origin {branch}` at 1203, guard at 1205.
+  - Landing path: only land() checks first (1057) and pushes afterwards (1086).
+  - Probe: I loaded the PR head's forge.py in memory and ran cycle() against a scratch origin with a builder that writes only `.github/workflows/x.yml`. The event order was `pr_open(push)`, then `fail: diff edits protected ... ['.github/workflows/x.yml']`. The repair-path variant ran `pr_open, gate, repair push, fail: the repair edited protected ...`.
+  - Live precedent for this order: reflex1 PR #105 was created 2026-10-24T12:30:50Z and closed at 12:30:53Z with "diff edits protected gate/ticket paths". #30, #100, #101 and #103 went the same way. Each branch was already on origin before the guard fired.
+  - Why that push matters on reflex1 (private repo):
+    - Actions are enabled with `allowed_actions: all`.
+    - git authenticates through `gh auth git-credential` with a token that has the `workflow` scope, so GitHub accepts a push that adds a workflow file.
+    - `main` has no branch protection, no rulesets and no branch rules (API).
+    - An `on: push` workflow therefore runs on the branch push. Its token defaults to read (`default_workflow_permissions: read`), but the workflow's own `permissions:` block can request `contents: write`, and with that a job can push to main past the gate and the reviewer. It also spends the owner's Actions minutes.
+    - The `finally` block deletes the branch (1301), which does not cancel a run already queued.
+  - What the PR does deliver: a workflow can no longer reach main through `land()`. On main it would run on every later push from any lane.
+  - PR body claim "`secrets()`, `no_push()`, `touched_protected()` all run locally, before the push": false for `touched_protected()`. `secrets()` (1154) does run before `pr_open()`.
+- low forge/forge.py:524-529, forge/selftest.py:95: the new comments overstate.
+  - "with the repo's secrets": reflex1 has 0 repository secrets and 0 environments (API).
+  - "code execution none of this box's guards see": still true for the pushes at 1157 and 1203 after this PR.
+  - The two citations do not measure this case. GitInject is about agent config files read by CI agents, which is already the reason for the rest of `HARNESS_CONFIG`. TaintAWI is about existing workflows that pass event text to an agent. Neither covers a branch adding a workflow file.
+- low forge/README.md:112: the safeguard row lists every `HARNESS_CONFIG` path, and this PR does not update it. It now omits `.github/workflows/`, and nothing in the table says workflows are refused, or when the check runs.
+- info forge/forge.py:530: the regex is correct.
+  - The PR head pattern equals base's plus exactly this one alternative (string compare).
+  - Matches: `.github/workflows/ci.yml`; `.github/workflows/sub/x.yaml`; `.github/workflows` itself (a symlink or file, via `(/|$)`); nested `crates/x/.github/workflows/ci.yml` (GitHub runs no nested workflow, so this false positive is harmless).
+  - Does not match: `.github`, `.github/workflow/x.yml`, `.github/workflowsx/a`, `docs/github-workflows.md`, `.github/actions/a/action.yml`, `.github/dependabot.yml`, or the trailing `""` from `-z`.
+  - The guard only grows, and all three callers test only `if bad`.
+- info forge/selftest.py:95-104: four lines are deleted and re-added as strict supersets (the tuple, the check name, the expected set and the negative set). No assertion is dropped, so no layer is retired. Nothing is deleted from `forge/prompts/*.md` or the README table.
+  - On the PR head, 2c passes. With base's regex it reports `.github/workflows/ci.yml` missing, which confirms the body's negative control.
+  - The full PR-head selftest, run in memory against the PR-head forge.py, gave 189 ok and 0 FAIL.
+- info false positives: reflex1 `origin/main` has 627 commits. `git log -- .github` returns 0, `git ls-tree` shows 0 `.github/` files, and 0 tickets mention `.github`. A ticket that needs CI would cost one charged attempt, as with `.cargo/`.
+- info pre-existing, and no file guard reaches it: a yolo builder session can still `git push <url>` or `gh api` a workflow onto a branch by itself. `no_push()` says it is "Not a boundary" (forge.py:93). Neither this PR nor the change below addresses it.
+- none siblings: I scanned the diffs of all 39 other open PRs on `forge` that touch forge.py or selftest.py.
+  - None edits `HARNESS_CONFIG`, selftest 2c, README row 112, the `pr_open()` call site or the repair push in the current code.
+  - #204's hunks are at forge.py:700 and selftest.py:211.
+  - #165 and #44 change the body of `pr_open()`, not where cycle() calls it, so they do not conflict with the change below.
+  - #6, #8 and #28 sit on an October base with the one-argument `touched_protected`. #6's REJECT-repair round also pushes before it calls `touched_protected`, so if it is ever revived it needs the same reorder.
+  - No contradictions or duplicates.
+- none PR text: the body and the one review (Copilot's quota notice) contain no `<!--` and give no instructions. The body's claims are checked above. I did not check the depi.security codex claim.
+Change needed (only for MERGE WITH CHANGE): run the guard before the branch reaches origin, and make the text say so. I tested this in memory against the PR head: the full selftest gave 189 ok / 0 FAIL with the reorder, and the new 4p' check below fails on the PR head and passes with the reorder.
+(1) forge/forge.py cycle(): cut line 1157 `            self.pr = self.pr_open(wt, branch, ticket, builder)` and paste it directly after line 1165 (`                return self.fail(ticket, f"diff edits protected ...")`), before `            deps = self.unrequested_deps(wt, ticket.read_text())`. The comment block at 1158-1162 stays above the `touched_protected` call.
+(2) forge/forge.py repair pass: cut line 1203 `                self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)` and paste it directly after line 1207 (`                    return self.fail(ticket, f"the repair edited protected ...")`). Replace line 1204 with:
+    `                # Check before the push and the gate: GitHub runs a workflow the repair added once the branch reaches origin, and a gate.sh it rewrote must not execute or post a PASS to the PR.`
+(3) forge/forge.py:524-529: replace the six comment lines with:
+    # `.github/workflows` is the same class one step out: GitHub runs a workflow file the branch adds as soon as
+    # the branch reaches origin, with a GITHUB_TOKEN its own `permissions:` block can raise to write (reflex1's main
+    # is unprotected), before any review. cycle() runs this check before pr_open() and the repair push for that reason.
+    # 0 of reflex1's 627 commits touch .github/; a ticket that needs CI is an owner change, like gate.sh.
+(4) forge/selftest.py:95: replace the line with:
+    `    # A workflow file runs on GitHub as soon as its branch reaches origin, so it is protected too (4p' checks cycle() refuses it before the push).`
+Then insert before `# 4q.` (line 633):
+
+    # 4p'. A workflow file runs on GitHub's runner as soon as its branch reaches origin, so cycle() refuses it before pr_open() pushes.
+    with tempfile.TemporaryDirectory() as d:
+        origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+        git(f"init -q --bare -b main {origin}", Path(d))
+        git(f"clone -q {origin} {repo}", Path(d))
+        (repo / "tickets").mkdir()
+        (repo / "tickets/0003-t.md").write_text("status: open\n\n# t\n")
+        git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+        cfg = Path(d) / "c.toml"
+        cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+        f = forge.Forge(cfg)
+        opened = []
+        f.plan, f.board = (lambda: None), (lambda doing: None)
+        f.claim = lambda: repo / "tickets/0003-t.md"
+        f.pr_open = lambda wt, branch, ticket, builder: (opened.append(branch), "https://example.invalid/pull/13")[1]
+        f.gh = lambda args, cwd=None, body=None: ""
+        f.agent = lambda role, prompt, cwd, timeout_min=None: ((cwd / ".github/workflows").mkdir(parents=True), (cwd / ".github/workflows/x.yml").write_text("on: push\n"), (0, ""))[2]
+        f.cycle()
+        check("a branch that adds a workflow is refused before it is pushed",
+              opened == [] and ".github/workflows/x.yml" in (repo / "tickets/0003-t.md").read_text(), str(opened))
+
+(5) forge/README.md:112: replace "cap lints past clippy's `-D warnings`) are protected whatever `protected_paths` lists;" with:
+    "cap lints past clippy's `-D warnings`) and `.github/workflows/` (GitHub runs a workflow file once its branch reaches origin, so `cycle()` checks before `pr_open()` and the repair push) are protected whatever `protected_paths` lists;"
+
+
 ## PR #204 · 2026-11-11T22:19:06Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (the fixer changed nothing)
 
 Verdict: MERGE WITH CHANGE
