@@ -700,6 +700,21 @@ class Forge:
                 out.add(f"{f}: {m.lastgroup}")
         return sorted(out)
 
+    def msg_secrets(self, cwd: Path, rev: str = "origin/main..HEAD") -> list[str]:
+        """Commits this branch adds whose *message* carries a credential-shaped token, with the issuer. The
+        builder writes its own messages (rule 20) and quotes command output in them; `secrets()` reads the diff
+        only, so a key in a message went out with the push and into public main's history unscanned while the
+        same bytes in a line of code were refused. Text beside the code is its own leak path: credentials reach
+        repositories through "active debugging outputs, stack traces, or logging configurations" (gitxpose,
+        IJSRNSC 2026), and the same paste shape in issue reports needed its own scanner (IssueGuard, FSE 2026).
+        `-z` keeps a multi-line body in one record; `rev` is any log range."""
+        out = set()
+        for rec in self.sh(f"git log -z --format=%H%n%B {rev}", cwd=cwd, check=True).stdout.split("\0"):
+            sha, _, msg = rec.partition("\n")
+            if m := self.SECRET.search(msg):
+                out.add(f"{sha[:8]} (commit message): {m.lastgroup}")
+        return sorted(out)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -956,7 +971,7 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket/harness-config paths {bad}; not allowed."
-            bad = self.secrets(wt)
+            bad = self.secrets(wt) + self.msg_secrets(wt)
             if bad:
                 return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
@@ -1050,9 +1065,9 @@ class Forge:
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
-            bad = self.secrets(wt)
+            bad = self.secrets(wt) + self.msg_secrets(wt)
             if bad:
-                return self.fail(ticket, f"diff adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint.")
+                return self.fail(ticket, f"diff or commit message adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint, and a message that quotes a command's output must not carry one either.")
             self.pr = self.pr_open(wt, branch, ticket, builder)
             # Base is origin/main, not the lane's local main: the builder may bring main into its branch
             # during the session (reflex1 PRs #30/#55/#93/#100/#101/#103/#105 rebased onto it), and against a
@@ -1093,9 +1108,9 @@ class Forge:
                     # Codex's usage limit and the gate reran on the untouched branch. Unchanged-code resubmission
                     # is 28% of trace-less repair retries (arXiv 2611.09212); here it is the whole second gate run.
                     return self.fail(ticket, f"repair changed nothing (rc={rc}); gate not rerun.\n{gout}")
-                bad = self.secrets(wt)
+                bad = self.secrets(wt) + self.msg_secrets(wt)
                 if bad:
-                    return self.fail(ticket, f"the repair adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint.")
+                    return self.fail(ticket, f"the repair's diff or commit message adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint, and a message that quotes a command's output must not carry one either.")
                 self.sh(f"git push -q origin {branch}", cwd=wt, timeout=120)
                 # Check before the gate runs: a gate.sh the repair rewrote must not execute or post a PASS to the PR.
                 bad = self.touched_protected(wt, "origin/main")
@@ -1282,7 +1297,7 @@ class Forge:
         here = " ".join(p for p in paths.split() if (self.repo / p).exists())
         if here:
             self.sh(f"git add -A {here}")
-        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}")
+        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}") + self.msg_secrets(self.repo, f"{base}..HEAD")
         if bad:
             self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
             self.sh(f"git reset -q --hard {base} && git clean -qfd")

@@ -73,12 +73,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo)):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo)):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 6, str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 7, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not. The files every
     # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class. A second
@@ -214,6 +214,15 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm unkey", repo)
     check("removing a key is no finding", f.secrets(repo) == [])
+    # 2e'''. The same token in a commit *message* is refused: the builder writes its own messages and quotes
+    # command output in them, and a message goes out with the push and into main's history, where secrets()
+    # (added lines only) never looked. A bare prefix in a message passes, as in a line of code.
+    git("commit -q --allow-empty -m \"fixes auth\n\ntried: export HF_TOKEN=hf_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\"", repo)
+    got = f.msg_secrets(repo)
+    check("a credential-shaped token in a commit message is refused with the sha and issuer",
+          len(got) == 1 and got[0].endswith("(commit message): huggingface"), str(got))
+    git("commit -q --allow-empty -m \"plain message naming sk-ant- and ghp_ prefixes\"", repo)
+    check("an ordinary commit message is no finding", f.msg_secrets(repo) == got, str(f.msg_secrets(repo)))
     git("reset -q --hard origin/main", repo)
     # 2f. gate() keeps the stage header and error lines a 5,000-character tail would cut (reflex1 PR #2: a
     # rustfmt failure whose tail was all hunks), and a short output passes through unchanged.
