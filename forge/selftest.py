@@ -255,7 +255,7 @@ with tempfile.TemporaryDirectory() as d:
     check("a timed-out gate keeps its output, its load reading and says nothing was judged",
           "timed out after" in timeout_msg and "loadavg" in timeout_msg and "the code was not judged" in timeout_msg
           and "== test\nerror: still running\n" in timeout_msg
-          and any("== test" in p.read_text() for p in tlog.glob("*-gate*.log")), timeout_msg[:200])
+          and any("error: still running" in p.read_text() for p in tlog.glob("*-gate*.log")), timeout_msg[:200])
     git("checkout -q -- gate.sh", repo)
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"

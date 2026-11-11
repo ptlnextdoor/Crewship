@@ -435,7 +435,7 @@ class Forge:
             r = self.sh(g, cwd=cwd, timeout=60 * mins)
         except subprocess.TimeoutExpired as e:
             # The kill threw away every byte the gate had printed, so the cycle died on the timeout line
-            # alone: reflex1 PRs #12 and #27 closed with no stage header, no error line and no load reading
+            # alone: the cycles of reflex1 PRs #12 and #27 ended with no stage header, no error line and no load reading
             # to tell a hung run from a slow one, and ticket 0012 spent two free recoveries this way.
             # Four lanes share this box's cores and one concurrent run stretches the same suite by 37-54%
             # (Stackness, 364 timed runs, 2026-11-09) while reflex1's gate takes 8-25 min against a 30-min
@@ -1446,7 +1446,8 @@ class Forge:
                 self.recover(quota=True)
                 time.sleep(900)
             except Exception as e:  # keep the loop alive; record and move on
-                self.log(f"cycle error: {type(e).__name__}: {str(e)[:500]}")
+                head = str(e).partition("\n")[0][:500]  # first line only, as fail() does: the rest of a gate timeout is gate output, and this log tail is the steward's {STATE}
+                self.log(f"cycle error: {type(e).__name__}: {head}")
                 self.recover()
                 # Circuit breaker (from Autonomous-Company): consecutive errors back off exponentially.
                 self.errors = getattr(self, "errors", 0) + 1
