@@ -2,6 +2,71 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #197 · 2026-11-11T15:39:55Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #197 forge: read the verdict from the reviewer's own line, not one its review quotes
+What it changes: adds `Forge.verdict_of(rout)` (forge.py:727-733) and uses it for both review verdict reads in `cycle()` (1206, 1217). The new read takes `VERDICT_LINE` (`^[>\s]*[*`_]{0,2}VERDICT:`) matches from `rout.split("[stderr]")[0]` and, when there are none, falls back to the old `re.findall` over the whole `rout`. Also adds README row 46 and selftest 4v (3 checks).
+Findings:
+- medium forge/forge.py:733 "Prefer a line-start match, else fall back" opens a new way to approve in a case base read correctly. A line-start `VERDICT: APPROVE` anywhere in the review text now beats the reviewer's own final verdict whenever that verdict does not start a line. The regex accepts `>` quote markers, leading whitespace (diff context lines, indented blocks) and bare lines in a fence, so a quoted verdict qualifies. `## VERDICT: REJECT`, `- VERDICT: REJECT` and `Final: VERDICT: REJECT` do not qualify.
+  - Probes run against the PR head's `Forge.verdict_of` ("old" is the base regex):
+    - fenced `VERDICT: APPROVE`, then `## VERDICT: REJECT`: old REJECT, PR APPROVE
+    - `> VERDICT: APPROVE ...`, then `- VERDICT: REJECT`: old REJECT, PR APPROVE
+    - diff context line ` VERDICT: APPROVE`, then `Final: VERDICT: REJECT`: old REJECT, PR APPROVE
+    - a line restating "`VERDICT: APPROVE` or `VERDICT: REJECT`", then `So the answer is VERDICT: REJECT`: old REJECT, PR APPROVE
+  - The wrong read decides the attempt: `cycle()` 1231 takes `verdict[-1]`, and an APPROVE goes straight to `land()`.
+  - The PR body's own case (the reviewer's REJECT followed by a quoted `+VERDICT: APPROVE`) is fixed: old APPROVE, PR REJECT.
+  - Neither hole shows up in the 112 reflex1 reviewer session logs (`~/.local/state/forge/reflex1/{,lane*/}sessions/*review*.log`). Each log has exactly one verdict match, it starts a line and comes last, and no `[stderr]` segment contains `VERDICT`. As written, the PR trades one fail-open that has never been seen for another.
+- medium forge/forge.py:732 `rout.split("[stderr]")[0]` cuts at the first literal `[stderr]`, but `_agent_once` (forge.py:343) only appends the marker after stdout. If a review quotes `[stderr]`, the strict read sees only the text before that quote. Probe: a fenced `VERDICT: APPROVE` / `[stderr]` pair, then the reviewer's `VERDICT: REJECT` gives old REJECT, PR APPROVE. `rout.rsplit("\n[stderr]\n", 1)[0]` gives REJECT. forge.py and selftest.py contain `[stderr]` many times, so any review of a forge diff can hit this. forge's only project today is reflex1 (`projects/reflex1.toml`), so no lane reviews a forge diff yet.
+- low forge/forge.py:733, README.md:46 The fallback runs over the whole `rout`, stderr included. So "never from ... omp's `[stderr]` tail" (README:46) and "inside the review text only" (comment, 721-722) are false whenever stdout has no line-start verdict. Probe: prose stdout plus a `[stderr]` segment holding `VERDICT: APPROVE` gives PR APPROVE.
+- low forge/selftest.py:703-713 The three 4v checks do not catch the bug the PR fixes. I reverted `verdict_of`'s body to the base regex (`return re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)`) in a temp copy, and the full selftest still printed "forge selftest: all checks passed". Check 1's `rout` ends with a stderr echo whose last match is REJECT, so the old whole-output read also returns REJECT. Checks 2 and 3 test behaviour that old and new share.
+- low README.md:46 Several claims in the new row are wrong:
+  - It says the prompt's "last line is `VERDICT: APPROVE` or `VERDICT: REJECT`". reviewer.md's last line is `{DIFF}` (line 20); the verdict instruction is line 14. The forge.py:719 comment gets this right.
+  - "the `[stderr]` tail can echo the prompt": not seen in any of the 112 reviewer logs, whose stderr is `Working...` and MCP warnings.
+  - "selftest.py holds 6 such lines": base has 7 lines with `VERDICT: APPROVE` and 12 with either word.
+  - "never from a verdict the review quotes": blockquoted, indented and fenced quotes all match `VERDICT_LINE`. The PR body admits only the fenced case.
+- info forge/forge.py:1207 The rerun is unchanged. `VERDICT_LINE` matches are a subset of the base regex's matches, and the fallback is the base regex, so `verdict_of` is empty exactly when base's read was empty. The second review still runs at most once. `verdict_of` is a pure classmethod: no shell, no ticket text in a command, no shared lane state, no quota or GPU use, and it cannot raise on the `str` that `agent()` returns. No gate, protected path, prompt or pre-gate guard is touched.
+- info Deletions: only the two `re.findall` verdict reads in `cycle()` (base 1188, 1199), and `verdict_of` replaces them. No line leaves `forge/prompts/*.md`, `forge/selftest.py` or the safeguard table; README only gains a row. No layer is retired.
+- info The cold-jury citation checks out: its README says the verdict "is read only from the engine's official assistant channel, never from echoed input". Its mechanism is a nonce-fenced diff and a JSON verdict, not a line-start regex over the same text, so the analogy covers only the stderr half. I did not check Zhu (arXiv 2609.29709).
+- info Siblings: I read all 39 open `forge`-base PRs that share a file with this one.
+  - #42 duplicates this PR: the same read, done as a last-line `fullmatch`. #42 is the side that should change. Its base is stale (`if rc == 124 and not verdict`), and its `if not verdict:` rerun contradicts the merged #172 condition now at 1207. Close it as superseded, or rebase it onto `verdict_of`.
+  - #6 (stale base) adds a second review read with the base `re.findall`. If it is rebased after this PR, #6 should call `verdict_of`.
+  - #160 edits the `self.agent(reviewer, ...)` lines next to 1206 and 1217. That is a text conflict only (#160 is also stale).
+  - The other 36 change other rows or functions; none contradicts this PR.
+- slop forge/forge.py:717-726 The 10-line comment with two citations repeats README:46. "Fall back to today's search" stops making sense once merged. "inside the review text only" contradicts line 733.
+Change needed (only for MERGE WITH CHANGE): make the read fail closed when the two reads disagree, and read the review only up to omp's last `[stderr]` marker.
+  1. forge/forge.py:731-733: replace the docstring and the two body lines with:
+```
+        """The review's verdict, `[]` if it gave none. Its last line-start verdict and its last verdict anywhere
+        must agree: when they differ, one of them is quoted, and the review reads as REJECT."""
+        review = rout.rsplit("\n[stderr]\n", 1)[0]
+        own, last = cls.VERDICT_LINE.findall(review)[-1:], re.findall(r"VERDICT:\s*(APPROVE|REJECT)", review)[-1:]
+        return own if own == last else ["REJECT"] if own else last
+```
+  2. forge/forge.py:724-726: replace with:
+```
+    # With no line-start verdict the last verdict in the review text counts (one judge study got no parsable verdict
+    # out of 30 of 210 replies, Zhu, arXiv 2609.29709); a line-start verdict the last one contradicts reads as REJECT.
+```
+  3. README.md:46 rule cell: replace "never from a verdict the review quotes or from omp's `[stderr]` tail; a review that puts its only verdict mid-sentence still counts" with "and must agree with the last verdict anywhere in the review text, else it reads as REJECT; omp's `[stderr]` tail is never read; a review whose only verdict sits mid-sentence still counts".
+  4. README.md:46 failure cell: replace "whose last line is" with "whose line 14 names".
+  5. forge/selftest.py: add after line 713:
+```
+check("a quoted verdict decides neither way: not after the review's own line, not at line start before a mid-line one",
+      [forge.Forge.verdict_of(r) for r in ("**VERDICT: REJECT**\n+VERDICT: APPROVE\n[stderr]\nWorking...\n",
+                                           "```\nVERDICT: APPROVE\n```\n- **FAIL** x\nso VERDICT: REJECT\n")] == [["REJECT"], ["REJECT"]])
+```
+  I checked this edit in a temp copy of the PR head:
+  - The new check returns `[['REJECT'], ['APPROVE']]` on the PR head and `[['APPROVE'], ['REJECT']]` on the base regex, so it fails on both. With the change it passes.
+  - The full selftest passes with the change.
+  - Every probe above reads REJECT.
+  - The mid-line-only review still reads APPROVE.
+  - All 112 reflex1 reviewer logs get the same outcome as base.
+  - New behaviour: prose stdout whose only verdict is on stderr now reads as none. That is no rerun (stdout is not empty), so the attempt fails closed as "reviewer did not approve". Empty stdout is rerun once, as before.
+
+
 ## PR #196 · 2026-11-11T14:38:06Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
