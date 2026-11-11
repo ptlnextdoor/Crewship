@@ -2,6 +2,46 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #204 · 2026-11-11T22:19:06Z · MERGE WITH CHANGE · risk low · gate pass · left open: fixer could not apply the change (the fixer changed nothing)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #204 forge: the invisible-character guard also refuses the code points that render as a blank
+What it changes: `Forge.INVISIBLE` (forge/forge.py:708-709) now also matches U+00AD, U+034F, U+115F, U+1160, U+3164 and U+FFA0, so `invisible_chars()` refuses them before the gate, after the repair and in `commit_docs()`. The comment above it grows by 3 lines. selftest gains one check covering U+00AD and U+3164.
+Findings:
+- info forge/forge.py:708-709 The change only adds to the guard.
+  - Probe over every code point: the base set is a strict subset of the head set, and the difference is exactly the six.
+  - Emoji carrying U+FE0F and U+200D still pass.
+  - Callers are unchanged: cycle() before the gate (:1173), after the repair (:1215), and commit_docs() (:1388). Their fail paths are the existing `fail()` and the turn discard.
+  - Untouched: the gate, the reviewer, protected paths, lane state and the claim race, recover(), discard_strays(), quota fallback, timeouts, PR and merge, GPU spend.
+  - No new text reaches a shell (`rev` is unchanged). No prompt grows.
+- info verification: PR base 524b8658 and local HEAD 144902e9 carry the same forge.py/selftest.py blobs (fa657307/74bcf053).
+  - Base: selftest gives 189 ok, rc 0. Head: 190 ok, rc 0. The only difference is the new check.
+  - Negative control: head selftest run against base forge.py gives `FAIL blank-rendering code points are refused: []`.
+  - The body's false-positive measurement holds. On reflex1 origin/main (2c39a79, 627 commits), 0 added lines and 0 tracked files contain any of the six. This repo's HEAD has 0 such files.
+- none deletions: the diff deletes no line from forge/prompts/*.md, forge/selftest.py or the README safeguard table. It modifies two forge.py lines. The first is a comment line, and its U+200D/variation-selector exclusion text is kept word for word. The second is the regex, which became a superset (above).
+- low forge/README.md:96 The safeguard row lists the refused set code point by code point, and the PR does not update it. After merge the table does not mention the six the code now refuses. That includes commit_docs(), where one of them discards a whole planner or steward turn.
+- low forge/forge.py:703-704 "The second row is the rest of the characters that render as nothing or as a blank" is false.
+  - Probed on head, these all still pass `INVISIBLE`:
+    - Cf characters that render as nothing: U+180E MONGOLIAN VOWEL SEPARATOR, U+206A-206F, U+1D173-1D17A and U+1BCA0-1BCA3.
+    - U+2800 BRAILLE PATTERN BLANK and U+17B4/U+17B5.
+    - U+E0100-E01EF (variation selectors 17-256, which no emoji uses).
+    - U+061C ARABIC LETTER MARK, a bidi mark like the covered U+200E/F.
+  - This is not a weakening, because all of them passed before too. But the comment tells the next reader the class is closed. The PR body makes the same claim.
+- nit forge/selftest.py:214-219 The fixture carries only 2 of the 6 (U+00AD, U+3164). Dropping U+034F, U+115F, U+1160 or U+FFA0 from the class would leave selftest green. I checked those four with a direct regex probe instead.
+- nit forge/forge.py:1175,1217 The fail messages still label the finding "(bidi controls, zero-width or tag characters)", so a soft hyphen now fails under that label. `{bad}` names the code point, so the builder can still find it.
+- info siblings: 26 other open PRs on `forge` touch forge.py or selftest.py. I grepped all 29 sibling diffs, and none edits `INVISIBLE` or this selftest case.
+  - #181 and #196 add an `invisible_chars(wt)` call in `land()` and inherit the six. No contradiction.
+  - #196 rewrites README row 96 to add the land() point. The README edit below anchors on "or a Unicode tag (U+E0000-E007F)", which both versions of the row keep. Whichever PR lands second resolves a text conflict only.
+  - #140 shows row 96 as context only.
+  - No duplicates.
+- none slop: the edit is focused. It adds no try/except and no prompt text.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/README.md:96: after "or a Unicode tag (U+E0000-E007F)", insert `, or a code point that renders as a blank (soft hyphen U+00AD, combining grapheme joiner U+034F, Hangul fillers U+115F/U+1160/U+3164/U+FFA0)`.
+2. forge/forge.py:703: replace "The second row is the rest of the characters that render as" with "The second row is six more of the characters that render as". On :704, replace "nothing or as a blank:" with "nothing or as a blank (not all: U+180E, U+206A-206F, U+2800 and U+E0100-E01EF still pass):".
+
+
 ## PR #203 · 2026-11-11T21:17:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
