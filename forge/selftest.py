@@ -864,6 +864,29 @@ with tempfile.TemporaryDirectory() as d:
     posted = (Path(d) / "pr30.comment.md").read_text() + (Path(d) / "pr30.close.md").read_text()
     check("reviewctl's audit comment and close note carry no key",
           "rpa_ABC" not in posted and posted.count("[runpod redacted]") == 2, posted[:300])
+    # 9c. The audit session runs at yolo as the owner with gh authenticated, on a prompt that carries PR text
+    # anyone with a GitHub account can write here. "Do not merge, close, comment on, or push anything" is a
+    # sentence in that prompt; this is the check behind it - a PR the session moved is left to the owner, not
+    # gated and not merged on the verdict the same session wrote.
+    calls.clear()
+    acted: list[str] = []
+    rc.previous = lambda n: None
+    rc.open_prs = lambda: [{"number": 31, "headRefName": "b", "files": [{"path": "forge/forge.py"}]}]
+    rc.audit = lambda pr: (calls.append("audit"), {"pr": 31, "sha": "cafecafecafe", "verdict": "MERGE",
+                                                   "risk": "low", "audit": "a", "at": "t"})[1]
+    rc.gate = lambda pr: (calls.append("gate"), (True, "ok"))[1]
+    rc.mark = lambda n, v: acted.append(f"{v['gate']}|{v['action']}")
+    rc.sh = lambda cmd, **k: (calls.append(cmd.split()[1] + " " + cmd.split()[2]) if "gh pr merge" in cmd else None,
+                              subprocess.CompletedProcess(cmd, 0, "MERGED cafecafecafe" if "--json state," in cmd else "newbase", ""))[1]
+    rc.run()
+    check("a PR the audit session merged itself is neither gated nor merged by reviewctl",
+          calls == ["audit"] and acted == ["skipped|left open: the PR is merged since the audit started (owner decides)"],
+          f"{calls} {acted}")
+    calls.clear(), acted.clear()
+    rc.sh = lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "OPEN cafecafecafe" if "--json state," in cmd else "newbase", "")
+    rc.run()
+    check("a PR standing where the audit found it is gated and decided as before",
+          calls == ["audit", "gate"] and acted == ["pass|merged"], f"{calls} {acted}")
 
 # 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
 # stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the

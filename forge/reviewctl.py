@@ -98,6 +98,23 @@ def audit(pr: dict) -> dict:
     return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now()}
 
 
+def moved(pr: int, sha: str) -> str:
+    """Did the audit session act on the PR instead of only writing its verdict? The prompt forbids merging,
+    closing and pushing, and this is the mechanism behind that sentence: the session runs at yolo as the owner,
+    with gh authenticated, on text any GitHub account can write in a comment on this public repo. Prompt-level
+    hygiene alone leaves an unsafe-action rate in the tens of percent; an execution-time authorization check is
+    what closes it (arXiv 2607.10490, 240 attack instances). Empty when the PR is where the audit found it."""
+    r = sh(f"gh pr view {pr} -R {GH_REPO} --json state,headRefOid --jq '.state + \" \" + .headRefOid'")
+    state, _, head = r.stdout.strip().partition(" ")
+    if r.returncode or not head:
+        return ""  # unreadable is not evidence; the gate and the verdict rules still decide
+    if state != "OPEN":
+        return f"the PR is {state.lower()} since the audit started"
+    if head != sha:
+        return f"the PR head moved during the audit ({sha[:12]} -> {head[:12]})"
+    return ""
+
+
 def gate(pr: dict) -> tuple[bool, str]:
     """Merge the PR into base in a scratch worktree, then run the checks *base* defines.
 
@@ -213,13 +230,16 @@ def run() -> None:
         v = audit(pr)
         v["base"] = base
         bad = touches_protected(pr)
-        ok, gout = gate(pr)
-        v["gate"] = "pass" if ok else "fail"
+        drift = moved(n, v["sha"])
+        ok, gout = (False, "") if drift else gate(pr)
+        v["gate"] = "skipped" if drift else ("pass" if ok else "fail")
         files = [f["path"] for f in pr.get("files", [])]
         prompt_only = files and all(f.startswith("forge/prompts/") for f in files)
         # Prompt-only changes are a git revert away; code changes at medium risk wait for the owner.
         landable = v["risk"] in ("none", "low") or (prompt_only and v["risk"] == "medium")
-        if not ok:
+        if drift:
+            v["action"] = f"left open: {drift} (owner decides)"
+        elif not ok:
             v["action"] = "left open: gate failed"
         elif bad:
             v["action"] = f"left open: touches {bad} (owner decides)"
