@@ -81,6 +81,24 @@ def rate_interval(m: int, n: int) -> str:
     return f"{m}/{n} ({max(0.0, 100 * (mid - half)):.0f}-{100 * (mid + half):.0f}%)"
 
 
+def no_push(env: dict[str, str]) -> dict[str, str]:
+    """`env` plus a `remote.origin.pushurl` that is not a URL, for the sessions forge starts.
+
+    Every role prompt says the session must not push, and this shell's gh login can push `origin main`
+    directly; an instruction and the text that attacks it share one substrate (Parallax, arXiv 2604.12986:
+    prompt-level guardrails stopped none of 280 cases once the reasoning was compromised), so take the
+    capability as well. With this set `git push [--force] origin ...` fails locally - `git:
+    'remote-forge-pushes-not-sessions' is not a git command`, rc 128 - before any network or credential.
+    Reads are untouched: fetch, pull, ls-remote and clone use the fetch url. So is forge's own push:
+    sh() runs with self.env, which carries neither key. Not a boundary - `git -c`, `git push <url>` and
+    `gh` still reach origin - it removes the command a session reaches for by default. The index is read
+    off the env rather than fixed, so a later key added to self.env does not overwrite this one.
+    """
+    n = int(env.get("GIT_CONFIG_COUNT", 0))
+    return {**env, "GIT_CONFIG_COUNT": str(n + 1), f"GIT_CONFIG_KEY_{n}": "remote.origin.pushurl",
+            f"GIT_CONFIG_VALUE_{n}": "forge-pushes-not-sessions://"}
+
+
 class Forge:
     def __init__(self, cfg_path: Path, lane: int = 1):
         self.cfg_path = cfg_path
@@ -321,7 +339,8 @@ class Forge:
             # stdin from /dev/null: `omp -p` waits for EOF on a piped stdin (startup phase readPipedInput) before
             # it reads the prompt, so a loop started over `ssh host forge.py run` would hang every session.
             p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 start_new_session=True, env={**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
+                                 start_new_session=True,
+                                 env=no_push({**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)}))
             try:
                 so, se = p.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
