@@ -631,8 +631,8 @@ class Forge:
         the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here)."""
         text = ticket_text.split("\n## forge")[0].lower()
         skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
-        # shortcut: "remove the old test" anywhere in the ticket waives both counts, "drop the assert" (within three
-        # words) only the assertion count; moving a test between files nets to zero and passes; delete one, add
+        # shortcut: "remove the old test" anywhere in the ticket waives every count, "drop the assert" (within three
+        # words) both assertion checks; moving a test between files nets to zero and passes; delete one, add
         # another nets to zero too, which step 3 still reads; a line that says `assert` in a comment counts (0 false
         # positives over reflex1's 627).
         drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
@@ -659,12 +659,16 @@ class Forge:
             out.append(f"{-asserts} fewer assertion lines than the branch point")
         # A test that asserts nothing passes whatever the code does, and it counts as a test everywhere else: in
         # the gate's `test result:` line, in reviewer step 3's count and in a `## Done when` rerun. Agents write
-        # them (Ördög's Constrained Tests, via Fowler 2026-11-11: an agent can "write tests with no assertions,
+        # them (Ördög's Constrained Tests, via martinfowler.com (Vaccari) 2026-11-11: an agent can "write tests with no assertions,
         # or weak assertions, thus faking a high test coverage score"), and the 178-paper review arXiv 2511.21382
         # puts the assertion, not the input, at the centre of what LLM-written tests get wrong. Added lines, not
         # the net: one assertion added anywhere in the diff passes, so a reformatted or rewritten assertion beside
-        # a new test does not fail the attempt. A test whose only check is `should_panic` or `pytest.raises` would
-        # read as assertion-free; reflex1 has neither in 627 commits, and the ticket saying so waives it.
+        # a new test does not fail the attempt.
+        # shortcut: a test whose check lives in a helper it calls reads as assertion-free (reflex1's parity.rs and
+        # vit_parity.rs: 7 of 77 tests are one-line calls into an asserting helper), as do `#[should_panic]`,
+        # `prop_assert*`, `pytest.raises` and a `?`/`unwrap`-only test, and only "remove/delete/drop ... test" or
+        # "... assert" in the ticket waives it, so a ticket that adds one loses an attempt; count the asserting
+        # helpers an added test calls once an attempt fails on it.
         if net > 0 and not added and not assert_ok:
             out.append(f"{net} added test functions and no added assertion line")
         return out
