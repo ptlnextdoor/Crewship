@@ -2,6 +2,38 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #200 · 2026-11-11T18:42:51Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #200 forge: test-tampering guard counts column-0 assertions
+What it changes: `Forge.ASSERT_MARK` goes from `^([-+])[^-+].*\b(debug_)?assert\w*` to `^([-+])(?![-+]).*\b(debug_)?assert\w*`, with a 5-line comment above it (forge.py:616-621 at the PR head). Selftest 2e also strips two column-0 asserts from a new `chk.py`, and its refusal and "assert the ticket keeps" checks now expect `4 fewer assertion lines` instead of 2 (selftest.py:170-181).
+Findings:
+- ok forge/forge.py:621 This fixes a real bypass, and I reproduced it.
+  - `[^-+]` consumes the first content character. A diff line like `+assert f(1) == 2` then has no `\bassert` left for `.*` to find, so stripping column-0 assertions netted to zero.
+  - The new pattern matches a superset of the old one. Any line the old one matched has a second character outside `-+`, so the lookahead passes and `.*` takes that character. The only lines added are those whose only assert token starts at content column 0.
+  - Headers are still excluded. `--- a/…` and `+++ …` fail the lookahead, and `+++ ` is caught first by the `startswith` branch (:641). `@@`, `diff --git`, `index`, `\ No newline` and `Binary files` start with other characters.
+  - `ASSERT_MARK` has one caller: `test_tampering()` (:650). That function is called before the builder's gate (:1126) and before the repair's gate (:1168). Ticket handling, prompts, protected paths, lane state, `recover()`/`discard_strays()`, timeouts and PR flow are untouched. The regex is anchored and linear in line length, so there is no new ReDoS on builder-controlled lines.
+- ok forge/forge.py:616-620, PR body: I checked the numbers against `~/Dev/reflex1`.
+  - Origin/main has 627 commits. 13 of the 91 commits from `git rev-list origin/main -- '*.py' '*.rs'` count differently (first-parent diff, run through the same SKIP/TEST/ASSERT elif chain). `132e17ec1` gives 0 under the old regex and 4 under the new one.
+  - The tree has 15 column-0 assert lines (`tools/perturb.py`, `tools/dagger.py`, …). I count 554 assertion-ish lines where the body says 550; that number is only in the body.
+  - Every count change raises the count: across all 626 commits with a parent, none has a net loss under either regex. The docstring's and README row 36's "0 commits with a net loss of `assert` lines in 627 commits" still hold under the new regex. The new matches would have caused no false refusals in history, so no extra quota burn from failed attempts.
+- info forge/forge.py:621 Column-0 `+assert` lines now also count as additions, so they can offset removed indented asserts. This is not a new bypass. Padding with indented asserts or `# assert` comment lines already netted the same way (the shortcut comment at :633-636 says so). Reviewer steps 3 and 4 (reviewer.md:6-7) still cover a rewritten or padded test.
+- ok forge/selftest.py:170-181 The deleted lines retire no layer. The two deleted checks (`a test stripped of its assertions is refused` and `an assert the ticket keeps does not waive its removal`, both `== ["2 fewer …"]`) pinned two things: an indented Rust assert strip is refused, and a ticket that merely mentions an assert does not waive it. Their replacements in the same place require exactly `["4 fewer …"]`, which is 2 indented Rust asserts plus 2 column-0 Python ones, so the old property is still pinned. Mutation runs on an isolated copy of the PR head:
+  - Restoring the old regex fails exactly those two checks, which matches the body's negative-control claim.
+  - A column-0-only regex (`^([-+])(?![-+])\b(debug_)?assert\w*`, no indented match) fails the same two.
+  - The full PR-head selftest prints `forge selftest: all checks passed`. `chk.py` stays on the fixture's main, unchanged, through the later resets.
+  - The renamed check string is referenced nowhere else (grep).
+  - The deleted 2e comment lines are reworded in place, keeping the same claims plus column 0.
+- nit forge/forge.py:616-620 The 5-line comment narrates the replaced pattern and includes tallies (13/91, 15 lines) that duplicate the PR body and will go stale. One line ("lookahead, not a class: a class eats column 0, so `+assert x` went uncounted; `---`/`+++` stay out") would carry the why. The file's evidence-in-comment style (docstring at :624-630, `INVISIBLE` comment at :660-664) does the same, so this is not blocking.
+- info siblings: I checked all 37 other open PRs on `forge` that touch forge.py or selftest.py.
+  - None changes `ASSERT_MARK`, `SKIP_MARK`/`TEST_MARK` or selftest case 2e.
+  - #136, #181 and #196 add `test_tampering()` calls in `land()` after a conflict resolution, and #136/#196 edit README row 36. They inherit this regex and do not contradict or duplicate it.
+  - The only hunks near these line numbers (#111 and #83 in forge.py, #25 in selftest.py) are on older bases and in other functions (`pr_close`/`pr_merge`, `land`, the conflict-resolution stub).
+  - The PR body and comments hold no HTML comments. The only comment is Copilot's quota notice.
+
+
 ## PR #199 · 2026-11-11T17:43:02Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
