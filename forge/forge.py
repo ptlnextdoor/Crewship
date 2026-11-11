@@ -1145,15 +1145,11 @@ class Forge:
                 verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
             review = rout.split("[stderr]")[0].strip()
             rev_by = self.last_model.get(reviewer, self.cfg["roles"][reviewer]["model"])
-            # The cross-family pick above reads the *configured* reviewer model, but every role's chain falls
-            # back inside its own vendor first (reflex1: reviewer_alt -> claude-fable-5-1), so when the other
-            # vendor is out of quota the review runs same-vendor as the builder and the PR carried a verdict
-            # the README calls cross-vendor. Two models of one family agreeing is a shared prior, not an
-            # independent check (arXiv 2610.18427 measures self-judged reuse swinging up to 69.6 points).
-            # Name it where the verdict is read; what the verdict decides is unchanged.
+            # The pick above reads the *configured* reviewer model; a review role's fallback can land in the builder's vendor
+            # (reflex1: reviewer_alt gpt-6-astra -> claude-fable-5-1). Name that where the verdict is read; the verdict is unchanged.
             kin = "" if rev_by.split("/")[0] != built_by.split("/")[0] else (
                 f"\n\n**same-vendor review**: built by `{built_by}`, reviewed by `{rev_by}`, both from "
-                f"`{rev_by.split('/')[0]}` after a quota fallback. The cross-family check did not run.")
+                f"`{rev_by.split('/')[0]}`. The cross-family check did not run.")
             self.pr_comment(self.pr, f"**review by `{rev_by}` of {reviewed}**{kin}\n\n{review[-12000:]}")
             # The reviewer may restore files from origin/main to run the diff's tests against the old code (step 3).
             # A leftover would stop the rebase in land(), and the conflict session's `git add -A` would commit it.

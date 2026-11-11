@@ -1291,8 +1291,8 @@ with tempfile.TemporaryDirectory() as d:
     check("an unreadable omp stamps '?' instead of failing the cycle", f.harness == "?", repr(f.harness))
     forge.OMP = real_omp
 
-    # 21b. The cross-family pick reads the *configured* reviewer model, while each role's chain falls back
-    # inside its own vendor first, so a quota fallback can put builder and reviewer in one family with nothing
+    # 21b. The cross-family pick reads the *configured* reviewer model, while a review role's fallback can land
+    # in the builder's vendor, so a quota fallback can put builder and reviewer in one family with nothing
     # saying so (reflex1 routes both reviewer roles to claude-fable-5-1 when their first model is out).
     (repo / "tickets/0003-v.md").write_text("status: open\n\n# v\n")
     git("add -A", repo); git("commit -qm t3", repo); git("push -q origin main", repo)
