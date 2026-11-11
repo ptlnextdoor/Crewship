@@ -297,6 +297,7 @@ class Forge:
 
     def _agent_once(self, role: str, model: str, thinking: str, prompt: str, cwd: Path, timeout_min: int) -> tuple[int, str]:
         timeout = 60 * timeout_min
+        t0 = time.monotonic()
         out = self.log_path(role)
         steer = self.repo / "STEERING.md"
         if steer.exists() and steer.read_text().strip():
@@ -345,6 +346,10 @@ class Forge:
         except OSError as e:
             text, rc = f"failed to start agent: {e}", 127
         out.write_text(text)
+        # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
+        # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
+        # output tokens per turn are in the omp session file under out.with_suffix("").
+        self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
 
     # ---------- budget ----------
