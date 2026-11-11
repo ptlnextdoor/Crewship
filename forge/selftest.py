@@ -127,6 +127,16 @@ with tempfile.TemporaryDirectory() as d:
     f.osv = lambda pkgs: {("evil", "0.1.0"): ["RUSTSEC-2026-0001", "RUSTSEC-2026-0002"]} if ("evil", "0.1.0") in pkgs else {}
     got = f.vulnerable_deps(repo, "axum, evil; RUSTSEC-2026-0001 is accepted here")
     check("naming one advisory id waives only that id", got == ["evil 0.1.0 (RUSTSEC-2026-0002)"], str(got))
+    # 2b''. A Cargo.lock that does not parse reads as "no new dependency" to every guard that walks it: block
+    # the attempt instead, naming the revision, for both dependency guards.
+    (repo / "Cargo.lock").write_text(lock("[[package\nname = broken\n"))
+    git("add -A", repo); git("commit -qm 'broken lock'", repo)
+    got = f.unrequested_deps(repo, "axum, evil and a serde-derive bump")
+    check("an unparsable Cargo.lock at HEAD blocks instead of passing clean",
+          len(got) == 1 and got[0].startswith("Cargo.lock at HEAD does not parse as TOML"), str(got))
+    got = f.vulnerable_deps(repo, "axum, evil and a serde-derive bump")
+    check("the advisory guard reports the same unreadable lock", len(got) == 1 and "does not parse as TOML" in got[0], str(got))
+    git("reset -q --hard HEAD~1", repo)
     git("checkout -q main", repo); git("checkout -q -b work2", repo)
     check("no Cargo.lock change is no finding", f.unrequested_deps(repo, "") == [])
     # 2d. A test switched off (`#[ignore]`, `pytest.skip`) or dropped is refused before the gate unless the ticket
