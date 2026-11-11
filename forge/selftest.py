@@ -211,6 +211,12 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text("// safe\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm clean", repo)
     check("removing a hidden code point is no finding", f.invisible_chars(repo) == [])
+    # The code points that render as a blank rather than as nothing: a soft hyphen inside a word and a Hangul
+    # filler, both of which a reviewer reads as ordinary text.
+    (repo / "NOTES.md").write_text("soft\u00adhyphen\n\u3164 filler\n")
+    git("add -A", repo); git("commit -qm blank", repo)
+    check("blank-rendering code points are refused", f.invisible_chars(repo) == ["NOTES.md: U+00AD", "NOTES.md: U+3164"],
+          str(f.invisible_chars(repo)))
     (repo / "NOTES.md").write_text("++ done \U000e0041\n")
     git("add -A", repo); git("commit -qm plus", repo)
     check("an added line that reads as a +++ header is still searched", [g[-7:] for g in f.invisible_chars(repo)] == ["U+E0041"], str(f.invisible_chars(repo)))

@@ -700,9 +700,13 @@ class Forge:
     # Code points a reader does not see and a model does: bidi controls (Trojan Source, Boucher and Anderson 2021:
     # source that reads one way to the reviewer and another to the compiler), zero-width characters and Unicode
     # tags (Reverse CAPTCHA, Graves 2026, arXiv 2603.00164: models follow instructions encoded in them, Anthropic
-    # models through tags, more so with tools on). U+200D (the emoji joiner) and variation selectors are left out:
+    # models through tags, more so with tools on). The second row is the rest of the characters that render as
+    # nothing or as a blank: the soft hyphen, the combining grapheme joiner, and the Hangul fillers, which are
+    # what an injection toolkit reaches for once the zero-width range is refused (U+3164 is a legal identifier
+    # character in some languages). U+200D (the emoji joiner) and variation selectors are left out:
     # emoji sequences carry them (U+26A0 U+FE0F, U+200D joins); reflex1 main has neither set in a text file (627 commits).
-    INVISIBLE = re.compile(r"[\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
+    INVISIBLE = re.compile(r"[\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f"
+                           r"\u00ad\u034f\u115f\u1160\u3164\uffa0]")
 
     def invisible_chars(self, cwd: Path, rev: str = "origin/main...HEAD") -> list[str]:
         """Files whose added lines carry a code point no reader sees, with the code point. rustc refuses bidi
