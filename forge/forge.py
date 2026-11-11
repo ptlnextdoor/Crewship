@@ -971,7 +971,7 @@ class Forge:
             bad = self.touched_protected(wt, "origin/main")
             if bad:
                 return f"resolving the conflict with main edited protected gate/ticket/harness-config paths {bad}; not allowed."
-            bad = self.secrets(wt)
+            bad = self.secrets(wt) + self.msg_secrets(wt)
             if bad:
                 return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
@@ -1297,7 +1297,7 @@ class Forge:
         here = " ".join(p for p in paths.split() if (self.repo / p).exists())
         if here:
             self.sh(f"git add -A {here}")
-        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}")
+        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}") + self.msg_secrets(self.repo, f"{base}..HEAD")
         if bad:
             self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
             self.sh(f"git reset -q --hard {base} && git clean -qfd")
