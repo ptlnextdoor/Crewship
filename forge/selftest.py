@@ -240,6 +240,22 @@ with tempfile.TemporaryDirectory() as d:
     check("a gate that ran no test is a FAIL", not ok and gout.startswith("gate: exit 0 but every test result line reads 0 passed"), gout[:120])
     (repo / "gate.sh").write_text("#!/bin/sh\necho 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\necho 'test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'\n")
     check("a doc-test binary at 0 passed beside one that ran is a PASS", f.gate(repo)[0])
+    # 2h. A gate killed by the timeout keeps what it printed: the partial output reaches the PR comment the
+    # cycle's handler posts and the log file, instead of the cycle dying on the timeout line alone (reflex1
+    # PRs #12 and #27). The message says the code was not judged, so a timeout is never read as a verdict.
+    (repo / "gate.sh").write_text("#!/bin/sh\necho '== test'\necho 'error: still running'\nsleep 30\n")
+    f.cfg.setdefault("limits", {})["gate_timeout_min"] = 1 / 60
+    try:
+        f.gate(repo)
+        timeout_msg = ""
+    except RuntimeError as e:
+        timeout_msg = str(e)
+    f.cfg["limits"].pop("gate_timeout_min")
+    tlog = f.home / "sessions"
+    check("a timed-out gate keeps its output, its load reading and says nothing was judged",
+          "timed out after" in timeout_msg and "loadavg" in timeout_msg and "the code was not judged" in timeout_msg
+          and "== test\nerror: still running\n" in timeout_msg
+          and any("error: still running" in p.read_text() for p in tlog.glob("*-gate*.log")), timeout_msg[:200])
     git("checkout -q -- gate.sh", repo)
     # 3. A ticket's status round-trips, and an interrupted ticket is not charged an attempt.
     t = repo / "tickets/0001-x.md"
