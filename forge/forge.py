@@ -430,8 +430,34 @@ class Forge:
     # ---------- the cycle ----------
     def gate(self, cwd: Path) -> tuple[bool, str]:
         g = self.cfg.get("gate", "./gate.sh")
-        r = self.sh(g, cwd=cwd, timeout=60 * self.cfg.get("limits", {}).get("gate_timeout_min", 30))
+        mins = self.cfg.get("limits", {}).get("gate_timeout_min", 30)
+        try:
+            r = self.sh(g, cwd=cwd, timeout=60 * mins)
+        except subprocess.TimeoutExpired as e:
+            # The kill threw away every byte the gate had printed, so the cycle died on the timeout line
+            # alone: reflex1 PRs #12 and #27 closed with no stage header, no error line and no load reading
+            # to tell a hung run from a slow one, and ticket 0012 spent two free recoveries this way.
+            # Four lanes share this box's cores and one concurrent run stretches the same suite by 37-54%
+            # (Stackness, 364 timed runs, 2026-11-09) while reflex1's gate takes 8-25 min against a 30-min
+            # cap, so load alone reaches it. run() hands the partial output back raw, and a stream the
+            # process never wrote is None.
+            part = "".join(s.decode(errors="replace") if isinstance(s, bytes) else s for s in (e.stdout, e.stderr) if s)
+            load = Path("/proc/loadavg")
+            raise RuntimeError(f"{g} timed out after {mins} min at loadavg "
+                               f"{load.read_text().split()[0] if load.exists() else '?'}; the code was not judged\n"
+                               f"{self.gate_tail(part)}") from None
         out = r.stdout + r.stderr
+        tail = self.gate_tail(out)
+        ok = r.returncode == 0
+        # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
+        # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
+        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307).
+        passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
+        if ok and passed and not any(int(n) for n in passed):
+            ok, tail = False, "gate: exit 0 but every test result line reads 0 passed; no test ran\n" + tail
+        return ok, tail
+
+    def gate_tail(self, out: str) -> str:
         # The whole output goes to a file beside the session logs and the tail below names it, so the repair
         # session reads the lines the cut dropped instead of rerunning the gate: the full output behind a
         # placeholder, restored on demand (DTOC, Chaturvedi et al. 2026: fewer steps, higher solve rate on
@@ -446,14 +472,7 @@ class Forge:
         keys = [l for l in cut.splitlines() if re.match(r"== |error(\[E\d+\])?:|test \S+ \.\.\. FAILED|thread '.*' panicked|gate: ", l)]
         if cut:  # 800 + a 150-character note + 5,000: fits pr_close()'s 6,000-character comment with the failure line
             tail = ("\n".join(keys)[:800] + "\n" if keys else "") + f"... [{len(cut):,} characters above cut; the full output is at {log}]\n" + tail
-        ok = r.returncode == 0
-        # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
-        # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
-        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307).
-        passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
-        if ok and passed and not any(int(n) for n in passed):
-            ok, tail = False, "gate: exit 0 but every test result line reads 0 passed; no test ran\n" + tail
-        return ok, tail
+        return tail
 
     # Files omp loads into every later session's context before its first turn (omp docs, context-files.md):
     # standalone CLAUDE.md/GEMINI.md and the editor rule files anywhere on the walk up, and the config
