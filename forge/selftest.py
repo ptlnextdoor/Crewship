@@ -51,6 +51,7 @@ for cfg in sorted((ROOT / "projects").glob("*.toml")):
     for r, v in roles.items():
         chain = [v["model"]] + v.get("fallback", [])
         check(f"{cfg.name}: {r} models are provider/model", all("/" in m for m in chain), str(chain))
+        check(f"{cfg.name}: {r} thinking is a level omp takes", v.get("thinking", "high") in forge.THINKING, str(v.get("thinking")))
     check(f"{cfg.name}: lanes >= 1", int(c.get("lanes", 1)) >= 1)
     check(f"{cfg.name}: gate is not editable by builders",
           any(p in str(c.get("protected_paths", [])) for p in ("gate.sh",)))
@@ -65,6 +66,13 @@ with tempfile.TemporaryDirectory() as d:
     cfg = Path(d) / "c.toml"
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg)
+    bad_cfg = Path(d) / "bad.toml"
+    bad_cfg.write_text(cfg.read_text().replace('[roles.builder]\nmodel="a/b"', '[roles.builder]\nmodel="a/b"\nthinking="xhight"'))
+    try:
+        forge.Forge(bad_cfg); refused = ""
+    except SystemExit as e:
+        refused = str(e)
+    check("a thinking level omp does not take stops the loop at config load", "xhight" in refused and "xhigh," in refused, refused or "accepted")
     (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n# tampered\n")
     git("add -A", repo); git("commit -qm t", repo); git("branch -f other", repo)
     git("checkout -q -b work main", repo)

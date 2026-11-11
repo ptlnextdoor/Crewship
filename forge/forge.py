@@ -47,6 +47,10 @@ OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 # "MUST read skill://<name> first" rule) from every session; no forge prompt names a skill.
 OMP_CONFIG = Path(__file__).with_name("omp.yml")
 UTC = dt.timezone.utc
+# The levels `omp --thinking=` takes (`omp --help`, omp 18.12.6, 2026-11-11). An unknown one is refused before any
+# request (`Error: Invalid --thinking value`, rc 2, ~2 s); agent() returns that from the role's first model without
+# trying its fallback, so every attempt reaching the role is charged to its ticket (a review only after a full build).
+THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto")
 # gpu.py appends one line per terminated pod here and refuses a run whose estimated cost exceeds
 # GPU_BUDGET_USD minus this sum; the planner is told the same number so it stops writing GPU tickets
 # the builder cannot run (reflex1: $14.88 of $15 spent, 85 of 140 tickets name a GPU).
@@ -82,6 +86,10 @@ class Forge:
         self.cfg_path = cfg_path
         self.cfg = tomllib.loads(cfg_path.read_text())
         c = self.cfg
+        bad = {r: v.get("thinking") for r, v in c.get("roles", {}).items() if v.get("thinking", "high") not in THINKING}
+        if bad:
+            raise SystemExit(f"{cfg_path}: thinking level {bad} is not one omp takes ({', '.join(THINKING)}); "
+                             "every session for that role would fail before it starts and be charged to its ticket.")
         self.lane = lane
         self.lanes = int(c.get("lanes", 1))
         base_repo = Path(c["repo"]).expanduser()
