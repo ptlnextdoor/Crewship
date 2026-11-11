@@ -2,6 +2,25 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #192 · 2026-11-11T10:28:20Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #192 forge: name the planner and steward model in the commit they land
+What it changes: `plan()` and `steward()` now add `(planner: <model>)` or `(steward: <model>)` to the subject `commit_docs()` commits, using `last_model[role]`. `commit_docs()` now passes that message through `shlex.quote` instead of `'{msg}'`. Selftest 4h adds one check that reads the steward subject back from origin/main.
+Findings:
+- ok forge/forge.py:1331 Injection. The message is built from two literals and a `last_model` value. `agent()` (forge.py:244, 271) only sets that value to an entry of the role's `model`/`fallback` chain in projects/*.toml (reflex1.toml:29,32,61,63). No ticket text and no agent output reaches it. For a message with no `'`, `shlex.quote` produces the same `'...'` word as before. Smoke: I ran the real `plan()` on the PR-head forge.py (origin/forge c10ca88a + the diff, in a scratch copy) against a bare origin, with a stub planner whose model id was ``x/$(touch PWNED)'`touch PWNED2` ``. The subject landed on origin/main as that exact literal and no file was created. With `anthropic/claude-fable-5-1` it landed as `forge: planner refills the ticket queue (planner: anthropic/claude-fable-5-1)`, and the new ticket reached origin/main in both runs.
+- ok forge/forge.py:800,1304 The value is always current. `agent()` writes `last_model[role]` before every return and raises `QuotaExhausted` when no model ran (271-273). An exhausted chain therefore never reaches `commit_docs()`, and `"unknown"` can only appear with a stubbed agent. `last_model` lives in each lane's own process. `plan()` holds `plan.lock`. `steward()` runs on lane 1 only (1435, 1443). The `planner` and `steward` keys were already written by `agent()` before this PR. `record()` reads only `builder*` keys (1293), and `cycle()` clears the dict (1064). So there is no new shared state, no tally change, no quota or GPU spend, and no new exception path (`dict.get` and `shlex.quote` on a str cannot raise).
+- ok Subject consumers. No code parses these two subjects. `main_gated()` (forge.py:749-755) reads a subject only on a 2-parent merge, and it walks other commits by their file list. The planner, builder and steward prompts read `git log --oneline` only as context. The old text is still the prefix, so `git log --grep 'forge: steward update'` still matches. The only new text in later sessions' context is a model id from the config, which is not an agent-writable channel.
+- ok Gate, reviewer and protected paths are untouched. Nothing else in `commit_docs()` changes: staging, the `secrets()`/`invisible_chars()`/`msg_secrets()` scan and discard, or `discard_strays()`. Nothing is deleted from forge/prompts/*.md, forge/selftest.py or the README safeguard table. The 3 deleted forge.py lines are each replaced in place.
+- ok forge/selftest.py:400,407 The new check does test the change. Against base forge.py: `FAIL steward commit names the model that ran: forge: steward update`. At the PR head the full selftest gives 172 ok, rc 0. The stub's `a/b-5'1` would break the unquoted form, so reverting only `shlex.quote` would also fail 4h's commit checks. That case was not run separately. The plan() path has no selftest; the smoke above covers it.
+- info Siblings. 35 open PRs on `forge` touch forge.py or selftest.py. None edits plan()'s or steward()'s `commit_docs` call, `commit_docs()`'s commit line, or the selftest 4h checks. #160 (`avoid=` on `agent()`) and #145 (retry-budget fallover) change `agent()`, but neither adds or removes the `self.last_model[role] = model` line, so both compose with this PR. No contradiction or duplicate.
+- nit forge/forge.py:798-799 "this loop's one record of which model shaped the next cycles" overstates the gap. `_agent_once()` already logs `agent planner model=<model>:<thinking>` to the lane log for every session (forge.py:309). The commit is the durable, off-box record, not the only one. The PR body's "that join is impossible" has the same problem.
+- nit forge/forge.py:1329-1330, forge/selftest.py:398-399 The word "now" narrates the change. The id also comes from the project toml's role chain (`agent()`:244); omp's catalog only rejects ids it lacks (268), it does not supply them. Not blocking.
+- info The rationale in the PR body (WorkflowArena figures, the Reddit summary) was not verified. The change does not depend on it.
+
+
 ## PR #191 · 2026-11-11T09:32:33Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
