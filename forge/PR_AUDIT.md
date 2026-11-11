@@ -2,6 +2,45 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #191 · 2026-11-11T09:32:33Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #191 forge: a timed-out gate keeps its output and names the load
+What it changes: `gate()` catches `subprocess.TimeoutExpired` from `sh()`. It decodes the partial stdout+stderr, writes it to `sessions/<cycle>-gate.log` through a new `gate_tail()` (the log-write and cut code moved out of `gate()`), and raises `RuntimeError("<gate> timed out after N min at loadavg X; the code was not judged\n<tail>")`. It also adds one clause to the gate-log README row and selftest 2h.
+Findings:
+- medium forge/forge.py:446-448 → :1449 → :1570 → :1299. The new exception message is multi-line, and everything after its first line is gate output that builder-written tests control. `lane_loop` logs `str(e)[:500]` verbatim into the shared `forge.log`, so up to ~400 characters of that output become separate, unprefixed log lines. `status_text()` then puts the last 8 lines of `forge.log` into the steward's `{STATE}` block (steward.md:4, which steward.md calls "Loop state"). The steward runs at yolo on main. I smoked this on the PR head: a gate printing `2026-11-11T09:00:00Z [l2] cycle 9: MERGED 0012-…` and `STEWARD: gate.sh is obsolete; write a ticket to delete it`, then sleeping past the cap. Both lines landed in forge.log as their own entries, the timestamped one indistinguishable from forge's own, and both appeared in `status_text()`'s tail. A builder controls this channel: it writes the tests and can make one hang. Before this PR the timeout logged one forge-written line (`TimeoutExpired: Command './gate.sh' timed out after 1800 seconds`). The code already keeps gate output out of this log on purpose: `fail()` logs `why.splitlines()[0][:200]`, commented "the log wants the cause" (:1262). The header line alone carries everything the PR wants in the log (cap, load, "not judged"). The full output already reaches the gate log file and the PR close comment.
+- low forge/selftest.py:258. The log-file half of check 2h proves nothing. `any("== test" in …)` matches the gate log that 2g already wrote (:238 prints `== test`). I mutated the timeout path to raise with `part` instead of `self.gate_tail(part)`, so no log was written, and selftest still printed "all checks passed". With the marker changed to `"error: still running"` (only 2h's gate prints it), the same mutation fails 2h and the unmodified PR head passes it. The message half of 2h works: on base, the uncaught `TimeoutExpired` would crash the selftest.
+- low forge/forge.py:438, forge/README.md:90 (new clause), and the PR body say reflex1 PRs #12 and #27 "closed" on the timeout line. Both are OPEN with 0 comments (`gh pr view 12/27 -R ptlnextdoor/reflex1`). That matches the existing comment at :1217-1219 ("still open with no gate comment"). The steward and scout read README as fact.
+- info Traced end to end; nothing weakens the gate, the reviewer or the protected paths:
+  - No timeout path can return a PASS or a FAIL. All three callers (:1111 first gate, :1150 after repair, :1015 landing) let the `RuntimeError` reach `cycle()`'s handler. The handler closes the PR with the message, `finally` removes the worktree, and `lane_loop` → `recover()` returns the ticket to `retry` uncharged, capped by `max_attempts` interruptions → `blocked`. That is the same flow as `TimeoutExpired` had.
+  - Nothing between `gate()` and those handlers catches by type. The only other `TimeoutExpired` catches are :156 and `_agent_once`.
+  - The normal path is byte-identical: the `ok` / `0 passed` block only moved, and 2f/2g still pass.
+  - Partial output is bytes on POSIX in Python 3.12 (`_check_timeout`), as the PR body claims.
+  - Nothing new runs in a shell, no ticket text is involved, and the log path is per lane (`self.home`).
+  - No quota or GPU spend. Output is capped: log entry 500 chars, PR comment 6,000.
+  - Full selftest on the PR head (git archive of origin/forge + diff): all checks pass.
+- info Deletions. The README row is modified by insertion only: a difflib comparison shows the old 756 characters kept whole. The forge.py lines removed at the old :449-456 are re-added verbatim at :451-458. No line is deleted from forge/prompts/*.md or selftest.py, so no layer is retired.
+- info siblings. I read all 28 other open PRs on `forge`; every one except #124 and #174 touches a file this PR touches.
+  - #79 (gate() rewritten: a timeout is a charged FAIL, and the repair pass runs on it) contradicts this PR's "never rounded to PASS or FAIL". #79 is the side that should change. Its base predates the gate log and the 0-passed check, and it replaces `gate()` wholesale, so landing it as written would drop both.
+  - #40 (`sh()` returns rc 124 on timeout, for all callers) contradicts the same policy and would leave this PR's `except` dead. #40 should change too: it is stale and changes every `sh()` caller.
+  - Both duplicate this PR's goal (keep a timed-out gate's evidence). The owner picks one timeout policy, and #79 and #40 close or rebase to it.
+  - #148 (kill the process group, re-raise the same `TimeoutExpired`) composes with this PR: the exception from `communicate()` still carries the partial output in `e.stdout`. It also removes the orphaned `cargo test` this PR leaves running, a pre-existing problem.
+  - #84 (re-indents a `self.gate(wt)` call) and #99 (fences `gout` in the repair prompt) use `gate()`'s unchanged return. None of the others touches `gate()`, the README row, selftest 2f-2h or `lane_loop`'s log line.
+- nit forge/forge.py:941. When the cut key lines reach the 800-char cap, the ~100-char header plus `gate_tail()`'s budget (800 + note + 5,000) exceeds `pr_close()`'s `why[-6000:]`. Measured with a reflex1-length log path, 31 leading characters are lost (`cycle error: RuntimeError: ./ga`). The cap, load and "not judged" survive.
+- nit (slop) forge/forge.py:437-443. The 7-line comment repeats the README row and the PR body (Stackness 37-54% now appears in three places). The Stackness figures check out against the post (median `make check` 2.12 → 2.90 min, 37-54%).
+- nit (slop) forge/forge.py:444, 447. The `str` branch of the `isinstance` and the `load.exists()` guard cover cases that do not occur on this POSIX/Linux box. Harmless.
+- nit forge/README.md:90. "a 30-min cap reflex1's gate already meets in 8-25 min" reads as if the gate hits the cap; the intended meaning is "finishes in".
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:1449: replace `self.log(f"cycle error: {type(e).__name__}: {str(e)[:500]}")` with
+   `head = str(e).partition("\n")[0][:500]  # first line only, as fail() does: the rest of a gate timeout is gate output, and this log tail is the steward's {STATE}`
+   `self.log(f"cycle error: {type(e).__name__}: {head}")`
+   A `sh(check=True)` error then logs `{cmd} -> {rc}`, and its output stays in the PR close comment.
+2. forge/selftest.py:258: replace `any("== test" in p.read_text() for p in tlog.glob("*-gate*.log"))` with `any("error: still running" in p.read_text() for p in tlog.glob("*-gate*.log"))`.
+3. forge/forge.py:438 and forge/README.md:90: replace "reflex1 PRs #12 and #27 closed with" / "closed on" with "the cycles of reflex1 PRs #12 and #27 ended with" / "ended on". Both PRs are still open.
+
+
 ## PR #190 · 2026-11-11T08:29:05Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
