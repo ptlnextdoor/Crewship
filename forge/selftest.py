@@ -502,6 +502,13 @@ with tempfile.TemporaryDirectory() as d:
           kept == ["00007-builder-2.log", "00007-builder-2.prompt", "00007-builder.log", "00007-builder.prompt"]
           and "first session" in (f.home / "sessions/00007-builder.log").read_text()
           and "second session" in (f.home / "sessions/00007-builder-2.log").read_text(), str(kept))
+    # Each session also closes with a receipt in forge.log: four lanes share that file, so the start line's
+    # timestamp bounds nothing by itself, and rc/wall time/reply size per session are readable nowhere else.
+    receipts = [l for l in f.log_file.read_text().splitlines() if "log=00007-builder" in l]
+    check("every agent session logs rc, wall time and reply size when it ends",
+          len(receipts) == 2 and all(re.search(r"agent builder done model=c/d rc=0 \d+s reply=\d+c log=00007-builder", r) for r in receipts),
+          "\n".join(receipts) or "no receipt line")
+
 
     # 4l. The closing steward turn is skipped when the scheduled one already ran on this cycle
     # (10-24: lane 1 ran one at 18:31:06Z on cycle 32 and another at 18:38:36Z at the deadline).
