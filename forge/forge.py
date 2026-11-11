@@ -714,6 +714,24 @@ class Forge:
         spec, sep, notes = ticket_text.partition("\n## forge ")
         return spec + sep + cls.PRIOR_VERDICT.sub("[earlier verdict withheld]", notes)
 
+    # The verdict is read from the whole session output, anywhere in it, last match wins. That makes any
+    # `VERDICT: APPROVE` the review *quotes* a verdict: the reviewer prints file:line evidence (steps 2-7) and
+    # omp's `[stderr]` tail can echo the prompt, which reviewer.md:14 ends with both verdict words. cold-jury
+    # (github.com/Dimoncelli/cold-jury, 2026-11-11) reads its jurors' verdicts only from the assistant channel,
+    # "never from echoed input", for the same reason. Prefer a line that *starts* with the verdict (markdown
+    # bold/backticks/quote markers allowed, trailing prose allowed), inside the review text only; a quoted diff
+    # line carries its `+`/`-` and prose carries the sentence before it, so neither matches.
+    # Fall back to today's search when no such line exists: parsing is the loop's own failure mode (one judge
+    # study got no parsable verdict out of 30 of 210 replies, Zhu, arXiv 2609.29709), and a stricter read alone
+    # would turn those into a lost attempt.
+    VERDICT_LINE = re.compile(r"^[>\s]*[*`_]{0,2}VERDICT:[ \t]*(APPROVE|REJECT)", re.M)
+
+    @classmethod
+    def verdict_of(cls, rout: str) -> list[str]:
+        """Every verdict in a review session's output, in order; `cycle()` takes the last."""
+        review = rout.split("[stderr]")[0]
+        return cls.VERDICT_LINE.findall(review) or re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+
     def secrets(self, cwd: Path, rev: str = "origin/main...HEAD") -> list[str]:
         """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is
         pushed: a pushed key is public in seconds and in history for good, and the builder's environment holds the
@@ -1185,7 +1203,7 @@ class Forge:
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=self.unanchor(ticket.read_text()), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
-            verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+            verdict = self.verdict_of(rout)
             if not verdict and (rc in (124, 127) or not rout.split("[stderr]")[0].strip()):
                 # a review that ends with no verdict and no review is a harness failure, not a finding: the
                 # timeout (4 of the first 22 reflex1 reviews), a session that never started (0065: E2BIG, rc 127),
@@ -1196,7 +1214,7 @@ class Forge:
                 self.log(f"review of {tid} ended rc={rc} with no verdict; rerunning once")
                 self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
-                verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+                verdict = self.verdict_of(rout)
             review = rout.split("[stderr]")[0].strip()
             rev_by = self.last_model.get(reviewer, self.cfg["roles"][reviewer]["model"])
             # The pick above reads the *configured* reviewer model; a review role's fallback can land in the builder's vendor
