@@ -2,6 +2,42 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #186 · 2026-11-11T04:20:14Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #186 forge: planner and steward doc commits pass the secret and invisible-character scans
+What it changes: `secrets()` and `invisible_chars()` now take a diff spec (the default is unchanged). `commit_docs()` stages the planner/steward paths, scans `git diff -U0 --cached` with both, and on a finding throws the turn away (`git reset --hard HEAD && git clean -fd`) instead of committing it. Two README safeguard rows get longer, and selftest block 4j' adds 2 checks.
+Findings:
+- medium forge/forge.py:1272: the scan only sees text staged against HEAD. If a planner or steward session runs `git commit` itself, `--cached` is empty, so commit_docs commits nothing and discard_strays sees a clean tree. push() (after commit_docs in plan() and steward()) then sends the session's own commit to origin/main without either scan. Neither planner.md nor steward.md says not to commit, and steward.md tells the session "You are on `main`". This happens in practice: reflex1 origin/main has 5 first-parent commits written by the sessions themselves (aed4a67, ef0aad8, dc083e2, 8a1334a "steward: …", 33d7201 "forge: planner amends the refill…"), against 26 made by commit_docs (9 "forge: steward update", 17 "forge: planner refills…"). Probe at the PR head, with a mock steward writing `rpa_`+32 chars into PROGRESS.md: when the text is only staged, the turn is discarded and origin/main stays clean; when the session commits the same text itself, it reaches origin/main. So the PR title, and README row 96's "their doc commits reached the public repo unscanned", still describe about 1 turn in 6. This is not a regression (base pushes both cases). It is a hole in the new guard.
+- low forge/forge.py:1275 with 1000-1013: a discarded planner turn leaves startable() unchanged. The next cycle calls plan() again after the 300/120 s no-ticket sleep, and nothing tells the planner why its last turn was dropped. A planner that keeps writing a DSN or bearer-token example that matches would spend one planner session per cycle until the deadline. The same loop already exists for a planner that adds nothing startable, and this new trigger is rare: SECRET and INVISIBLE match 0 added lines in the 392 first-parent reflex1 commits that touch the staged paths (tickets, PROGRESS.md, ROADMAP.md, LEARNINGS.md, README.md, SCORE.md, docs/assets). No change asked.
+- low forge/forge.py:1272: `check=True` means commit_docs now raises if `git diff --cached` fails (before, it never raised). From plan() or the scheduled steward() the exception reaches lane_loop's handler. recover() → sync_main() then resets the staged index, and no ticket of this cycle is in_progress at that point (plan() runs before claim(), steward() after cycle()). The deadline steward runs outside the try, so the lane would exit with a traceback; the staged text it leaves is cleared by sync_main on the next start. This matches the README rule that guards raise when their git diff fails. No change.
+- info: no gate, reviewer or protected-path logic is touched. Nothing is deleted from forge/prompts/*.md, forge/selftest.py or the safeguard table: a character diff shows that README rows 95 and 96 only gain text. The existing callers of secrets() and invisible_chars() (forge.py:950, 1044, 1065, 1087, 1104) keep the default `origin/main...HEAD`. `rev` is put into a shell command, but the only value passed is the constant `--cached`, so no ticket text reaches it. No state is shared between lanes: commit_docs runs in the lane's own clone, plan() holds plan.lock, and steward runs on lane 1 only. No GPU or new quota spend.
+- info forge/selftest.py:425-444: both new checks fail on base (the probe run with base forge.py pushes the staged `rpa_` token to origin/main) and pass at the head. The full selftest at f771f9cb passes: 166 ok. The test source writes the token as `"rpa_" + "a" * 32` and the code point as `\u200b`, so this PR's own diff passes both scans.
+- info siblings: #181 adds a `self.invisible_chars(wt)` call in land() with the default spec, which this PR keeps working. #181 edits a different README row and a different selftest block. No other open PR on `forge` touches commit_docs(), secrets(), invisible_chars() or these README rows. No contradiction or duplicate.
+- nit forge/forge.py:1258-1266: the commit_docs docstring repeats the PR body, ContextCov citation included, and the selftest 4j' comment repeats it again. That matches the file's existing style, so no change.
+Change needed: scan and discard against the commit the session started from, not against HEAD:
+- plan(): before `rc, out = self.agent("planner", …)` add `base = self.sh("git rev-parse HEAD").stdout.strip()`, and call `self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue", base)`.
+- steward(): the same `base = …` line before `self.agent("steward", …)`, and call `self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update", base)`.
+- `def commit_docs(self, paths: str, msg: str, base: str)`, with this body after `here = …`:
+  ```
+  if here:
+      self.sh(f"git add -A {here}")
+  bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}")
+  if bad:
+      self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
+      self.sh(f"git reset -q --hard {base} && git clean -qfd")
+      return
+  if here:
+      self.sh(f"git commit -qm '{msg}' || true")
+  ```
+  Resetting to `base` drops only the session's own commits: between the rev-parse and commit_docs, only that session ran in this lane's clone.
+- README rows 95 and 96, and the invisible_chars() docstring: replace "what a planner or steward turn staged on main (`git diff --cached`)" with "what a planner or steward turn changed on main since its session started, its own commits included (`git diff --cached <HEAD before the session>`)".
+- selftest 4j': add a third check where a mock steward runs `git add` and `git commit` on the token itself; origin/main must not contain it.
+Tested on a scratch copy: all three probe cases behave correctly (a staged token and a self-committed token are both discarded, a clean turn lands), and the full selftest passes.
+
+
 ## PR #185 · 2026-11-11T03:20:51Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
