@@ -2,6 +2,54 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #185 · 2026-11-11T03:20:51Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #185 forge: status tallies plan-window climb per merged ticket per ISO week
+What it changes: `status_text()` (used by `forge status` and as the steward's `{STATE}`) gets one read-only row. For each plan window and ISO week it prints the summed rises of the `meter` readings already stored on history entries, divided by that week's merges, with a fall counted as a window reset. The selftest 4h fixture rows gain `meter` and one check is added. The README:174 sentence "status does not tally it yet" is replaced by a description of the row.
+Findings:
+- medium forge/forge.py:1465 The readings are put in the wrong order.
+  - When each value is taken and stamped: `quota_ok()` takes the reading at the top of `lane_loop` (:1373), before `cycle()`. That can run a planner turn (:998-999), then claim, then set `cycle_t0` (:1022). `record()` (:1245) stamps `at=now()` when the attempt ends, and `secs` is the time from claim to entry.
+  - Why that breaks the row: the row sorts readings by `at`, which is finish order. With 4 lanes and attempts of 23-159 min, a later-claimed short attempt is recorded before an earlier-claimed long one. Its higher reading comes first, so the lower one looks like a fall and is dropped as a "reset". The next rise is then counted from that lower value, so the same climb is counted twice.
+  - Measured on the PR's loop: I simulated a monotone window over one week with 4 lanes, durations lognormal (median 60, clamped 23-159), 200 seeds. Sorted by `at`, the reported climb is 1.45-1.66× the true climb (median 1.54×). Sorted by claim time (`at` − `secs`), it is 1.00×.
+  - Why this defeats the row: with one lane, finish order equals read order and the inflation is 1×. So the inflation moves with how many lanes ran and how long the attempts took (e.g. the builder_hard share). That shift looks the same as the vendor repricing this row exists to detect (README:174).
+  - It also undercounts, shown in the PR's own fixture. Its `secs` say the merged 0098-twice attempt was claimed at 00:30 (02:00 − 5400 s) and lane 2's at 00:40 (01:00 − 1200 s). If the two W44 meter values are swapped to match that order, the PR's code drops W44 entirely: the row prints only `2026-W43 +20.0% / 0 merged`, and the new check FAILs. With the sort by claim time below, the same swapped fixture passes the full selftest under /usr/bin/python3 3.12.3, which is what forge@.service runs.
+  - Remaining error after the fix: lane 1's planner turn (up to 40 min) runs between the reading and the claim, so claim time is only an upper bound on read time.
+- low forge/selftest.py:361-366 (rows deleted and re-added): The four deleted fixture rows were rewritten, not removed as checks.
+  - What they carried: the three lane-2 rows were the only rows in the steward's STATE without a `meter` key. That is the shape of every live entry: 122 entries in ~/.local/state/forge/reflex1/{,lane2,lane3,lane4}/state.json, 0 with `meter` (jq, newest 2026-10-24T18:31:05Z).
+  - No check is retired, because nothing read `meter` before this PR.
+  - What now protects that shape alone: the `or {}` at :1468. No check covers it. I replaced `(h.get("meter") or {})` with `h["meter"]` on the PR head and every selftest check still passes. On live data that regression would raise KeyError in `forge status` and in every steward turn; for the steward it is caught as `cycle error` in lane_loop:1384, followed by `recover()` and backoff. The PR's one-off live smoke run is the only evidence for that path. Not blocking.
+- low forge/README.md:174 Two claims do not match the code.
+  - "every lane's entries pooled in time order": the order is finish order, not reading order (see the medium finding).
+  - "the row stays `-` until two cycles in one week record a reading": the code prints a cell as soon as a window's reading rises over its previous kept reading, and that reading may be from an earlier week. Two readings in one week where the second is lower print nothing.
+  - "(no entry kept on this box carries one yet)" describes this box's state in the README. It is true today (0 of 122) but goes stale as soon as the loop runs.
+- info forge/forge.py:1453-1474 Security trace: nothing found.
+  - The diff touches no prompt file, gate.sh handling, protected-path check, claim, `recover()`, `discard_strays()`, `sh()`/killpg, PR create/merge, quota decision or gpu.py line.
+  - The new code is reached only through `steward()` :1249 (`STATE=self.status_text()`) and `status()`.
+  - Inputs: window labels from `omp usage` stdout (parsed at `quota_ok()` :364-365), floats, `at` and `result`. No ticket text reaches it, and nothing goes to a shell.
+  - It writes no state (it reads `all_states()`), starts no subprocess, and spends no quota or GPU.
+  - No new exception path: `h["at"]` and `fromisoformat` already run on every entry at :1446, and the division is guarded by `merges.get(wk)`.
+  - Growth: one STATE line. Its cells are bounded by windows × weeks over the kept history (200 entries per lane).
+- info Verification on a `git archive` of base 84614aa5 with the PR diff applied: `py_compile` is clean and selftest prints "forge selftest: all checks passed".
+  - Citation: arXiv 2611.13396 exists (Agarwal et al., "The AI Era's Lines of Code?", 2026-11-10). The 39-240× and ~10% figures match its abstract.
+  - The README edit is in "Watch and steer" (:154+), not the safeguard table ("How a cycle runs", :5-128). The deleted sentence is kept inside its replacement.
+  - No `forge/prompts/*.md` line is touched.
+- info siblings: these open PRs on `forge` touch forge.py, README.md or selftest.py: 183, 182, 181, 165, 160, 148, 145, 140, 139, 136, 133, 132, 117, 111, 99, 86, 85, 84, 83, 79, 48, 47, 44, 42, 40, 39, 31.
+  - In their +/- lines, none touches `meter`, a climb row, README:174 or the 4h fixture rows. #183's only match is the word "parameter".
+  - #139, #136, #111 and #83 edit selftest.py inside other functions (`sparse_agent`, `gate_times_out`).
+  - #132 and #133 edit other rows of `status_text()` and `record()`. That overlap is textual only.
+  - No sibling contradicts or duplicates this PR.
+- nit forge/forge.py:1470 `climb.setdefault(k, {})` is evaluated twice in one statement.
+- nit forge/forge.py:1453-1461 The 9-line comment is a third copy of the meter rationale; README:174 and `record()`'s docstring (:1236-1239) already carry it.
+Change needed (only for MERGE WITH CHANGE): sort the readings by claim time, not finish time, in four places:
+1. forge/forge.py:1465 — change `key=lambda h: h["at"]` to `key=lambda h: dt.datetime.fromisoformat(h["at"].replace("Z", "+00:00")) - dt.timedelta(seconds=h.get("secs", 0))`. Every entry carrying `meter` also carries `secs` (record() :1245).
+2. forge/forge.py:1454 — change "pooled across lanes in time order" to "pooled across lanes in claim order (`at` minus `secs`: `at` is stamped when the attempt ends, up to 159 min after the reading)".
+3. forge/selftest.py — swap the two W44 meter values: :364 (lane 2, 0098-twice failed) becomes `"meter": {"anthropic Claude 7 Day": 25.0}`, and :366 (0098-twice merged) becomes `"meter": {"anthropic Claude 7 Day": 5.0}`. Replace the comment at :396-398 with `# The same window read at four claims: 10% then 30% in W43 (+20). In W44 the merged attempt was claimed first (02:00 minus 90 min) and read 5% (the window reset, not spend); lane 2's, claimed ten minutes later, read 25% (+20). Ordered by \`at\` the 25% comes first and W44's climb vanishes.` The check string at :401 stays as it is.
+4. forge/README.md:174 — change "every lane's entries pooled in time order" to "every lane's entries pooled in claim order (`at` minus `secs`)". Change "the row stays `-` until two cycles in one week record a reading (no entry kept on this box carries one yet)" to "the row stays `-` until a window's reading rises over its previous one".
+
+
 ## PR #184 · 2026-11-11T01:16:02Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
