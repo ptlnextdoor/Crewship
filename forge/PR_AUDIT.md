@@ -2,6 +2,62 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #198 · 2026-11-11T16:39:41Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #198 forge: log a receipt when an agent session ends
+What it changes: `_agent_once` takes `t0 = time.monotonic()` at entry. After `out.write_text(text)` it logs one forge.log line, `agent <role> done model=<m> rc=<rc> <N>s reply=<len(text)>c log=<file>`, behind a new 5-line comment. Selftest 4k gains one check that both builder sessions of cycle 7 log a receipt. The return value and control flow are unchanged.
+Findings:
+- low forge/forge.py:349-353 The comment states false things as fact, and later agents (scout, steward, builders editing forge.py) read this file as fact.
+  - (a) "omp ... prints no token count" and "this loop's only read on a vendor getting wordier" are false. Base already passes `--session-dir=sessions/<cycle>-<role>/` on every session (:315, README:63). omp's session JSONL stores `usage` on each assistant turn, including `output`. I checked `~/.omp/agent/sessions/-tmp/2026-11-08T16-06-35-563Z_…jsonl`: `"usage":{"input":4,"output":29,…}`. So exact output tokens per session are already on disk, beside the log this receipt names.
+  - (b) "The start line above is the only other trace" is also false. `agent <role> TIMEOUT` (:341) is a second trace. The `.prompt` file (written before Popen, :310) and the `.log` file (written after exit, :347) bracket the session by mtime.
+  - (c) The Opus 5.5 "~60% since Oct 12" figure comes from one forum operator. I did not verify it, and it does not belong in source.
+  - Rc per session is the one claim that holds: base does not log it anywhere.
+- low forge/forge.py:354 `reply=` is not the size of the reply. `text` is stdout + `"\n[stderr]\n"` + stderr (:343). On a timeout, stdout is the TIMEOUT header plus only the last 4,000 chars (:342). So the number moves with stderr noise and is clipped on timeouts, and it never counts thinking or tool-call output. That makes it a weak proxy for the "vendor getting wordier" signal the comment sells it as. The field is still fine as a size of what `out` holds; the comment should say that instead.
+- nit forge/selftest.py:505-506 The comment repeats the false "rc/wall time/reply size per session are readable nowhere else".
+- nit forge/selftest.py:511-512 Two blank lines inside the `with` block. The file uses one between sections.
+- nit forge/selftest.py:507-510 The check pins the log line's wording, so it is closer to a wiring check than a behaviour check. It is cheap, so not blocking.
+- info Security trace. Nothing weakens the gate, the reviewer or the protected paths.
+  - Every field in the new line comes from config or forge itself:
+    - `role` is a roles key.
+    - `model` comes from the role's config chain (:252).
+    - `rc` and the seconds are ints, and `len(text)` is an int.
+    - `out.name` is `{cycle:05d}-{role}[-k].log` (:291-295).
+  - No ticket text or model-written text reaches the line, and nothing goes to a shell.
+  - `return rc, text[-6000:]` is unchanged. So `agent()`'s quota and catalog matching (:266-278) and the reviewer verdict parse get the same text as before.
+  - The line runs on all three exits: normal, timeout (rc 124) and OSError (rc 127). It runs after the process group has already been killed and reaped, so it does not change the kill path.
+  - No new exception class. `self.log` already runs in the same function at :317 and :341.
+  - No new shared state. It is the same `open("a")` append to forge.log that every lane already does.
+  - The diff does not touch `gate.sh` handling, `touched_protected`, claim, `recover()`, `discard_strays()`, PR create/merge, the quota floor or gpu.py.
+- info Growth and readers.
+  - One line of ~100 bytes per session goes into forge.log, which is already unrotated.
+  - `status_text()` puts only the last 8 forge.log lines into the steward's `{STATE}` (:1595), so the prompt stays bounded. Receipts will take some of those 8 slots and push other lanes' cycle and RETRY lines out of the steward's window. Not blocking.
+  - The `agent <role> model=` greps that scouts use for counts (SCOUT.md:3403) do not match `agent <role> done model=`, so earlier tallies stay comparable.
+- info Deletions: the diff deletes no line from forge/prompts/*.md, forge/selftest.py or the README safeguard table, so no layer is retired.
+- info Verification.
+  - I exported the PR head with `git archive` to /tmp. `py_compile` is clean and `python3 forge/selftest.py` prints "all checks passed". The log shows `agent builder done model=c/d rc=0 0s reply=13c log=00007-builder.log`.
+  - Negative control: with the `self.log(...)` receipt line removed, the new check fails with `no receipt line` and the run exits 1. This matches the PR body.
+- info Siblings (open PRs on base `forge` touching forge.py or selftest.py; diffs read, nothing checked out).
+  - #117 edits `_agent_once`'s `cmd = [OMP, …]` line. Its base is stale (`--no-session`, which origin/forge has already replaced with `--session-dir`). That is a different hunk from this PR's.
+  - #132 and #133 edit `record()`.
+  - No sibling adds a session-end line, touches the selftest 4k block or changes `_agent_once`'s return. No contradiction or duplicate.
+- info The only PR comment is Copilot's quota notice; it makes no claims. The forum figures in the PR body were not verified, and the code does not depend on them.
+Change needed (only for MERGE WITH CHANGE): replace the false rationale with what the line actually is.
+1. forge/forge.py:349-353: replace the five comment lines with:
+```
+        # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
+        # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
+        # output tokens per turn are in the omp session file under out.with_suffix("").
+```
+2. forge/selftest.py:505-506: replace the two comment lines with:
+```
+    # Each session also ends with a receipt in forge.log: four lanes share that file, so the start line alone does not bound a session.
+```
+3. forge/selftest.py:512: delete the second blank line.
+
+
 ## PR #197 · 2026-11-11T15:39:55Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
