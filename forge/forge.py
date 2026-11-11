@@ -1451,8 +1451,9 @@ class Forge:
         out.append("merged/attempts per builder model per ISO week, median lane-minutes per attempt (a provider-side change under one model name shows here, not in the version row): "
                    + ("; ".join(f"{v} " + ", ".join(f"{wk} {rate_interval(m, n)}" + (f" {sorted(secs)[len(secs) // 2] // 60} min/attempt" if secs else "") for wk, (m, n, secs) in sorted(ws.items())) for v, ws in by_week.items()) or "-"))
         # Plan-window climb per merged ticket per ISO week: `meter` on each entry is every window's "% used" as
-        # quota_ok() read it at that cycle's start, pooled across lanes in time order because the windows are
-        # shared by all of them. Climb is the sum of rises between consecutive readings of one window; a fall is
+        # quota_ok() read it at that cycle's start, pooled across lanes in claim order (`at` minus `secs`: `at` is
+        # stamped when the attempt ends, up to 159 min after the reading) because the windows are shared by all
+        # of them. Climb is the sum of rises between consecutive readings of one window; a fall is
         # the window resetting, not spend. Between engineers, token spend explains little of output (the 90th
         # percentile of spend was 39 to 240 times the 10th among weeks with similar commit counts), while within
         # one engineer doubling spend went with about 10% more commits (arXiv 2611.13396, 404 JetBrains
@@ -1462,7 +1463,7 @@ class Forge:
         climb: dict[str, dict[str, float]] = {}
         last: dict[str, float] = {}
         merges: dict[str, int] = {}
-        for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"]):
+        for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: dt.datetime.fromisoformat(h["at"].replace("Z", "+00:00")) - dt.timedelta(seconds=h.get("secs", 0))):
             wk = dt.date.fromisoformat(h["at"][:10]).strftime("%G-W%V")
             merges[wk] = merges.get(wk, 0) + (h["result"] == "merged")
             for k, pct in (h.get("meter") or {}).items():
