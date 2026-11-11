@@ -2,6 +2,47 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #199 · 2026-11-11T17:43:02Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #199 reviewctl: leave a PR the audit session itself moved to the owner
+What it changes: `reviewctl.run()` calls a new `moved(n, v["sha"])` after `audit()` returns. It runs one `gh pr view --json state,headRefOid` and compares the result with the head sha `audit()` read before starting omp. If the PR is no longer OPEN, or its head differs, reviewctl records `gate: skipped`, runs no `gate()`/`fix()`/`gh pr merge`/`gh pr close`, and still posts the comment and the mark. The PR also adds a README safeguard row and selftest 9c.
+
+Findings:
+- medium forge/README.md:104, forge/reviewctl.py:102-106. The new row and the docstring describe `moved()` as the authorization mechanism behind the prompt's "do not merge, close, comment on, or push anything", and they cite the 0-of-240 result that arXiv 2607.10490 reports for an *execution-time authorization check*. In the code, `moved()` is a single read of one PR, taken after the session has already exited (`run()` :233). It prevents none of these session actions:
+  - its own `gh pr merge` / `gh pr close` / `gh pr comment` on this PR (moved() only sees them afterwards);
+  - pushes or merges on any other PR;
+  - a push straight to `forge`. The session's cwd is `REPO`, a checkout of `forge` (`sh()` default, :46/:91), with the same credentials `record()` uses for `git push origin HEAD:forge` (:204). `gh api repos/ptlnextdoor/Crewship/branches/forge` returns `protected:false`, and the repo has 0 rulesets.
+  
+  So after this PR, every one of those actions is still governed only by the sentence in the prompt. The row's "failure it prevents" column is therefore still true, apart from one path: reviewctl gating and merging a PR the session moved. A safeguard row that claims an authority layer which does not exist is what later audits read as cover. This is the edit below.
+- low forge/reviewctl.py:233-247. The head check runs once, before `gate()` (fetches `pull/{n}/head` at :127, then base's selftest, 12-14 s on this box) and before `gh pr merge {n}` at :247, which merges whatever head GitHub has, with no sha pinned. The `fix()` path is exposed the same way: it fetches `origin/{branch}` at :159 after the check. A push that lands after `moved()` is gated or merged under this verdict without being audited, and nothing in this hunk detects it. A session can arrange this: `nohup sh -c 'sleep N; git push …' >/dev/null 2>&1 &` survives `sh()`. I checked this: `subprocess.run(..., capture_output=True)` returned in 0.00 s and the detached child ran 2 s later. The README row's "whose head moved … no merge on that session's own verdict" holds only at the moment of the check. `gh pr merge --match-head-commit {v['sha']}` (gh 2.103.0 has it; sibling #111 uses it in `land()`) would close this for :247. It is a separate follow-up, because the unpinned merge predates this PR. The edit below makes the row state the limit.
+- low forge/reviewctl.py:240-241, PR body. For a moved head, "(owner decides)" holds for one pass only. `mark()` keys the record by the old sha (:80). On the next pass `previous()` reads the new head (:65), finds no mark, and `needs_pass(None)` re-audits it. I traced this with a stub run: pass 1 gave `['audit']` with `pr40.aaaaaaaaaaaa.json` written; pass 2 gave `['audit', 'gate', 'merge']`. Re-auditing a moved head is the right behaviour, because an owner or scout push during the 40-minute audit should get a fresh audit. But the PR body's claim that "needs_pass() does not re-audit it on the next pass" is false for head drift. It is true only for a closed or merged PR, which `open_prs()` no longer lists anyway.
+- low forge/selftest.py:867-889. 9c only covers state drift (`MERGED cafecafecafe`). In production that case already ends in a failed `gh pr merge`, so the cost before this PR was a wasted gate run and a "merge failed" action. The branch that changes what lands, `head != sha`, has no check. Deleting `if head != sha: return …` from `moved()` still gives "forge selftest: all checks passed" (I ran this mutation on a `git archive` of the PR head). With base `reviewctl.py`, the PR's selftest fails 9c with `['audit', 'gate', 'pr merge'] ['pass|merged']`, so the state half is pinned. Not required to land.
+- nit forge/reviewctl.py:241, :112. On a merged or closed PR the action reads "left open: the PR is merged since the audit started"; the PR is not open. The drift comment also posts an empty code fence (`gout = ""`). If `audit()`'s own sha read came back empty, `moved()` reports "head moved ( -> <sha>)". That direction is safe (skip, re-audit next pass, the same as base, where the mark keyed `pr{n}..json` was never found again), but the message is wrong.
+- info No layer removed. The diff deletes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. The 3 lines it deletes from `reviewctl.py` (the `gate()` call, `v["gate"]`, `if not ok`) are rewritten, and the result is identical when `drift == ""`. That case is pinned by the second 9c check (`['audit','gate']`, `pass|merged`).
+- info Traced safe:
+  - `moved()` interpolates only `int` `pr` and `GH_REPO`; no PR text reaches a shell.
+  - A failed `gh pr view` returns "" (fail-open), which falls back to base behaviour (gate + verdict rules), not to anything looser. I checked live: `moved(199, <head>)` = '', `moved(199, 'deadbeef…')` = drift, `moved(198, 'x')` = "merged", `moved(999999, 'x')` = ''.
+  - The skip path creates no worktree, spends no quota or GPU, and still goes through `Forge.redact` (:270).
+  - `forge.py` lane paths (claim, `recover()`, `discard_strays()`, protected paths, quota fallback, process-group kill, `land()`) are untouched; reviewctl imports only `Forge.redact`.
+  - No HTML comments in the body or the comment. The only comment is Copilot's quota notice.
+- info Verified: on a `git archive` of the PR head (base b76ceaba; `origin/forge` has since added only SCOUT.md), `py_compile` and `python3 forge/selftest.py` pass, including both 9c checks.
+- sibling Every open PR on `forge` that touches README.md, reviewctl.py or selftest.py was read (#42 44 47 48 79 83 84 85 86 99 111 117 132 133 136 139 140 145 148 160 165 181 182 183 195 196 197).
+  - #117 edits `reviewctl.py` only at the `audit()`/`fix()` omp command lines (adds `--no-title`). Different hunks, no contradiction.
+  - #111 pins `land()`'s merge with `--match-head-commit`. That is the same principle in `forge.py`; no contradiction and no shared hunk.
+  - No sibling touches `run()`, selftest section 9 or the reviewctl rows of the README. Any overlap with the others is only textual (rows and checks elsewhere in the same files).
+
+Change needed (only for MERGE WITH CHANGE): State in the two places this PR makes the claim what `moved()` covers and what it does not. Leave the code unchanged.
+(1) In forge/README.md, replace the added row (line 104) with:
+| `moved()` reads the PR's state and head sha once, after the audit session returns, and compares them with the head sha `audit()` read before starting it: a PR that is no longer open, or whose head moved, is recorded `gate: skipped` and is not gated, fixed or merged on that session's verdict; a moved head is audited afresh on the next pass | `reviewctl` gating and merging, under one session's verdict, a head that session never saw: the audit runs up to 40 minutes at `--approval-mode=yolo` as the owner on PR text any GitHub account can write, and a push during it (the session's own or anyone's) went through the gate and `gh pr merge` under the old verdict. This is not an authorization check: the session's own merge, close, comment or push to `forge` still meets only the prompt's sentence, and a push that lands after the check is still merged, since `gh pr merge` is not pinned to the audited sha |
+(2) In forge/reviewctl.py, replace the `moved()` docstring (lines 102-106) with:
+    """After the audit session returns: has the PR left the state audit() read (closed, merged, or a new head)?
+    Empty when it stands where the audit found it, or when gh cannot say. A post-hoc check of this one PR, not an
+    authorization check: it does not stop the session's own gh/git actions, nor a push that lands after it."""
+
+
 ## PR #198 · 2026-11-11T16:39:41Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
