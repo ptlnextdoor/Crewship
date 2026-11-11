@@ -2,6 +2,67 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #193 · 2026-11-11T11:32:28Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #193 forge: refuse a thinking level omp does not take at config load
+What it changes: `Forge.__init__` now raises `SystemExit` when any role's `thinking` (default `high`) is outside a new `THINKING` tuple (`off, minimal, low, medium, high, xhigh, max, auto`). The PR also adds selftest checks (one per role of each shipped config, plus one typo fixture) and a README safeguard row.
+Findings:
+- low forge/forge.py:50-53, forge/forge.py:93, forge/README.md:52: the failure this guard is said to prevent is not how base forge actually fails.
+  - The comment, the `SystemExit` text and the README "prevents" cell all say the same thing: a bad level makes every model in the chain fail, the role raises `QuotaExhausted`, and `recover()` files a `## forge-quota` note "without counting an attempt" ("loops as a quota wait"). The PR body says it too.
+  - I ran real omp 18.12.6 with `--thinking=xhight`: rc 2 after 2.15 s, and stderr `Error: Invalid --thinking value: "xhight". Expected one of: ...`.
+  - I then called base `agent()` with real `_agent_once` on a role with chain `[haiku, haiku, codex]` and `thinking="xhight"`. Result: `rc 2`, `last_model={'builder': haiku}`, `exhausted={}`, one session logged, no exception.
+  - The text matches neither the quota regex (:259) nor `^Model ".*" not found` (:268). So `agent()` returns from the first model (:271-272), the fallback is never tried, and `QuotaExhausted` is never raised.
+  - What base actually does, traced in code (not run end to end):
+    - Builder roles: :1086-1089 end in `builder produced no diff (rc=2)`, then `fail()` charges the attempt (:1270-1271).
+    - Review roles: the builder session and gate run first on real quota. Then the review's rc 2 with empty stdout gets one rerun (:1178-1187), and the attempt is charged as `reviewer did not approve` (:1207). After `max_attempts` the ticket is `blocked`.
+    - Planner: :795-803 writes no tickets.
+  - No open sibling changes this. #47's `PROVIDER_ERROR` and #145's `Retry budget exhausted` do not match the message either.
+  - So the guard is worth more than the PR says, but three texts state a false mechanism and hide the real cost: the README row (which the steward, scout and audits read as fact), the comment, and the message the owner reads in the journal.
+- info forge/forge.py:90-93: the code is correct, and I traced it.
+  - It runs before the lane clone (:98), the state-dir mkdir and `recover()`.
+  - Smoke on the PR head with a typo config: `run`, `lane --lane 2` and `status` each exit rc 1 with the message naming `{'reviewer': 'High', 'steward': 'xhight'}`. No state dir and no `-lane2` clone were created.
+  - omp checks the level case-sensitively: `High` and `HIGH` are refused with rc 2, and `high` passes. So an exact tuple match has no false positive.
+  - The tuple equals `omp --help` on the installed 18.12.6. The default `"high"` matches `agent()`:248.
+  - The config value reaches only the exception text. No shell, and no command is built from it.
+- info Live config: `~/.config/forge/reflex1.toml` has thinking `xhigh, high, xhigh, high, high, medium`, and all six pass. So when lanes restart onto this forge.py after it lands (the exit-75 path), the running loop does not stop.
+- low forge/forge.py:1392-1418 (existing path, not blocking): if the owner later writes a bad level into the live toml mid-run, a failing lane goes into a restart loop.
+  - The supervisor validated only at its own start, so it restarts that lane about every 50 s (20 s poll + 30 s sleep).
+  - forge.log gets one `lane k exited rc=1; restarting` line per lane per restart until the deadline; the reason appears only in the journal.
+  - A ticket that lane held mid-crash stays `in_progress` until a supervisor restart runs `recover(all_lanes=True)`.
+  - A TOML syntax error already takes this same path on base (`tomllib.loads` in the same `__init__`), and it spends no quota.
+- info forge/forge.py:54: `THINKING` is copied from omp 18.12.6. If an omp upgrade adds a level, forge refuses a config that would run, and does so loudly at launch. If an upgrade drops one, forge falls back to base behaviour. The date in the comment names the source, so this is acceptable.
+- info forge/selftest.py:54,69-75:
+  - The PR-head selftest passes as a whole, including the 7 new checks.
+  - Base's selftest, which is what reviewctl's gate runs, passes against the PR's forge.py.
+  - I ran the head selftest against a forge.py that keeps `THINKING` but drops the `__init__` check. It gives `FAIL a thinking level omp does not take stops the loop at config load: accepted`, so the check catches that regression.
+  - Nit: the fixture is the selftest's own `c.toml`, not "a reflex1.toml copy" as the PR body says.
+- info Deletions: none. The diff is all additions (README +1, forge.py +9, selftest +8), and no prompt is touched, so no layer is retired.
+  - Nothing else is touched either: gate, reviewer, protected paths, claim race, `recover()`, `discard_strays()`, timeouts and process-group kill, quota fallback, PR/merge and GPU.
+- info Siblings: 37 other open PRs on `forge` touch README.md, forge.py or selftest.py. I read all their diffs. None adds config validation or touches `THINKING`. No contradiction or duplicate.
+  - #132 records `roles[*].thinking` as the attempt's effort. It composes with this PR, which guarantees that value is valid.
+  - #47 and #145 widen `agent()`'s fall-over regexes, but neither matches `Invalid --thinking value`.
+  - Textual overlaps only:
+    - #28 rewrites the selftest section-2 fixture but keeps `cfg.write_text(...)` and `f = forge.Forge(cfg)`, so this PR's `.replace(...)` still applies.
+    - #19 appends to the end of `__init__`.
+    - #182, #48, #47, #44, #42, #40 and #39 insert README rows near row 52.
+- nit slop forge/forge.py:50-53: the comment repeats the README row, and repeats its wrong mechanism; the change below fixes both. `v.get("thinking", "high")` now restates `agent()`'s default in forge.py:90 and selftest.py:54, so a later default change has to touch three places.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, replace lines 50-53 with
+```
+# The levels `omp --thinking=` takes (`omp --help`, omp 18.12.6, 2026-11-11). An unknown one is refused before any
+# request (`Error: Invalid --thinking value`, rc 2, ~2 s); agent() returns that from the role's first model without
+# trying its fallback, so every attempt reaching the role is charged to its ticket (a review only after a full build).
+```
+In forge/forge.py:93, replace `"every session for that role would fail before it starts and read as a quota wait."` with `"every session for that role would fail before it starts and be charged to its ticket."`.
+
+In forge/README.md:52, replace the prevents cell (the text between the last two `|`) with:
+```
+a typo omp refuses before any request (rc 2, ~2 s), which `agent()` returns from the role's first model without trying its fallback: every attempt that reaches that role is charged to its ticket as a failure (`builder produced no diff`, or `reviewer did not approve` after a full build session and gate run) toward `max_attempts`; a planner turn writes no tickets
+```
+
+
 ## PR #192 · 2026-11-11T10:28:20Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
