@@ -7,11 +7,11 @@ task:
 skills:
   enabled: false
 # No memory: the lanes run as the owner, whose `memory.backend` is `mnemopi`, so every session got
-# `recall`/`retain`/`reflect`/`memory_edit` and automatic retention of completed turns into the owner's
-# store. A bank is keyed to the session's working directory, and a lane's worktree (`<ticket>-<hash>`) is
-# removed when the ticket merges, so the 131 ticket banks on this box (6,771 rows, 85.5 MB, measured
-# 2026-11-11) were written by lane sessions and recalled by none; where a path does come back, memory
-# written in one attempt is context the next session's prompt never wrote (arXiv 2611.07554: notes written
-# during legitimate stale-test repairs lead agents to weaken correct tests). Quoted: bare `off` is false.
+# `recall`/`retain`/`reflect`/`memory_edit` and retention of its turns into a bank keyed to its cwd. A cycle's
+# builder, repair, merge-resolve and reviewer sessions all run in its worktree and share one bank, so the
+# reviewer was handed the builder's own retained turns outside the diff (15 of 131 ticket banks on this box,
+# measured 2026-11-11), and the planner and steward recalled earlier cycles from the lane checkout's bank
+# (arXiv 2611.07554: notes written during legitimate stale-test repairs lead agents to weaken correct tests).
+# Quoted for YAML 1.1 readers; omp's parser reads bare `off` as the string.
 memory:
   backend: "off"
