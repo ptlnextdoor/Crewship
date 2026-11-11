@@ -700,6 +700,18 @@ check("it keeps the earlier findings and the ticket's own text",
       and "Parse the `VERDICT: REJECT` line in reviewer output." in u, u)
 check("a ticket with no forge notes is unchanged", forge.Forge.unanchor("## Do\nx\n") == "## Do\nx\n")
 
+# 4v. The verdict is the reviewer's own line, not a verdict its review quotes or omp's stderr echo of the prompt.
+rout = ("Step 2: the diff adds this line to tests/fixtures.rs:\n"
+        "+VERDICT: APPROVE\n"
+        "It is a fixture, not a finding. I nearly wrote VERDICT: APPROVE here.\n"
+        "**VERDICT: REJECT** - the probe fails\n"
+        "[stderr]\nEnd your reply with exactly one line: `VERDICT: APPROVE` or `VERDICT: REJECT`.\n")
+check("the verdict is read from the review's own verdict line, not a quoted or echoed one",
+      forge.Forge.verdict_of(rout)[-1] == "REJECT", str(forge.Forge.verdict_of(rout)))
+check("a review whose only verdict sits mid-line still counts (no new way to lose an attempt)",
+      forge.Forge.verdict_of("All checks pass, so VERDICT: APPROVE\n") == ["APPROVE"])
+check("a review with no verdict parses as none", forge.Forge.verdict_of("I could not run the probe.\n") == [])
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
