@@ -57,6 +57,10 @@ class QuotaExhausted(Exception):
     """Every model available to a role hit its provider's usage limit."""
 
 
+class LockUnreadable(Exception):
+    """`Cargo.lock` at a revision the dependency guards read does not parse as TOML."""
+
+
 def now() -> str:
     return dt.datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -481,8 +485,12 @@ class Forge:
         """Third-party `Cargo.lock` entries at `rev`: (name, version) -> the package names it depends on."""
         try:
             pkgs = tomllib.loads(self.sh(f"git show {rev}:Cargo.lock", cwd=cwd).stdout).get("package", [])
-        except tomllib.TOMLDecodeError:
-            return {}
+        except tomllib.TOMLDecodeError as e:
+            # Not {}: an unparsable lock at HEAD emptied `lock_added`, so both dependency guards reported a
+            # clean branch because they could not read the file. A check that cannot run is unresolved, not a
+            # pass (Keller AI's reviewer set, 2026-11-10: the misses that worried them most were changes whose
+            # earlier evidence no longer covered the code and the reviewer trusted it anyway).
+            raise LockUnreadable(f"Cargo.lock at {rev} does not parse as TOML ({e})") from None
         return {(p["name"], p["version"]): [d.split()[0] for d in p.get("dependencies", [])] for p in pkgs if "source" in p}
 
     def lock_added(self, cwd: Path) -> list[tuple[str, str]]:
@@ -499,10 +507,14 @@ class Forge:
         mechanical copy beside the prose (reflex1: 0 of 14 Cargo.toml-changing commits on main added a direct
         dependency no ticket names, so the prose has held; the lock is the surface the LiteLLM 1.107.0
         stealer came through)."""
-        new = self.lock_added(cwd)
-        if not new:
-            return []
-        head = self.lock_pkgs(cwd, "HEAD")
+        try:
+            new = self.lock_added(cwd)
+            if not new:
+                return []
+            head = self.lock_pkgs(cwd, "HEAD")
+        except LockUnreadable as e:
+            return [str(e)]
+
         text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")
         # shortcut: a crate named by any word of the ticket counts as requested (`image`, `png`), so this loosens
         # toward the reviewer's reading, never blocks a named crate; tighten to a `crates:` line if it ever passes one.
@@ -554,7 +566,11 @@ class Forge:
         version already known vulnerable at PR time in 2.46% of them. A ticket naming the advisory id waives
         it, the same escape hatch as naming the crate; a `## forge` note quoting an earlier finding does not."""
         text = ticket_text.split("\n## forge")[0].lower()
-        left = {k: [i for i in ids if i.lower() not in text] for k, ids in self.osv(self.lock_added(cwd)).items()}
+        try:
+            added = self.lock_added(cwd)
+        except LockUnreadable as e:
+            return [str(e)]  # unreachable in cycle(): unrequested_deps reads the same lock first and fails the attempt
+        left = {k: [i for i in ids if i.lower() not in text] for k, ids in self.osv(added).items()}
         return sorted(f"{n} {v} ({', '.join(ids)})" for (n, v), ids in left.items() if ids)
 
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
