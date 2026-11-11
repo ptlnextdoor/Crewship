@@ -99,11 +99,9 @@ def audit(pr: dict) -> dict:
 
 
 def moved(pr: int, sha: str) -> str:
-    """Did the audit session act on the PR instead of only writing its verdict? The prompt forbids merging,
-    closing and pushing, and this is the mechanism behind that sentence: the session runs at yolo as the owner,
-    with gh authenticated, on text any GitHub account can write in a comment on this public repo. Prompt-level
-    hygiene alone leaves an unsafe-action rate in the tens of percent; an execution-time authorization check is
-    what closes it (arXiv 2607.10490, 240 attack instances). Empty when the PR is where the audit found it."""
+    """After the audit session returns: has the PR left the state audit() read (closed, merged, or a new head)?
+    Empty when it stands where the audit found it, or when gh cannot say. A post-hoc check of this one PR, not an
+    authorization check: it does not stop the session's own gh/git actions, nor a push that lands after it."""
     r = sh(f"gh pr view {pr} -R {GH_REPO} --json state,headRefOid --jq '.state + \" \" + .headRefOid'")
     state, _, head = r.stdout.strip().partition(" ")
     if r.returncode or not head:
