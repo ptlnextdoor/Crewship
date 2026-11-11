@@ -2,6 +2,49 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #188 · 2026-11-11T06:25:04Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #188 forge: name a review that fell back to the builder's own vendor
+What it changes: `cycle()` puts the reviewer model that actually ran into `rev_by`. When its vendor prefix matches `built_by`, the review PR comment gets a "**same-vendor review** ... The cross-family check did not run" line and the done note gets "(same vendor, no cross-family check)". It also extends README row 37 and adds selftest 21b. The verdict, prompts, guards and routing are unchanged.
+Findings:
+- info forge/forge.py:1147-1172 (PR head). Traced end to end; nothing weakens the gate, the reviewer or the protected paths.
+  - The label is built after `rprompt` (:1132) and after both reviewer sessions, so no reviewer sees it. It does not feed `verdict`.
+  - `rev_by` is read before `land()`, whose conflict session runs only the builder role, so the done note names the model that gave the verdict. A rerun review overwrites `last_model[reviewer]` first, so it names the second run.
+  - Interpolated values are config model strings, not ticket text. The comment body reaches gh through `--body-file` (:854-861), and the note goes through `set_status` → `write_text`. `git commit -qm 'forge: done {tid}'` is unchanged.
+  - It adds no shared state (local variables only), no new exception path, no spend. The growth is a fixed ~250 characters per PR comment and ~40 per done note.
+- info selftest and probe.
+  - PR-head `python3 forge/selftest.py` (git archive into a scratch dir, since removed): 168 ok, rc 0. Base: 167 ok.
+  - The PR's selftest run against base forge.py fails only 21b, so the check catches its regression. Its `"approved by c/d."` clause also fails an unconditional label.
+  - In-memory probe on PR-head forge.py: real `agent()`, reflex1's four roles, only `_agent_once` and `pr_comment` stubbed.
+    - Opus build, Astra quota-refused, Fable APPROVE: MERGED, comment and note carry the label.
+    - Opus build, Astra APPROVE: plain header and note.
+  - The PR-comment half is not in the selftest (`pull_requests=false`); the probe covers it.
+- info deletions. The `-` lines are forge.py :1147 and :1162, replaced by equivalent lines plus the label, and README row 37. The old row text is kept word for word as the prefix of both new cells. No prompt line, selftest line or safeguard row is retired.
+- low forge/forge.py:1148-1150 The new comment says "every role's chain falls back inside its own vendor first (reflex1: reviewer_alt -> claude-fable-5-1)". That is false. `reviewer_alt` is `openai-codex/gpt-6-astra` and its fallback `anthropic/claude-fable-5-1` is another vendor (reflex1.toml:54-58). planner and steward also fall back across vendors (:28-32, :60-63). The real mechanism is that a review role's fallback lands in the builder's vendor. A later agent editing routing would read the wrong cause. selftest.py:1294-1295 repeats the claim.
+- low forge/README.md:37 (new cell) "nothing recorded what it fell back to" is false. Base already named the reviewer model that ran in three places: the PR comment header (`last_model.get(reviewer, ...)`, base :1147), the done note (base :1162) and forge.log (`agent {role} model=...`, :309). The PR body says so itself ("The reviewing model was already printed in the review comment; nothing compared it to the builder's").
+- low forge/README.md:37, forge/forge.py:1151-1152 The citation does not support the claim. arXiv 2610.18427 (abstract read) is about an agent curating its own playbook of lessons: "falls up to 69.6 points below no playbook" when the agent judges which lessons to keep. It measures nothing about two models of one family reviewing each other. The comment presents it as evidence that same-family agreement "is a shared prior".
+- nit forge/forge.py:1156, selftest.py:1301 The label says "after a quota fallback", but `kin` fires whenever the two vendor prefixes match, with or without a fallback. A config with no `reviewer_alt` whose builder shares the reviewer's vendor triggers it with no fallback. 21b is that case: `c/d` is the configured reviewer, yet its comment says "both chains fell back". It is true for reflex1.toml, the only shipped config.
+- nit forge/forge.py:1172 The markdown string `kin` doubles as the same-vendor boolean (`if kin`). It works and is readable enough.
+- info siblings. All 43 open PRs were listed (`gh pr list` stops at 30 by default, so I passed `-L 200`). I read the diff of every PR on base `forge` that touches README.md, forge.py or selftest.py, and checked nothing out.
+  - #83 (trailers, 2026-10-29) is a duplicate of this PR's hoist. It adds `reviewed_by` with the same expression as `rev_by` and rewrites the same `done_note` line without the suffix. It is stale (written against `cycle()` at ~:718; base `land()` already has its own `Builder:` trailer). #83 is the side to change: on rebase it should reuse `rev_by` and keep the suffix. This does not lower this verdict.
+  - #160 (`avoid=built_by`) and this PR complement each other. #160 stops exact self-review; Opus→Fable still runs and this PR labels it. #86, #20 and #160 also rewrite README:37, so whichever lands second merges the cell text. They do not contradict this PR.
+  - #133 stores the reviewer model in history and tallies same-/cross-vendor with the same prefix rule. It complements this PR and answers this PR's "no reader exists yet" limit. Its edit to selftest section 21 leaves 21b's plain-note source (cycle 1) intact.
+  - #8 and #6 rewrite the same review `pr_comment` line. Both are stale: base already has "of {reviewed}". If either lands, it is the side to change. #181 edits the `land()` call two lines above `done_note`, which is a textual conflict only. #39 is complementary.
+- info worth it: about 4 lines of logic. It makes the reflex1 norm visible on the PR and the ticket; SCOUT.md counts 103 of 132 reviews as same-vendor Fable. It changes nothing a session reads.
+Change needed (only for MERGE WITH CHANGE): correct the text the PR adds; behaviour unchanged.
+1. In forge/forge.py, replace the six comment lines 1148-1153 with these two lines (keep the indent):
+   `# The pick above reads the *configured* reviewer model; a review role's fallback can land in the builder's vendor`
+   `# (reflex1: reviewer_alt gpt-6-astra -> claude-fable-5-1). Name that where the verdict is read; the verdict is unchanged.`
+2. In forge/forge.py:1156, change "`{rev_by.split('/')[0]}` after a quota fallback. The cross-family check did not run." to "`{rev_by.split('/')[0]}`. The cross-family check did not run."
+3. In the README:37 second cell, make two edits:
+   - Replace "forge chose the reviewer role before the session ran and nothing recorded what it fell back to" with "forge chose the reviewer role before the session ran, and the comment and note named the model that ran without comparing it to the builder's".
+   - Delete ", and self-judged reuse without an independent check swings up to 69.6 points (arXiv 2610.18427)".
+4. In forge/selftest.py:1294-1295, replace "while each role's chain falls back inside its own vendor first" with "while a review role's fallback can land in the builder's vendor".
+
+
 ## PR #187 · 2026-11-11T05:22:24Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
