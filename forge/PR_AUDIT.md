@@ -2,6 +2,32 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #203 · 2026-11-11T21:17:46Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #203 forge: diff guards split on newlines, not Unicode line breaks
+What it changes: `test_tampering()`, `invisible_chars()`, `secrets()` and `patch_lines()` split `git diff` output with `split("\n")` instead of `splitlines()`, so text after U+2028/2029/0085/000B/000C/001C-001E in an added line stays on its `+` line. `patch_lines()` now tests `ln[:1] in ("+", "-")` so the trailing `""` is not counted. selftest gains 2 checks.
+Findings:
+- info forge/forge.py:663,712,771 Fix is real and verified. Traced the callers: `secrets()` runs before the first push, before the repair push, in `land()` after a conflict resolution and in `commit_docs()`; `invisible_chars()` runs before the gate, after the repair and in `commit_docs()`; `test_tampering()` runs before the builder's and the repair's gate run. I ran both revisions from `git archive` in temp dirs. Base 7bbe0d89 passes 187 checks, head 4db66847 passes 189, 0 FAIL on either (this matches the body's "189"). With the head selftest run against the base forge.py, exactly the two new checks fail, each returning `[]`. Extra probe outside the selftest: an added `#[test]\n\u2028#[ignore]` gives `[]` from base `test_tampering()` and `src/a.rs: adds \u2028#[ignore]` from head, and rustc compiles that file and reports `1 ignored`, so this also closes a real `#[ignore]` bypass. `check=True` is kept on all three `sh()` calls and `split` cannot raise, so there is no new exception path and no ticket is left `in_progress`.
+- info forge/forge.py:924 The `("+", "-")` tuple is needed: `split("\n")` leaves a trailing `""` and `"" in "+-"` is True. Probe: `patch_lines()` on a diff ending in `\n` returns no `""` member. Its output only feeds `land()`'s "landing patch differs" PR comment (base forge.py:1054-1061). Both sides of that comparison come from the same function in the same process, and no gate or merge decision reads it.
+- low forge/forge.py:660-662, forge/selftest.py:218 The new comments overstate the fix. They say "git puts one diff line per `\n`" and "The guards split on `\n` only, as git writes it", and the body's list of characters that `splitlines()` breaks on leaves out U+000D. But `sh()` (forge.py:260) runs `subprocess.run(..., text=True)`, which turns a bare `\r` into `\n` before `split("\n")` sees the text. So the guards still do not read lines the way git writes them. Probed on the PR head:
+  - `visible\rconst K = "AKIA…"` in NOTES.md: `secrets()` returns `[]`, so the key is pushed.
+  - `ok\r<U+E0041>`: `invisible_chars()` returns `[]`.
+  - `import pytest\r@pytest.mark.skip` in t.py: `test_tampering()` returns `[]`, while `ast.parse` reads the decorator.
+  - `#[test]\n\r#[ignore]`: `test_tampering()` returns `[]`, while rustc reports `1 ignored`.
+
+  Base behaves the same, so this hole is pre-existing and the PR does not make it worse. Only its own text is at fault: it reads as if this class of bypass is closed. Reading the diff as bytes would change no recorded result: reflex1 has 0 CR, U+2028/2029/0085, VT, FF or U+001C-1E bytes in the patch text of its 627 commits on main. I recomputed this, and it also confirms the body's 0-separator claim.
+- none forge/prompts/*.md, forge/selftest.py, forge/README.md: the diff deletes no line from the prompts, from selftest or from the safeguard table. The four forge.py lines it modifies swap the splitting method and drop no check. Lane concurrency, the claim race, `recover()`, `discard_strays()`, protected paths, quota fallback, timeouts, PR creation and merge, and GPU spend are untouched. The change only alters how diff text is parsed: it adds no prompt text and no state writes, and nothing it adds can grow without bound.
+- none siblings: 38 other open PRs on base `forge` touch forge.py or selftest.py. None changes these four readers or `patch_lines()`. #196, #181 and #136 add `test_tampering()`/`invisible_chars()` calls on the conflict-resolution commit; they get this fix for free and neither side needs to change. The line-range overlaps in #111, #99, #86, #42, #40, #39 and #197 hit other functions on older bases. No contradiction and no duplicate.
+- none slop: the edit is focused, with no defensive try/except. The three trailing "`split`, not `splitlines`: test_tampering" comments point back to the one explanation instead of repeating it.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, after line 662 (`# no leading `+` and no guard read it. git puts one diff line per `\n` and nothing else.`), insert:
+        # shortcut: sh() reads with text=True, which turns a bare `\r` into `\n` before this split, so a piece after a CR
+        # in an added line still reaches none of these four readers (Python and rustc honour CR there); read these diffs as bytes once one lands.
+and in forge/selftest.py:218 replace "The guards split on `\n` only, as git writes it." with "The guards split on `\n` only; a bare `\r` still splits in sh()'s text mode (forge.py shortcut)."
+
+
 ## PR #202 · 2026-11-11T20:17:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
