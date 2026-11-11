@@ -341,7 +341,7 @@ with tempfile.TemporaryDirectory() as d:
     comments: list[str] = []
     f.pr_comment = lambda pr, text: comments.append(text)
     f.reviewed = ("abc123", f.patch_lines(git("diff origin/main...HEAD", wt)))  # what the reviewer approved
-    why = f.land(wt, "land", "0001-x", "builder")
+    why = f.land(wt, "land", "0001-x", "builder", "")
     check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
     # The first pass rebased cleanly (nothing posted); the second landed the conflict session's "both", which
     # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced.
@@ -359,7 +359,7 @@ with tempfile.TemporaryDirectory() as d:
         git("pull -q origin main", other); (other / other_file).parent.mkdir(exist_ok=True); (other / other_file).write_text(f"{n}\n")
         git("add -A", other); git("commit -qm other", other); git("push -q origin main", other)
         runs.clear()
-        why = f.land(wt2, f"land{n}", f"000{n}-x", "builder")
+        why = f.land(wt2, f"land{n}", f"000{n}-x", "builder", "")
         check(f"landing after main moved in {other_file} {'skips' if want == 0 else 'reruns'} the gate",
               why == "" and len(runs) == want and git(f"show origin/main:b{n}.txt", repo) == "x\n", why or f"gate runs {len(runs)}")
 
@@ -554,7 +554,7 @@ with tempfile.TemporaryDirectory() as d:
     git(f"worktree add -q -b landed {wt} main", repo)
     (wt / "src.rs").write_text("fn main() {}\n"); git("add -A", wt); git("commit -qm work", wt)
     git("push -q origin landed", wt)
-    why = f.land(wt, "landed", "0001-x", "builder")
+    why = f.land(wt, "landed", "0001-x", "builder", "")
     check("a branch landed by the local merge is deleted from the remote",
           why == "" and "landed" not in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
     # The landing merge names the builder model in a trailer: the git log is the record a clone keeps.
@@ -567,7 +567,7 @@ with tempfile.TemporaryDirectory() as d:
     git("add -A", Path(d) / "wt2"); git("commit -qm work2", Path(d) / "wt2")
     git("push -q origin unpushed", Path(d) / "wt2")
     f.push = lambda: None  # the merge commit never reaches origin
-    why = f.land(Path(d) / "wt2", "unpushed", "0002-y", "builder")
+    why = f.land(Path(d) / "wt2", "unpushed", "0002-y", "builder", "")
     check("a branch whose merge did not reach the remote is kept",
           why == "" and "unpushed" in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
 
@@ -951,7 +951,7 @@ with tempfile.TemporaryDirectory() as d:
         reviewer_runs.append(1)
         return 0, reviews.pop(0)
     f.agent = build_or_review
-    f.land = lambda wt, branch, tid, builder: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
+    f.land = lambda wt, branch, tid, builder, text: (git(f"merge -q --no-ff -m land {branch}", repo), "")[1]
     f.cycle()
     check("an empty rc 0 review with no verdict is rerun once and the attempt lands on the second verdict",
           len(reviewer_runs) == 2 and "status: done" in (repo / "tickets/0004-r.md").read_text(),
@@ -1084,9 +1084,45 @@ with tempfile.TemporaryDirectory() as d:
     f.agent = resolve
     f.pr = ""
     f.gate = lambda cwd: (True, "")  # the gate is not the check under test; it also cannot check itself
-    why = f.land(wt, "b", "0001-t", "builder")
+    why = f.land(wt, "b", "0001-t", "builder", "")
     check("a conflict resolved by editing the gate does not land",
           "gate.sh" in why and "not to touch" not in git("show origin/main:gate.sh", repo), f"{why!r}")
+
+# 16b. The same session also merges the files main just changed. A test one side added and this side drops
+# reaches main with no review after it: the pre-gate test_tampering/dependency/invisible-character checks ran
+# two agent turns earlier, on a tree that did not have main's side in it yet.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "a.txt").write_text("base\n")
+    (repo / "t.rs").write_text("#[test]\nfn one() { assert!(true); }\n#[test]\nfn two() { assert_eq!(1, 1); }\n")
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    wt = Path(d) / "wt"
+    git(f"worktree add -q -b b {wt} main", repo)
+    (wt / "a.txt").write_text("branch\n")
+    git("add -A", wt); git("commit -qm 'builder work'", wt)
+    (repo / "a.txt").write_text("other lane\n")
+    git("add -A", repo); git("commit -qm other", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+
+    def resolve_dropping_a_test(role, prompt, cwd, timeout_min=None):
+        git("merge origin/main", cwd)
+        (cwd / "a.txt").write_text("both\n")
+        (cwd / "t.rs").write_text("#[test]\nfn one() { assert!(true); }\n")  # the half it did not want to merge
+        git("add -A", cwd); git("commit -qm 'forge: merge main'", cwd)
+        return 0, ""
+
+    f.agent = resolve_dropping_a_test
+    f.pr = ""
+    f.gate = lambda cwd: (True, "")
+    why = f.land(wt, "b", "0001-t", "builder", "status: open\n# x\nFix the parser.\n")
+    check("a conflict resolved by dropping a test does not land",
+          "fewer test functions" in why and "fn two" in git("show origin/main:t.rs", repo), f"{why!r}")
 
 # 17. A usage window whose label names one model ("Claude 7 Day (Fable)", 100.0% used right now while
 # "Claude 5 Hour" is at 57.0%) belongs to that model. Taking the block's max marked the whole vendor, so
@@ -1386,7 +1422,7 @@ with tempfile.TemporaryDirectory() as d:
         return 0, ""
 
     f.agent = build_then_messy_review
-    f.land = lambda wt, branch, tid, builder: (at_land.append((git("status --porcelain", wt), git("rev-parse HEAD", wt).strip(), (wt / "src.txt").read_text())), "")[1]
+    f.land = lambda wt, branch, tid, builder, text: (at_land.append((git("status --porcelain", wt), git("rev-parse HEAD", wt).strip(), (wt / "src.txt").read_text())), "")[1]
     f.cycle()
     check("a reviewer's restored file, scratch and commit do not reach land()",
           at_land == [("", f.reviewed[0], "new\n")], repr(at_land))
