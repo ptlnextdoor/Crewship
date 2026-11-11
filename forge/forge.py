@@ -521,7 +521,13 @@ class Forge:
     # second instruction file in the convention every agent reads: loaded for any session started in its directory,
     # and listed as "read before editing" once `includeWorkspaceTree` is on. The root file stays editable (builder
     # rule 24). reflex1 has exactly one, at the root.
-    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
+    # `.github/workflows` is the same class one step out: a workflow file the branch adds runs on GitHub's runner
+    # when the loop pushes the branch, with the repo's secrets and a GITHUB_TOKEN, before any human opens the PR -
+    # code execution none of this box's guards see. A config file carried in by a PR is delivered at operator
+    # trust level, which is why prompt-filtering defences do not reach it (GitInject, arXiv 2606.09935), and the
+    # same surface is where TaintAWI confirmed 496 exploitable injections in 13,392 agentic workflows (2605.07135).
+    # 0 of reflex1's 627 commits touch .github/; a ticket that needs CI is an owner change, like gate.sh.
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.github/workflows|\.cargo)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
                                 r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
                                 r"|/AGENTS\.md$")  # nested only: paths are repo-relative, so the root file has no slash
