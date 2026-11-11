@@ -660,6 +660,8 @@ class Forge:
         # `split("\n")`, not `splitlines()`: Python also breaks lines at U+2028, U+2029, U+0085, U+000B, U+000C
         # and U+001C-U+001E, so everything an added line carries after one of those became a separate piece with
         # no leading `+` and no guard read it. git puts one diff line per `\n` and nothing else.
+        # shortcut: sh() reads with text=True, which turns a bare `\r` into `\n` before this split, so a piece after a CR
+        # in an added line still reaches none of these four readers (Python and rustc honour CR there); read these diffs as bytes once one lands.
         for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd, check=True).stdout.split("\n"):
             if line.startswith("+++ "):
                 f = line[6:]
