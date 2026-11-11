@@ -183,6 +183,20 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert!(1 == 1);\n    debug_assert!(true);\n}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm rewrite", repo)
     check("an assertion rewritten in place is no finding", f.test_tampering(repo, "") == [])
+    # 2e''. A test the branch adds that asserts nothing is refused before the gate: it counts as a test in the
+    # gate's `test result:` line and in reviewer step 3 while passing whatever the code does. One assertion added
+    # anywhere in the diff passes, so a rewritten assertion beside a new test is not a finding.
+    base = "#[test]\nfn one() {\n    assert_eq!(1, 1);\n    assert!(true);\n}\n#[test]\nfn two() {}\n"
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    let _ = 1;\n}\n")
+    git("add -A", repo); git("commit -qm bare", repo)
+    got = f.test_tampering(repo, "Fix the parser.")
+    check("a test added with no assertion is refused", got == ["1 added test functions and no added assertion line"], str(got))
+    check("the ticket naming an assert drop waives it", f.test_tampering(repo, "drop the stale assert in one()") == [])
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    assert!(1 == 1);\n}\n")
+    git("add -A", repo); git("commit -qm asserting", repo)
+    check("a test added with an assertion is no finding", f.test_tampering(repo, "") == [])
     # 2e'. A line the branch adds with a bidi control, zero-width or tag character is refused with the file and the
     # code point; emoji (variation selector, joiner) and lines the branch removes are not.
     git("reset -q --hard origin/main", repo)
