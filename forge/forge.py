@@ -622,10 +622,11 @@ class Forge:
 
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
         """Tests the branch switches off, drops or strips: an added `#[ignore]`/`pytest.skip` marker, fewer test
-        functions, or fewer assertion lines than the branch point across the diff, unless the ticket says so.
-        Builder rule 12 and reviewer step 3 say this in prose and the review runs after the gate (8 to 25 min);
-        here it costs seconds (reflex1: 0 added `#[ignore]`, 0 removed `#[test]`, 0 commits with a net loss of
-        `assert` lines in 627 commits on main, so the prose has held; an agent that deletes the failing test
+        functions, fewer assertion lines than the branch point, or added test functions with no added assertion
+        line at all, unless the ticket says so. Builder rule 12 and reviewer step 3 say this in prose and the
+        review runs after the gate (8 to 25 min); here it costs seconds (reflex1: 0 added `#[ignore]`, 0 removed
+        `#[test]`, 0 commits with a net loss of `assert` lines and 0 that add a test function without adding an
+        assertion line, in 627 commits on main, so the prose has held; an agent that deletes the failing test
         instead of fixing the bug is the shape ImpossibleBench, arXiv 2510.20270, measures, and one that keeps
         the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here)."""
         text = ticket_text.split("\n## forge")[0].lower()
@@ -636,7 +637,7 @@ class Forge:
         # positives over reflex1's 627).
         drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
         assert_ok = drop_ok or re.search(r"\b(remove|delete|drop)\W+(\w+\W+){0,3}?(debug_)?assert", text)
-        out, f, net, gone, asserts = [], "", 0, 0, 0
+        out, f, net, gone, asserts, added = [], "", 0, 0, 0, 0
         for line in self.sh("git diff -U0 origin/main...HEAD -- '*.rs' '*.py'", cwd=cwd, check=True).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
@@ -649,12 +650,23 @@ class Forge:
                 net += 1 if m[1] == "+" else -1
             elif m := self.ASSERT_MARK.match(line):
                 asserts += 1 if m[1] == "+" else -1
+                added += m[1] == "+"
         if len(out) <= gone:
             out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
         if net < 0 and not drop_ok:
             out.append(f"{-net} fewer test functions than the branch point")
         if asserts < 0 and not assert_ok:
             out.append(f"{-asserts} fewer assertion lines than the branch point")
+        # A test that asserts nothing passes whatever the code does, and it counts as a test everywhere else: in
+        # the gate's `test result:` line, in reviewer step 3's count and in a `## Done when` rerun. Agents write
+        # them (Ördög's Constrained Tests, via Fowler 2026-11-11: an agent can "write tests with no assertions,
+        # or weak assertions, thus faking a high test coverage score"), and the 178-paper review arXiv 2511.21382
+        # puts the assertion, not the input, at the centre of what LLM-written tests get wrong. Added lines, not
+        # the net: one assertion added anywhere in the diff passes, so a reformatted or rewritten assertion beside
+        # a new test does not fail the attempt. A test whose only check is `should_panic` or `pytest.raises` would
+        # read as assertion-free; reflex1 has neither in 627 commits, and the ticket saying so waives it.
+        if net > 0 and not added and not assert_ok:
+            out.append(f"{net} added test functions and no added assertion line")
         return out
 
     # Code points a reader does not see and a model does: bidi controls (Trojan Source, Boucher and Anderson 2021:
@@ -1125,7 +1137,7 @@ class Forge:
                 return self.fail(ticket, f"diff adds or bumps Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
-                return self.fail(ticket, f"diff skips, deletes or strips tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                return self.fail(ticket, f"diff skips, deletes or strips tests the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing needs the ticket to say so (builder rule on tests); fix the code the test checks.")
             bad = self.invisible_chars(wt)
             if bad:
                 return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
@@ -1167,7 +1179,7 @@ class Forge:
                     return self.fail(ticket, f"the repair pinned Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
-                    return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed or left with fewer assertions needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                    return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing needs the ticket to say so (builder rule on tests); fix the code the test checks.")
                 bad = self.invisible_chars(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
