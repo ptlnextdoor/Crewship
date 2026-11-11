@@ -98,6 +98,21 @@ def audit(pr: dict) -> dict:
     return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now()}
 
 
+def moved(pr: int, sha: str) -> str:
+    """After the audit session returns: has the PR left the state audit() read (closed, merged, or a new head)?
+    Empty when it stands where the audit found it, or when gh cannot say. A post-hoc check of this one PR, not an
+    authorization check: it does not stop the session's own gh/git actions, nor a push that lands after it."""
+    r = sh(f"gh pr view {pr} -R {GH_REPO} --json state,headRefOid --jq '.state + \" \" + .headRefOid'")
+    state, _, head = r.stdout.strip().partition(" ")
+    if r.returncode or not head:
+        return ""  # unreadable is not evidence; the gate and the verdict rules still decide
+    if state != "OPEN":
+        return f"the PR is {state.lower()} since the audit started"
+    if head != sha:
+        return f"the PR head moved during the audit ({sha[:12]} -> {head[:12]})"
+    return ""
+
+
 def gate(pr: dict) -> tuple[bool, str]:
     """Merge the PR into base in a scratch worktree, then run the checks *base* defines.
 
@@ -213,13 +228,16 @@ def run() -> None:
         v = audit(pr)
         v["base"] = base
         bad = touches_protected(pr)
-        ok, gout = gate(pr)
-        v["gate"] = "pass" if ok else "fail"
+        drift = moved(n, v["sha"])
+        ok, gout = (False, "") if drift else gate(pr)
+        v["gate"] = "skipped" if drift else ("pass" if ok else "fail")
         files = [f["path"] for f in pr.get("files", [])]
         prompt_only = files and all(f.startswith("forge/prompts/") for f in files)
         # Prompt-only changes are a git revert away; code changes at medium risk wait for the owner.
         landable = v["risk"] in ("none", "low") or (prompt_only and v["risk"] == "medium")
-        if not ok:
+        if drift:
+            v["action"] = f"left open: {drift} (owner decides)"
+        elif not ok:
             v["action"] = "left open: gate failed"
         elif bad:
             v["action"] = f"left open: touches {bad} (owner decides)"
