@@ -1093,8 +1093,13 @@ class Forge:
                                                f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
             rc, out = self.agent(builder, bprompt(), wt)
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
-            if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
-                return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
+            # Base origin/main, not the lane's local main: local main sits at the branch point for the whole
+            # session (the repair prompt says so), so a builder that only merged origin/main in has a non-empty
+            # `main...HEAD` - another lane's landed files - and an empty diff for everything downstream here,
+            # which all reads origin/main. That attempt opened a PR and spent a gate run and a reviewer session
+            # on nothing. This check now fails exactly when the reviewer would see no change.
+            if not self.sh("git diff --stat origin/main...HEAD", cwd=wt).stdout.strip():
+                return self.fail(ticket, f"builder produced no diff against origin/main (rc={rc}).\n{out[-1500:]}")
             bad = self.secrets(wt) + self.msg_secrets(wt)
             if bad:
                 return self.fail(ticket, f"diff or commit message adds credential-shaped tokens {bad}; not pushed. Read keys from the environment or a file outside the tree; a fixture needs a value no issuer would mint, and a message that quotes a command's output must not carry one either.")
