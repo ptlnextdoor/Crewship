@@ -346,11 +346,9 @@ class Forge:
         except OSError as e:
             text, rc = f"failed to start agent: {e}", 127
         out.write_text(text)
-        # One receipt per session. The start line above is the only other trace, and its timestamp does not
-        # bound the session: four lanes share forge.log, so the next line is usually another lane's. rc, wall
-        # time and reply size per role are also this loop's only read on a vendor getting wordier at unchanged
-        # settings - omp is plan-billed here and prints no token count, and one operator's Console export has
-        # Opus 5.5 output per input token up ~60% since Oct 12, 2026 on the same prompts and effort settings.
+        # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
+        # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
+        # output tokens per turn are in the omp session file under out.with_suffix("").
         self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
 
