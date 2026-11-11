@@ -621,13 +621,14 @@ class Forge:
     # emoji sequences carry them (U+26A0 U+FE0F, U+200D joins); reflex1 main has neither set in a text file (627 commits).
     INVISIBLE = re.compile(r"[\u200b\u200c\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\U000e0000-\U000e007f]")
 
-    def invisible_chars(self, cwd: Path) -> list[str]:
+    def invisible_chars(self, cwd: Path, rev: str = "origin/main...HEAD") -> list[str]:
         """Files whose added lines carry a code point no reader sees, with the code point. rustc refuses bidi
         controls in literals and comments; nothing refuses them in Markdown, Python, shell or the PROGRESS.md
         entry the reviewer reads as the builder's claim, and nothing refuses zero-width or tag characters
-        anywhere. No ticket waiver: no ticket needs text the reviewer cannot see."""
+        anywhere. No ticket waiver: no ticket needs text the reviewer cannot see. `rev` is any diff spec, so
+        commit_docs() can scan what a planner or steward turn changed on main since its session started, its own commits included (`git diff --cached <HEAD before the session>`)."""
         out, f = set(), ""
-        for line in self.sh("git diff -U0 origin/main...HEAD", cwd=cwd, check=True).stdout.splitlines():
+        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
             if line.startswith("+") and (m := self.INVISIBLE.search(line)):
@@ -680,12 +681,13 @@ class Forge:
         spec, sep, notes = ticket_text.partition("\n## forge ")
         return spec + sep + cls.PRIOR_VERDICT.sub("[earlier verdict withheld]", notes)
 
-    def secrets(self, cwd: Path) -> list[str]:
+    def secrets(self, cwd: Path, rev: str = "origin/main...HEAD") -> list[str]:
         """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is
         pushed: a pushed key is public in seconds and in history for good, and the builder's environment holds the
-        keys the loop itself uses (RUNPOD_API_KEY, gh). No ticket waiver: no ticket needs a live key in the tree."""
+        keys the loop itself uses (RUNPOD_API_KEY, gh). No ticket waiver: no ticket needs a live key in the tree.
+        `rev` is any diff spec, as in invisible_chars()."""
         out, f = set(), ""
-        for line in self.sh("git diff -U0 origin/main...HEAD", cwd=cwd, check=True).stdout.splitlines():
+        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.splitlines():
             if line.startswith("+++ "):
                 f = line[6:]
             if line.startswith("+") and (m := self.SECRET.search(line)):
@@ -749,10 +751,11 @@ class Forge:
             left, budget = self.gpu_left()
             self.log(f"queue low: planner turn ({ready} of {need} tickets can start now; GPU budget ${left:.2f} left of ${budget:.0f})")
             self.board("planner is writing the next tickets")
+            base = self.sh("git rev-parse HEAD").stdout.strip()
             rc, out = self.agent("planner", self.prompt("planner", LANES=str(self.lanes), MIN_TICKETS=str(max(5, 2 * self.lanes)),
                                                         READY=str(ready), NEED=str(max(self.lanes, need - ready)),
                                                         GPU_LEFT=f"{left:.2f}", GPU_BUDGET=f"{budget:.0f}"), self.repo)
-            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue")
+            self.commit_docs("tickets PROGRESS.md ROADMAP.md", "forge: planner refills the ticket queue", base)
             self.discard_strays("planner")
             self.log(f"planner: {len(self.startable())} tickets can start now (was {ready})")
             self.push()
@@ -1246,19 +1249,34 @@ class Forge:
 
     def steward(self) -> None:
         self.log("steward turn: PROGRESS.md + roadmap + learnings")
+        base = self.sh("git rev-parse HEAD").stdout.strip()
         self.agent("steward", self.prompt("steward", STATE=self.status_text()), self.repo, timeout_min=30)
         self.state["steward_cycle"] = self.state["cycle"]
-        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update")
+        self.commit_docs("PROGRESS.md SCORE.md ROADMAP.md LEARNINGS.md README.md docs/assets tickets", "forge: steward update", base)
         self.discard_strays("steward")
         self.push()
 
-    def commit_docs(self, paths: str, msg: str) -> None:
+    def commit_docs(self, paths: str, msg: str, base: str) -> None:
         """Commit a role's doc edits. `git add -A a b c` is all-or-nothing: one path a project does not
         have and nothing at all is staged (the error went to /dev/null), so discard_strays threw the
-        whole turn away. Stage the paths that exist; a path the role deleted outright is restored there."""
+        whole turn away. Stage the paths that exist; a path the role deleted outright is restored there.
+        The staged text is pushed to main and to the public repo with no gate, no review and no diff a
+        human reads, and every later builder reads PROGRESS.md, LEARNINGS.md and AGENTS.md as instructions
+        (reviewer step 6), so the two checks a builder's branch passes before its first push run here too:
+        a planner or steward turn that stages a credential-shaped token or a code point no reader sees is
+        discarded whole, like a stray edit. Prose in the role prompts is not this check: instructions in a
+        context file hold about two thirds of the time against 88.3% for the same constraints compiled into
+        executable ones (ContextCov, arXiv 2603.00822)."""
         here = " ".join(p for p in paths.split() if (self.repo / p).exists())
         if here:
-            self.sh(f"git add -A {here}; git commit -qm '{msg}' || true")
+            self.sh(f"git add -A {here}")
+        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}")
+        if bad:
+            self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
+            self.sh(f"git reset -q --hard {base} && git clean -qfd")
+            return
+        if here:
+            self.sh(f"git commit -qm '{msg}' || true")
 
     def discard_strays(self, role: str) -> None:
         """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""
