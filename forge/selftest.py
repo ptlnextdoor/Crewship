@@ -214,6 +214,13 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "NOTES.md").write_text("++ done \U000e0041\n")
     git("add -A", repo); git("commit -qm plus", repo)
     check("an added line that reads as a +++ header is still searched", [g[-7:] for g in f.invisible_chars(repo)] == ["U+E0041"], str(f.invisible_chars(repo)))
+    # A Unicode line separator inside an added line: `splitlines()` cut the line there and the piece after it,
+    # carrying the key and the tag characters, reached no guard. The guards split on `\n` only, as git writes it.
+    (repo / "NOTES.md").write_text("visible\u2028const K: &str = \"AKIAIOSFODNN7EXAMPLE\";\n")
+    (repo / "src/a.rs").write_text("// ok\u0085hidden \U000e0041\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm separator", repo)
+    check("a key hidden after a Unicode line separator is refused", f.secrets(repo) == ["NOTES.md: aws"], str(f.secrets(repo)))
+    check("tag characters hidden after U+0085 are refused", f.invisible_chars(repo) == ["src/a.rs: U+E0041"], str(f.invisible_chars(repo)))
     git("reset -q --hard origin/main", repo)
     # 2e''. A line the branch adds with a credential-shaped token is refused with the file and issuer before the
     # push; a bare hex string, a key the branch removes and the key's prefix alone are not. A password typed into
