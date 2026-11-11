@@ -2,6 +2,34 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #202 · 2026-11-11T20:17:03Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #202 forge: a session's git cannot push to origin
+What it changes: adds `forge.no_push(env)`, which appends `remote.origin.pushurl=forge-pushes-not-sessions://` as the next `GIT_CONFIG_*` entry. `_agent_once` (every lane role) and reviewctl's audit and fixer `omp` commands now run with it, so a session's `git push origin` fails locally with rc 128. Builder rule 17 is reworded and selftest §28 is added.
+Findings:
+- medium forge/selftest.py:36-39 (with forge/forge.py:343, forge/reviewctl.py:95,176) The new env breaks forge's own selftest when it runs inside any session this PR covers. The `git()` helper inherits `os.environ`, and 37 fixture pushes go to scratch bare repos named `origin` (first at :115, `git("push -q origin main", repo)`). I ran the PR head's selftest (git archive into /tmp) with the env reviewctl's audit and fixer now get (`GIT_CONFIG_COUNT=1`, pushurl). It printed 20 `ok` and then died at selftest.py:126 with `RuntimeError: git diff --name-only origin/main...HEAD -- Cargo.lock -> 128`: the helper swallows the failed push, so `origin/main` never exists. The lane env (`COUNT=3`) gives the same crash. Without the env the same run gives 187 ok, rc 0. Audit sessions run this suite in-session (forge/PR_AUDIT.md:1695, :3643). After merge, every audit would see a crash that looks like a code failure in the PR it is judging, and a MERGE WITH CHANGE fixer might chase it inside the PR's files. reviewctl `gate()` does not show it: its `sh()` has no prefix and passes. With the one-line fix below the suite gives 187 ok, rc 0 with no env, with the reviewctl env and with the lane env.
+- info forge/forge.py:84-99,343 Traced end to end. I pointed `forge.OMP` at a script and ran it through `_agent_once`. The session env has `GIT_CONFIG_COUNT=3`: KEY_0 `core.hooksPath` and KEY_1 `core.fsmonitor` are kept, KEY_2 is the pushurl. `git push origin HEAD:main` printed "git: 'remote-forge-pushes-not-sessions' is not a git command" and returned rc 128; `git fetch` returned 0. `Forge.sh("git push ...")` right after returned 0.
+  - Forge's own pushes (claim, push(), pr_open, land's force-with-lease, the repair push, recover's branch delete) all go through `sh()` with `self.env`, so they are unaffected. A `Forge` built inside a session resets `GIT_CONFIG_COUNT=2`, so its pushes are unaffected too.
+  - `gh repo view` with the env still resolves `ptlnextdoor/Crewship`, because gh takes the fetch URL.
+  - No session prompt asks the session to push: planner, steward, reviewer, the conflict session at forge.py:921 and the repair prompt all leave it to forge. gpu.py runs no git, and reflex1's tree has no `git push`.
+  - Claim race, recover(), discard_strays(), protected paths, quota fallback and timeout/killpg are untouched. No ticket text reaches the new env or the reviewctl prefix (both are static constants), and reviewctl's unit sets no `GIT_CONFIG_*`, so `no_push({})` overwrites nothing there.
+- low forge/prompts/builder.md:17 Deleted fragment: "; this shell's `gh` login can push `origin main` directly and nothing mechanical refuses it from here." It told the builder that `git push` was unguarded, which is now false for `git push origin`; the PR body names this reword. The rule itself ("Never run `git push`, or any other command that reaches `origin`... Forge pushes this branch") is kept word for word and is still pinned by selftest.py:743, which passes on the head. The warning that the `gh` login can push `origin main` directly also stays, for the routes that remain open. The new text names the mechanism (`remote.origin.pushurl`), but the error and `git config -l` show it anyway, and "do not work around it" covers it. No change.
+- low forge/README.md:104,122 Not updated. Row 122 still says "the only mechanical guard is a tool-call hook omp does not load from `--config`". Row 104 says the audit session's push to `forge` "still meets only the prompt's sentence". After merge both are false for `git push origin`, and the safeguard table has no row for the new guard. README is outside this PR's files, so the fixer cannot change it; it is a follow-up.
+- low forge/forge.py:85, forge/selftest.py:1526 These comments say every role prompt forbids pushing; only builder.md does (planner.md, reviewer.md and steward.md have no push rule). forge/reviewctl.py:40-42 says "every part is a bare identifier", but the values contain `.`, `:` and `/`; the prefix is shell-safe only because none of these is a shell metacharacter. forge/reviewctl.py:28: the import comment still describes only `Forge`. Wording only, no behavior change.
+- low forge/selftest.py:1526-1546 §28 tests `no_push()` itself, not that `_agent_once` or reviewctl apply it: removing `no_push(` from forge.py:343 keeps the suite green. The wiring was checked e2e above.
+- info Siblings:
+  - #117 adds `--no-title` to the same two reviewctl.py lines, so the two conflict as text; the intents are compatible. #117 is already stale against base (its `_agent_once` hunk targets `--no-session`, which base no longer has), so #117 should rebase.
+  - #182, #183, #140 and #85 touch builder.md elsewhere, and none adds a push instruction. #183 carries the existing :743 check only as context, and the new rule 17 still satisfies it.
+  - #148 and #79 rewrite `sh()` with `env=self.env`, so forge's own push path stays outside `no_push`.
+  - No sibling adds a `# 28.` section, and no open PR duplicates this change.
+Change needed: in forge/selftest.py, `git()` helper (line 36-39), make the suite's own git ignore a calling session's `GIT_CONFIG_*`, so line 38 reads
+`                          env={**os.environ, "GIT_CONFIG_COUNT": "0", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",`
+with this comment line directly above the `return`: `    # A forge session's GIT_CONFIG_* (no_push's remote.origin.pushurl) must not reach the scratch origins below.`
+
+
 ## PR #201 · 2026-11-11T19:44:58Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
