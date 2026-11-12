@@ -463,7 +463,7 @@ class Forge:
         """The builder's step 3: which commit the ticket was written against (the one that added its file) and how
         many non-bookkeeping commits main has taken since. A ticket names files, symbols and line numbers of the
         tree the planner read, and the builder starts on today's: of reflex1's 124 ticket starts, 118 began on a
-        tree with at least one such commit after the ticket, median 36, 84 with twenty or more. Stale state in
+        tree with at least one such commit after the ticket, median 32.5, 75 with twenty or more. Stale state in
         a prompt is a measured harm (Gao, Yang, Yang, AgentSE 2026: stale traces broke 34/135 correct starts
         against 4/135 with current ones), and aws/aws-emulator's issue files carry the same note under an
         `Issue-Commit:` header. One line, read-only; a ticket git does not know (no commit added it) gets no claim."""
@@ -471,7 +471,7 @@ class Forge:
         planned = self.sh(f"git log --diff-filter=A --format=%h -1 -- {rel}").stdout.strip()
         if not planned:
             return "forge could not tell which commit this ticket was written against; treat every file and line it names as a lead, not a fact."
-        moved = [s for s in self.sh(f"git log --no-merges --format=%s {planned}..HEAD").stdout.splitlines() if not s.startswith("forge:")]
+        moved = self.sh(f"git log --no-merges --format=%h {planned}..HEAD -- . ':!tickets/'").stdout.split()
         if not moved:
             return f"The ticket was written against this tree (`{planned}`): no code has landed since, so what it names is current."
         return (f"The ticket was written against `{planned}`; main has taken {len(moved)} code commit{'s' if len(moved) != 1 else ''} since "
