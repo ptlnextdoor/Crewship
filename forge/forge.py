@@ -826,6 +826,34 @@ class Forge:
                 out.add(f"{sha[:8]} (commit message): {m.lastgroup}")
         return sorted(out)
 
+    # A fetched script run unread: `curl|wget ... | sh` (`sudo`, `bash`, `zsh`, `dash`, `python`, `perl`, `node`,
+    # `ruby`), `sh|source|. <(curl ...)`, `sh -c "$(curl ...)"`, `eval "$(wget ...)"`. The one backdoor row
+    # Microsoft found in a public fine-tuning set maps a benign request to exactly this shape (`source <(curl -s
+    # https://...)`, Microsoft Security Blog 2026-11-12); remote script execution is the most common technique in
+    # 157 confirmed malicious agent skills (25.2%, 81.8% critical; Liu et al., arXiv 2602.06547); a static scan
+    # finds this shape and a paraphrase passes it (Qu et al., arXiv 2604.03081: 2.5% evade both). `| sha256sum`,
+    # `| tar` and `| shasum` do not match. reflex1 main (2c39a79) has no match in any tracked file; this repo's
+    # matches are Crewship's own `install.sh` lines in its docs and this file, none in a tree forge builds.
+    FETCH_EXEC = re.compile(r"\b(?:curl|wget)\b[^|\n;&]*\|\s*(?:sudo\s+)?(?:(?:ba|z|da)?sh|python[23]?|perl|node|ruby)\b"
+                            r"|(?:(?<![\w./-])(?:ba|z|da)?sh|\bsource|(?<![\w.])\.)\s+<\(\s*(?:curl|wget)\b"
+                            r"|(?:(?<![\w./-])(?:ba|z|da)?sh|\beval)\b[^\n]*\$\(\s*(?:curl|wget)\b")
+
+    def fetch_exec(self, cwd: Path, ticket_text: str, rev: str = "origin/main...HEAD") -> list[str]:
+        """Files whose added lines fetch a script and run it unread, with the host, unless the ticket names that host
+        (a bootstrap the ticket asks for, as unrequested_deps() takes a crate the ticket names). Runs before the
+        gate: the gate runs the tree, so the line would run on this box with the owner's credentials; a URL with
+        no fixed host (`curl $URL | sh`) has nothing a ticket could name and is refused. `rev` is any diff spec."""
+        out, f = set(), ""
+        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.split("\n"):  # `split`, not `splitlines`: test_tampering
+            if line.startswith("+++ "):
+                f = line[6:]
+            if line.startswith("+") and self.FETCH_EXEC.search(line):
+                host = (m := re.search(r"https?://([^/\s'\"$)]+)", line)) and m[1] or "no fixed host"
+                if m and host in ticket_text:
+                    continue
+                out.add(f"{f}: {host}")
+        return sorted(out)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -1204,6 +1232,9 @@ class Forge:
             bad = self.invisible_chars(wt)
             if bad:
                 return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
+            bad = self.fetch_exec(wt, ticket.read_text())
+            if bad:
+                return self.fail(ticket, f"diff adds a line that fetches a script and runs it unread {bad}; not allowed. Check the file in or name the package (builder rule on dependencies); only the ticket naming the host accepts a bootstrap line.")
             ok, gout = self.gate(wt)
             # verdict visible, log collapsed: the review below it is what a reader opens the PR for (reflex1: 110 gate comments, median 2,751 chars)
             self.pr_comment(self.pr, f"<details><summary><b>gate: {'PASS' if ok else 'FAIL'}</b></summary>\n\n```\n{gout}\n```\n</details>")
@@ -1246,6 +1277,9 @@ class Forge:
                 bad = self.invisible_chars(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
+                bad = self.fetch_exec(wt, ticket.read_text())
+                if bad:
+                    return self.fail(ticket, f"the repair adds a line that fetches a script and runs it unread {bad}; not allowed. Check the file in or name the package (builder rule on dependencies); only the ticket naming the host accepts a bootstrap line.")
                 ok, gout = self.gate(wt)
                 self.pr_comment(self.pr, f"<details><summary><b>gate after repair: {'PASS' if ok else 'FAIL'}</b></summary>\n\n```\n{gout}\n```\n</details>")
                 if not ok:
