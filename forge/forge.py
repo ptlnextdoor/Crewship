@@ -268,10 +268,23 @@ class Forge:
         lacks, try the role's `fallback` model, then any role with a model from another vendor. Returns (rc, tail)."""
         r = self.cfg["roles"][role]
         chain = [r["model"]] + r.get("fallback", [])
+        # The clone's .git/config is shared by its worktrees, outside every diff, and read by every later git the
+        # loop runs. GIT_CONFIG_* (self.env) pins core.hooksPath and core.fsmonitor, but not the keys git runs as a
+        # command with no wildcard to pin: a `diff.external` a session writes runs under sh()'s `git diff -U0`
+        # (secrets, test_tampering) and the reviewer diff of the same cycle (measured, git 2.43), `credential.helper`
+        # on the loop's push, `remote.origin.url` moves the push itself. Snapshot the file and put it back after
+        # the session, so nothing a session writes there outlives it; the log line says what it wrote.
+        gitcfg = Path(self.sh("git rev-parse --path-format=absolute --git-common-dir", cwd=cwd).stdout.strip() or cwd) / "config"
+        cfg_before = gitcfg.read_bytes() if gitcfg.is_file() else None
         for model in chain:
             if self.spent(model):
                 continue
             rc, text = self._agent_once(role, model, r.get("thinking", "high"), prompt, cwd, timeout_min or r.get("timeout_min", 60))
+            after = gitcfg.read_bytes() if gitcfg.is_file() else b""
+            if cfg_before is not None and after != cfg_before:
+                added = sorted(set(after.decode(errors="replace").split("\n")) - set(cfg_before.decode(errors="replace").split("\n")))
+                self.log(f"{role} session rewrote {gitcfg}: {' | '.join(l.strip() for l in added if l.strip())[:300]}; restored")
+                gitcfg.write_bytes(cfg_before)
             # The provider writes its quota refusal to stderr ("Codex error event: The usage limit has been
             # reached", omp -p writes a failed turn's error there, as in the 3 surviving refusal logs); stdout
             # is the agent's own report, and it quotes those words when the work is about quota - lane 2

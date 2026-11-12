@@ -1530,6 +1530,20 @@ with tempfile.TemporaryDirectory() as d:
     r = f.sh("git add -A && git commit -qm work", cwd=repo)
     check("a hook or fsmonitor command planted in .git/ does not run under the loop's git",
           r.returncode == 0 and not mark.exists(), f"rc={r.returncode} ran={mark.read_text() if mark.exists() else ''}")
+    # A session writes a key GIT_CONFIG_* cannot pin (diff.external runs under the loop's own `git diff -U0`,
+    # which secrets() and test_tampering() call next): agent() puts the file back and logs what it held.
+    wt = Path(d) / "wt"; git(f"worktree add -q -b s {wt} main", repo)  # this git runs the fsmonitor above: mark is noise from here
+    (Path(d) / "extdiff").write_text(f"#!/bin/sh\necho extdiff >> {mark}\n"); (Path(d) / "extdiff").chmod(0o755)
+    cfg_file = (repo / ".git/config").read_bytes()
+    logged = []; f.log = logged.append
+    f._agent_once = lambda role, model, thinking, prompt, cwd, timeout_min: (git(f"config diff.external {d}/extdiff", cwd), (0, "done"))[1]
+    f.agent("builder", "p", wt)
+    (wt / "f").write_text("c\n")
+    r = f.sh("git diff -U0", cwd=wt)
+    check("a diff.external a session planted in .git/config is undone before the loop's next git diff",
+          (repo / ".git/config").read_bytes() == cfg_file and r.returncode == 0 and "+c" in r.stdout
+          and "extdiff" not in (mark.read_text() if mark.exists() else "")
+          and any("external = " in m and "restored" in m for m in logged), f"rc={r.returncode} log={logged}")
 
 # 28. A session's git must not be able to push: every role prompt forbids it and nothing refused it before
 # (forge.no_push). Reads must keep working, and the loop's own push must not be caught by it.
