@@ -277,13 +277,31 @@ def run() -> None:
         log(f"PR #{n}: {v['verdict']} risk={v['risk']} gate={v['gate']} -> {v['action']}")
 
 
+def conflicts(pr: dict) -> str:
+    """Which files stop this PR merging into base *today*. The mark's 'gate failed' is about the base the gate
+    ran on: 12 of 30 open PRs read 'gate failed' on 2026-11-12 and 2 of them merged clean by then, while
+    2 more conflicted only in README.md. Read-only: a fetch and an in-memory merge, no worktree."""
+    n = pr["number"]
+    if sh(f"git fetch -q origin pull/{n}/head:refs/reviewctl/pr-{n} -f").returncode:
+        return "?"
+    r = sh(f"git merge-tree --write-tree --name-only origin/{BASE} refs/reviewctl/pr-{n}")
+    if r.returncode == 0:
+        return "clean"
+    names = r.stdout.split("\n\n")[0].splitlines()[1:]  # tree oid, conflicted paths, blank, messages
+    return "conflict: " + " ".join(names)
+
+
 def status() -> None:
-    prs = open_prs()
+    """Smallest diff first: patch size is the strongest creation-time predictor of review effort on agent PRs
+    (MSR 2026, 33,707 PRs, AUC 0.96), so the owner's queue starts with what is cheapest to decide."""
+    prs = sorted(open_prs(), key=lambda p: p["additions"] + p["deletions"])
     print(f"{GH_REPO} base={BASE}: {len(prs)} open")
     for pr in prs:
         marks = sorted(STATE.glob(f"pr{pr['number']}.*.json"))
         last = json.loads(marks[-1].read_text()) if marks else {}
-        print(f"  #{pr['number']:>3} {pr['title'][:60]:62s} {last.get('verdict', '-'):6s} {last.get('action', 'not audited')}")
+        size = f"{len(pr['files'])}f +{pr['additions']}/-{pr['deletions']}"
+        print(f"  #{pr['number']:>3} {pr['title'][:50]:52s} {size:14s} {last.get('verdict', '-'):6s} "
+              f"{last.get('action', 'not audited')} · {conflicts(pr)}")
     if (STATE / "review.log").exists():
         print("".join((STATE / "review.log").read_text().splitlines(True)[-6:]))
 
