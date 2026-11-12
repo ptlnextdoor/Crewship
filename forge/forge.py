@@ -843,15 +843,16 @@ class Forge:
         (a bootstrap the ticket asks for, as unrequested_deps() takes a crate the ticket names). Runs before the
         gate: the gate runs the tree, so the line would run on this box with the owner's credentials; a URL with
         no fixed host (`curl $URL | sh`) has nothing a ticket could name and is refused. `rev` is any diff spec."""
+        text = ticket_text.split("\n## forge")[0]  # the ticket's own text: a `## forge` note quotes the PR url, this refusal, gate and review output
         out, f = set(), ""
         for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.split("\n"):  # `split`, not `splitlines`: test_tampering
             if line.startswith("+++ "):
                 f = line[6:]
             if line.startswith("+") and self.FETCH_EXEC.search(line):
-                host = (m := re.search(r"https?://([^/\s'\"$)]+)", line)) and m[1] or "no fixed host"
-                if m and host in ticket_text:
+                hosts = re.findall(r"https?://([^/\s'\"$)]+)", line)
+                if hosts and all(h in text for h in hosts):
                     continue
-                out.add(f"{f}: {host}")
+                out.add(f"{f}: {', '.join(hosts) or 'no fixed host'}")
         return sorted(out)
 
     def main_gated(self) -> str:
