@@ -473,6 +473,13 @@ class Forge:
     def attempts(self, ticket: Path) -> int:
         return ticket.read_text().count("## forge ")
 
+    def status_on_main(self, ticket: Path) -> str:
+        """The ticket's `status:` value as origin/main has it now (one fetch); "missing" when main no longer has the file."""
+        self.sh("git fetch -q origin", timeout=120)
+        head = self.sh(f"git show origin/main:{shlex.quote(str(ticket.relative_to(self.repo)))}").stdout[:600]
+        m = re.search(r"^status:\s*(.*?)\s*$", head, re.M)
+        return m.group(1) if m else "missing"
+
     def ticket_drift(self, ticket: Path) -> str:
         """The builder's step 3: which commit the ticket was written against (the one that added its file) and how
         many non-bookkeeping commits main has taken since. A ticket names files, symbols and line numbers of the
@@ -1301,6 +1308,19 @@ class Forge:
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
                 return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
+            # The ticket's `status:` line on origin/main is the one channel the owner and planner have into a running
+            # attempt (STEERING.md is read only at session start), and set_status("done") below overwrites whatever it
+            # says: reflex1's 10-23 pivot set 4 in_progress tickets to `cancelled` under their lanes (0020/0032/0034/0037;
+            # the loop was stopped, so none landed), and the planner cancels and reshapes open tickets every refill.
+            # A ticket the owner cancelled, reopened or blocked mid-attempt is not landed and its status is left alone.
+            # shortcut: checked once, here, so a cancel during the build still costs the gate and the review (8-25 min + a session); check before the gate too once a mid-attempt cancel shows up in forge.log.
+            moved = self.status_on_main(ticket)
+            if moved != f"in_progress lane={self.lane}":
+                self.pr_close(self.pr, f"ticket status on main is `{moved}`, not `in_progress lane={self.lane}`: the owner or planner "
+                                       "moved it while this attempt ran; not landed, status left as main has it. The diff stays on this PR.")
+                self.record(tid, "superseded", f"status on main: {moved}")
+                self.log(f"cycle {n}: SUPERSEDED {tid}: status on main is {moved}; not landed")
+                return
             why = self.land(wt, branch, tid, builder)
             if why:
                 return self.fail(ticket, why)

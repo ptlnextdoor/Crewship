@@ -629,6 +629,38 @@ with tempfile.TemporaryDirectory() as d:
           any(a.startswith("pr close") for a, _ in calls)
           and any("TimeoutExpired" in b for _, b in calls), str(calls)[:300])
 
+# 4p2. A ticket whose status on main moved while the attempt ran (reflex1's 10-23 pivot cancelled 4 in_progress
+# tickets under their lanes) is not landed, and `forge: done` must not overwrite the owner's `cancelled`.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo, other = Path(d) / "origin.git", Path(d) / "repo", Path(d) / "other"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d)); git(f"clone -q {origin} {other}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0004-t.md").write_text("status: in_progress lane=1\n\n# t\n")
+    git("add -A", repo); git("commit -qm claim", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    closed: list[str] = []
+    f.plan, f.board, f.pr_comment = (lambda: None), (lambda doing: None), (lambda pr, text: None)
+    f.claim = lambda: repo / "tickets/0004-t.md"
+    f.pr_open = lambda wt, branch, ticket, builder: "https://example.invalid/pull/13"
+    f.pr_close = lambda pr, why: closed.append(why)
+    f.agent = lambda role, prompt, cwd, timeout_min=None: ((cwd / "src.rs").write_text("fn main() {}\n"), (0, "VERDICT: APPROVE"))[1]
+    def gate_while_owner_cancels(cwd):  # the owner's commit lands on main during the gate
+        git("pull -q origin main", other); (other / "tickets/0004-t.md").write_text("status: cancelled\n\n# t\n\n## forge-cancel\npivot\n")
+        git("add -A", other); git("commit -qm pivot", other); git("push -q origin main", other)
+        return True, ""
+    f.gate = gate_while_owner_cancels
+    f.cycle()
+    on_main = git("show origin/main:tickets/0004-t.md", repo)
+    check("a ticket cancelled on main while the attempt ran is not landed and keeps the owner's status",
+          on_main.startswith("status: cancelled\n") and "## forge-cancel" in on_main
+          and git("ls-tree --name-only origin/main", repo).split() == ["tickets"]
+          and len(closed) == 1 and "`cancelled`" in closed[0]
+          and f.state["history"][-1]["result"] == "superseded" and f.state["merged"] == 0 and f.state["failed"] == 0,
+          f"main: {on_main[:80]!r} closed: {closed} history: {f.state['history'][-1:]}")
+
 # 4q. A lane that runs dry refills the ticket queue itself. The planner used to run only on lane 1, at the
 # top of its own cycle, so lanes 2-4 slept 2 min at a time until lane 1 finished a build (44 "no open ticket
 # to claim" lines in reflex1's log; lane 4 idled 19:26-19:44 on 2026-10-23). Still one planner turn at a time.
@@ -972,7 +1004,10 @@ with tempfile.TemporaryDirectory() as d:
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg)
     f.plan, f.board, f.gh = (lambda: None), (lambda doing: None), (lambda args, cwd=None, body=None: "")
-    f.claim = lambda: repo / "tickets/0004-r.md"
+    def claim():  # as claim() does: the lane's status commit is on main before the attempt starts
+        t = repo / "tickets/0004-r.md"; f.set_status(t, "in_progress lane=1")
+        git(f"add {t}", repo); git("commit -qm claim", repo); git("push -q origin main", repo); return t
+    f.claim = claim
     f.gate = lambda cwd: (True, "")
     f.pr_open = lambda wt, branch, ticket, builder: (git(f"push -q -u origin {branch}", wt), "https://example.invalid/pull/9")[1]
     # 11a. The retry's note is the review whole, with omp's `[stderr]` chatter off: the PASS/FAIL ledger is at the
