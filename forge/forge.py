@@ -296,9 +296,19 @@ class Forge:
             # shortcut: _agent_once keeps the last 6 KB, so a refusal behind 6 KB of stderr noise loses the
             # marker and reads as a plain failure; widen that tail if a provider ever gets chatty on stderr.
             err = text.partition("\n[stderr]\n")[2]
+            # A vendor the box is signed out of (`error: No API key found for <vendor>.` before any request, rc 1,
+            # ~3 s, measured here with a provider that has no credential; a revoked token mid-session is the
+            # provider's `authentication_error`) is a failure no session can fix, and as a plain failure it was
+            # charged to the ticket as an attempt, three cycles to `blocked`. Mark the vendor like a quota refusal:
+            # the role falls to the other vendor, both out is QuotaExhausted (not an attempt), and quota_ok()
+            # clears the mark once `omp usage` shows the vendor's window again, i.e. once someone signed in.
             if rc != 0 and re.search(r"usage_limit_reached|usage limit has been reached|rate_limit|quota", err, re.I):
                 self.exhausted[model.split("/")[0]] = time.time()
                 self.log(f"quota: {model} exhausted; trying the next model for {role}")
+                continue
+            if rc != 0 and re.search(r"No API key found for \w+\.|authentication_error", err):
+                self.exhausted[model.split("/")[0]] = time.time()
+                self.log(f"signin: {model.split('/')[0]} needs a login (`omp login`); trying the next model for {role}")
                 continue
             # omp refuses a model its catalog lacks before any request (`Model "<x>" not found`, rc 1, ~3 s):
             # a config bump to a model released ahead of the catalog (claude-fable-5-2 on 2026-11-09, listed
