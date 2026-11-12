@@ -282,13 +282,14 @@ def conflicts(pr: dict) -> str:
     ran on: 12 of 30 open PRs read 'gate failed' on 2026-11-12 and 2 of them merged clean by then, while
     2 more conflicted only in README.md. Read-only: a fetch and an in-memory merge, no worktree."""
     n = pr["number"]
-    if sh(f"git fetch -q origin pull/{n}/head:refs/reviewctl/pr-{n} -f").returncode:
+    # no FETCH_HEAD: run()'s and the scout unit's `git pull --rebase` in this clone read it
+    if sh(f"git fetch -q --no-write-fetch-head origin pull/{n}/head:refs/reviewctl/pr-{n} -f").returncode:
         return "?"
     r = sh(f"git merge-tree --write-tree --name-only origin/{BASE} refs/reviewctl/pr-{n}")
     if r.returncode == 0:
         return "clean"
     names = r.stdout.split("\n\n")[0].splitlines()[1:]  # tree oid, conflicted paths, blank, messages
-    return "conflict: " + " ".join(names)
+    return "conflict: " + " ".join(names) if r.returncode == 1 and names else "?"
 
 
 def status() -> None:
