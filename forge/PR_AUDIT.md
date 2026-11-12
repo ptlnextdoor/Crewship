@@ -2,6 +2,49 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #207 · 2026-11-12T03:32:38Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #207 forge: builder is told which commit its ticket was written against and how far main has moved
+What it changes: adds `Forge.ticket_drift()` (forge.py:462-480). It makes two `git log` calls in the lane's clone: the commit that added the ticket file, and the count of non-merge commits since then whose subject does not start with `forge:`. It renders one of three sentences into a new builder.md start step `3. {DRIFT}` (builder.md:6), passed from `cycle()` at forge.py:1152/1161.
+
+Findings:
+- low forge/forge.py:474 The "is this code?" test reads the commit subject, so the "current" sentence can be false. forge commits builder code under `forge:` subjects itself: `forge: builder work in progress` (1166) and `forge: repair after gate` (1208), whenever a session leaves work uncommitted, e.g. when it is killed at `timeout_min`. Both landing paths merge without squashing (`gh pr merge --merge`, local `merge --no-ff`), so these commits reach main as non-merge commits and the filter drops them. In a throwaway repo, a ticket followed by code that landed only through a WIP commit rendered "no code has landed since, so what it names is current". That is the one rendering that tells the builder to trust the ticket's paths and line numbers. On reflex1 it never misfired: 0 of 124 starts, because main has one such commit and it touches docs only. forge already treats "touches only `tickets/`" as bookkeeping (`main_gated()` 815-831, `land()`'s re-gate skip), so a path filter is the consistent test. With it, reflex1 still gives the same 118/6 split, and the WIP case counts 1 commit.
+- info forge/forge.py:462-480, 1152, 1161; builder.md:6 Security trace: nothing weakens the gate, the reviewer or the protected paths.
+  - No change to `gate()`, the pre-gate guards, reviewer.md, `protected`, `recover()` or `discard_strays()`.
+  - The new text grants no edit on `gate.sh`/`tickets/`/`.forge/`/`STEERING.md` and says nothing about tests.
+  - The `DRIFT` value is fixed text plus a `%h` sha. Commit subjects are counted, never rendered, so no ticket or commit text reaches the prompt through it.
+  - `prompt("builder")` has one call site (`bprompt()`, 1160). `prompt()`'s missing-placeholder check covers `{DRIFT}`, and the repair pass embeds `bprompt()`, so it gets the line too.
+  - The added text is bounded at about 330 characters, not per commit.
+  - The call runs inside `cycle()`'s try (1147), so a raise takes the existing except/finally: PR closed, worktree removed, ticket left for `recover()`.
+  - Read-only, in the lane's own clone, so no state is shared between lanes. No quota or GPU use. `git log --diff-filter=A -1` takes 0.045 s on reflex1.
+  - Selftest runs `cycle()` end to end. On a `git archive` copy of the head: 189 ok, "all checks passed", rc 0, 13 s.
+- low forge/forge.py:471 `{rel}` goes unquoted into a `shell=True` command, and the ticket file name is written by the planner. This adds no new exposure: `claim()` (929) already runs `git add {t}` with the same name unquoted, earlier in the same cycle. Probe: a name with a space splits into two pathspecs and falls to the "could not tell" rendering. `shlex.quote` (already used at 1043/1104/1413) would be correct. Not blocking.
+- low forge/forge.py:466 (also the PR body) The docstring's "median 36, 84 with twenty or more" does not describe the shipped command.
+  - The body's 118 / 84 / max 141 reproduce only when merge commits are counted (my run: 118, median 38, 84, 141).
+  - The shipped `--no-merges` subject filter gives 118, median 29, 69 with twenty or more, max 120.
+  - With the path filter below: 118, median 32.5, 75, max 130.
+  - The body's 0142 example (12 commits since `a42c840` at `2c39a79`) reproduces.
+- low forge/prompts/builder.md:6 (rendered text) The wording overstates in two places, though it only sends the builder off to verify:
+  - "describes that tree, not this one" is said for every start with at least one commit since (118 of 124), when it means "may have moved". It is followed by "find each in this tree ... before you edit", so it calls for a check, not a skip.
+  - The fallback "treat every file and line it names as a lead, not a fact" is looser than #183's bounded rule. It is effectively unreachable: after `claim()` the ticket is always in a commit, so it fires only when `git log` fails or a name word-splits (finding above).
+- none Deletions: nothing leaves `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. The one modified forge.py line (1161) only appends `DRIFT=drift`. No layer is retired.
+- info Siblings: I read the diffs of all 44 open PRs on `forge` that share `forge/forge.py` or `forge/prompts/builder.md` with this one.
+  - None edits the lines this PR touches: the insertion after `attempts()`, or the `bprompt()` render line.
+  - #136/#160/#181/#195/#196/#197 change other lines of `cycle()`. #79's hunk anchored on `attempts()` is inside `gate()`.
+  - #183 ("a `## Do` line the tree contradicts is one stale line") is the semantic neighbour, and the two are compatible. #183 says what to do with a stale line and keeps `## Done when`, `## Out of scope`, the protected paths and the dependency rule binding. #207 says how far main has moved. Neither contradicts nor duplicates the other.
+  - #1's hunk context is the start-steps block on a stale base (old steps 1-2), so it conflicts with the new step 3 textually only. #1 is the side that rebases.
+- low (slop) forge/forge.py:463-469 The 7-line docstring carries study citations and the wrong numbers above. That matches house style, so not blocking beyond the number fix.
+
+Change needed (only for MERGE WITH CHANGE): in `ticket_drift()`, forge/forge.py:474, replace
+`        moved = [s for s in self.sh(f"git log --no-merges --format=%s {planned}..HEAD").stdout.splitlines() if not s.startswith("forge:")]`
+with
+`        moved = self.sh(f"git log --no-merges --format=%h {planned}..HEAD -- . ':!tickets/'").stdout.split()`
+and in the docstring at :466 replace `median 36, 84 with twenty or more` with `median 32.5, 75 with twenty or more`. This counts a commit by what it touches, not by its subject, matching forge's existing tickets/-only bookkeeping rule. Probe: the WIP-commit case then renders "1 code commit since", and tickets/-only status commits still render "no code has landed since".
+
+
 ## PR #206 · 2026-11-12T02:29:26Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
