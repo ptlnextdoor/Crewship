@@ -747,6 +747,9 @@ check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it fo
 check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in b and "existing code takes precedence" in b)
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
 check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
+check("builder treats a `## Do` line the tree contradicts as one stale line; the reviewer rechecks it itself",
+      "makes that one line stale, not the ticket" in b and "Every other line of `## Do` holds whole" in b
+      and "not taken on the builder's word" in r and "that is not a miss and not a `Must change:`" in r)
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
 check("builder is told never to reach origin; forge pushes and lands", "`git push`" in b and "reaches `origin`" in b and "Forge pushes this branch" in b)
 check("builder previews a computed delete target before running it", "replaced by `echo` or `ls -d`" in b and "`-print0 | xargs -0`" in b)
