@@ -459,6 +459,26 @@ class Forge:
     def attempts(self, ticket: Path) -> int:
         return ticket.read_text().count("## forge ")
 
+    def ticket_drift(self, ticket: Path) -> str:
+        """The builder's step 3: which commit the ticket was written against (the one that added its file) and how
+        many non-bookkeeping commits main has taken since. A ticket names files, symbols and line numbers of the
+        tree the planner read, and the builder starts on today's: of reflex1's 124 ticket starts, 118 began on a
+        tree with at least one such commit after the ticket, median 36, 84 with twenty or more. Stale state in
+        a prompt is a measured harm (Gao, Yang, Yang, AgentSE 2026: stale traces broke 34/135 correct starts
+        against 4/135 with current ones), and aws/aws-emulator's issue files carry the same note under an
+        `Issue-Commit:` header. One line, read-only; a ticket git does not know (no commit added it) gets no claim."""
+        rel = ticket.relative_to(self.repo)
+        planned = self.sh(f"git log --diff-filter=A --format=%h -1 -- {rel}").stdout.strip()
+        if not planned:
+            return "forge could not tell which commit this ticket was written against; treat every file and line it names as a lead, not a fact."
+        moved = [s for s in self.sh(f"git log --no-merges --format=%s {planned}..HEAD").stdout.splitlines() if not s.startswith("forge:")]
+        if not moved:
+            return f"The ticket was written against this tree (`{planned}`): no code has landed since, so what it names is current."
+        return (f"The ticket was written against `{planned}`; main has taken {len(moved)} code commit{'s' if len(moved) != 1 else ''} since "
+                f"(`git log --oneline --no-merges {planned}..HEAD -- <path>` shows the ones that touched a path). "
+                "A file, symbol or line number the ticket names describes that tree, not this one: find each in this tree "
+                "(`rg`, `git log -S`) before you edit.")
+
     # ---------- the cycle ----------
     def gate(self, cwd: Path) -> tuple[bool, str]:
         g = self.cfg.get("gate", "./gate.sh")
@@ -1129,6 +1149,7 @@ class Forge:
             if self.attempts(ticket) >= 2:
                 builder = "builder_hard"  # escalate after repeated failure
             gated = self.main_gated()
+            drift = self.ticket_drift(ticket)
             def bprompt() -> str:
                 # Rendered per session: the repair pass starts after the gate and gets its own kill time.
                 # The time is in the prompt because omp -p gives the agent no timing feedback mid-session
@@ -1137,7 +1158,7 @@ class Forge:
                 tm = self.cfg["roles"][builder].get("timeout_min", 60)
                 kill = dt.datetime.now(UTC) + dt.timedelta(minutes=tm)
                 return self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)),
-                                   KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm),
+                                   KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm), DRIFT=drift,
                                    GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
                                                if gated else
                                                f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
