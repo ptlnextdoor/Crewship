@@ -948,6 +948,12 @@ with tempfile.TemporaryDirectory() as d:
           ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
     ran.clear()
     f.exhausted.clear()
+    outs["a/b"] = (1, "\n[stderr]\nWorking...\nerror: No API key found for a.\n\nUse /login, set an API key environment variable, or create /x/agent.db\n")
+    rc, text = f.agent("builder", "p", repo)
+    check("a vendor the box is signed out of falls back like a quota refusal, not charged as an attempt",
+          ran == ["a/b", "c/d"] and "a" in f.exhausted and f.last_model["builder"] == "c/d", f"{ran} {f.exhausted}")
+    ran.clear()
+    f.exhausted.clear()
     outs["a/b"] = (1, '\n[stderr]\nModel "a/b" not found\n\nRun `omp models find <pattern>` to search, or `omp models` to list all.\n')
     rc, text = f.agent("builder", "p", repo)
     check("a model omp's catalog lacks moves to the next model without marking its vendor",
