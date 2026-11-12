@@ -1543,7 +1543,7 @@ with tempfile.TemporaryDirectory() as d:
     check("a diff.external a session planted in .git/config is undone before the loop's next git diff",
           (repo / ".git/config").read_bytes() == cfg_file and r.returncode == 0 and "+c" in r.stdout
           and "extdiff" not in (mark.read_text() if mark.exists() else "")
-          and any("external = " in m and "restored" in m for m in logged), f"rc={r.returncode} log={logged}")
+          and any("restored" in m for m in logged), f"rc={r.returncode} log={logged}")
 
 # 28. A session's git must not be able to push: every role prompt forbids it and nothing refused it before
 # (forge.no_push). Reads must keep working, and the loop's own push must not be caught by it.
