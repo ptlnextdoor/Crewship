@@ -2,6 +2,57 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #206 · 2026-11-12T02:29:26Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #206 reviewctl: status sorts the queue smallest-diff first and shows size and today's merge conflicts
+What it changes: `reviewctl.py status()` now lists open PRs sorted by additions+deletions, prints `Nf +a/-d` per row, and adds a new `conflicts(pr)` column. That function runs `git fetch origin pull/N/head:refs/reviewctl/pr-N` plus `git merge-tree --write-tree --name-only origin/forge` in the shared clone `REPO` (~/Dev/Crewship-scout). `run()` is untouched.
+Findings:
+- high forge/reviewctl.py:285 (PR head) The new fetch writes `.git/FETCH_HEAD` in the clone that reviewctl `run()` and the scout unit use for `git pull --rebase`.
+  - Who else uses it: `run()` pulls at :211 and before every `record()` at :275. The scout unit pulls at forge-scout.service:9. All three run in ~/Dev/Crewship-scout, and status() runs there too (`sh()` cwd=`REPO`, :30).
+  - Why it matters: `git pull` reads FETCH_HEAD after its own fetch to decide what to rebase onto. A concurrent `fetch origin pull/N/head:...` is "for merge", so it truncates and rewrites that file.
+  - Reproduced on a scratch clone (file:// remote, so the overlap is much denser than over the network): a status-style fetch loop ran beside 300 `git pull -q --rebase` calls. 24 pulls left local `forge` at the unreviewed PR head and 270 failed. With `--no-write-fetch-head`: 0 and 0.
+  - What follows, replayed: `record()` (:206) commits PR_AUDIT.md and runs `git push origin HEAD:forge`. That push is rejected if forge moved. The next iteration's `pull --rebase` (:275) then replays the PR's commits onto origin/forge, and the next `record()` pushes them. Result: `forge` contains a PR that was never audited, gated or merged, and the next timer run executes it from this checkout (forge-review.service:8).
+  - Forks: status() does not skip `isCrossRepository`, so the PR that lands this way can be a fork's. That is exactly what README row 103 exists to stop.
+  - Likelihood: it needs an owner `status` run (about 30 fetches in about 6 s) to overlap a pull, so it is rare. The more likely outcome is a pull that fails silently (rc ignored at :211/:275), so that pass works on a stale local forge.
+  - The pre-existing gate()/fix() fetches are sequential with run()'s own pulls. This PR adds the first writer that runs alongside them on purpose.
+- low forge/reviewctl.py:288-291 Any non-zero exit is reported as `conflict: ` followed by whatever paths parse.
+  - Reproduced: unrelated histories give rc 128 with empty stdout, and an unresolvable `origin/forge` gives rc 1 with empty stdout. Both print `conflict: ` with no path. The merge-tree docs say only rc 1 means conflicts.
+  - SCOUT.md:2578 records a stray `refs/remotes/origin` that once made `origin/forge` unresolvable in this clone. In that state every row would read as a conflict.
+  - The proposed body below returns `?` for both; checked on a scratch repo: conflict → `conflict: R.md`, clean → `clean`, unrelated/missing PR/bad base → `?`.
+- low forge/reviewctl.py:285 The `refs/reviewctl/pr-N` refs are never deleted. status() only iterates open PRs, so a closed PR's ref keeps its objects reachable. This clone already holds 30 of them. `merge-tree --write-tree` also writes loose, unreachable trees and blobs on every run, which gc prunes. Growth is bounded by the PR count and is not prompt or log growth. No change required.
+- info forge/reviewctl.py:287 status() never fetches `origin/forge`, so "today" means the last `run()` or scout pull (timer: 30 min). Do not add a base fetch here: moving `origin/forge` under a running `run()` would make `gate()` merge onto a base other than the `base` recorded at :214.
+- info security trace:
+  - Call path: `conflicts()` is called only from `status()`, and `status()` only from the CLI `status` command. `run()`, audit, gate, fix, `touches_protected`, `PROTECTED`, forge.py, the prompts, `gate.sh` handling, claim/`recover()`/`discard_strays()`, timeouts, quota and gpu.py are not touched. No agent session is started and nothing spends quota or GPU.
+  - Shell input: the only values in the shell strings are `n` (an int from gh JSON) and `BASE` (owner env). No PR or ticket text reaches a command.
+  - Untrusted objects: fork objects are fetched but never checked out. merge-tree runs no hooks, and neither local nor global git config defines a `merge.*` or `filter.*` driver.
+  - Auto-merge: reviewctl.py is not in `PROTECTED`, so reviewctl itself would land a MERGE/low verdict.
+- info deletions: the diff deletes only `prs = open_prs()` and the old `print` row in `status()`. Nothing is removed from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. No layer is retired.
+- info verification on a `git archive` of 92427f31:
+  - `py_compile forge/forge.py forge/gpu.py forge/reviewctl.py` passes.
+  - `python3 forge/selftest.py` prints "all checks passed", rc 0. The selftest stubs `rc.sh` and `rc.open_prs` for `run()` only (selftest.py:852-913), so nothing exercises `status()`.
+  - The PR base 23e04242 differs from origin/forge 1ea58a8f only in SCOUT.md, so the merge is clean.
+- info siblings: #117 is the only other open PR on `forge` that touches reviewctl.py. Its hunks are the `--no-title` argv in `audit()` (:89) and `fix()` (:155), with no overlap with `status()`/`conflicts()`. No contradiction, no duplicate.
+- nit forge/reviewctl.py:281-283 The docstring is inaccurate in three places:
+  - It says "Read-only", but the fetch writes a ref (and today FETCH_HEAD), and `merge-tree --write-tree` writes objects.
+  - The 2026-11-12 counts are stale the day they land.
+  - "merged clean" should read "merge cleanly".
+- nit forge/reviewctl.py:295-296 The docstring overstates its source. The cited paper (arXiv 2601.00753, MSR 2026 Mining Challenge, 33,707 PRs) gives AUC 0.96 for a model over several static cues ("e.g., file types, patch size"). Its abstract does not say patch size alone is "the strongest" predictor.
+Change needed (only for MERGE WITH CHANGE): in `conflicts()` (forge/reviewctl.py:285-291), replace the fetch line and the last return so the body reads:
+```python
+    # no FETCH_HEAD: run()'s and the scout unit's `git pull --rebase` in this clone read it
+    if sh(f"git fetch -q --no-write-fetch-head origin pull/{n}/head:refs/reviewctl/pr-{n} -f").returncode:
+        return "?"
+    r = sh(f"git merge-tree --write-tree --name-only origin/{BASE} refs/reviewctl/pr-{n}")
+    if r.returncode == 0:
+        return "clean"
+    names = r.stdout.split("\n\n")[0].splitlines()[1:]  # tree oid, conflicted paths, blank, messages
+    return "conflict: " + " ".join(names) if r.returncode == 1 and names else "?"
+```
+
+
 ## PR #205 · 2026-11-11T23:27:08Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
