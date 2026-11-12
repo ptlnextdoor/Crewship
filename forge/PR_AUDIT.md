@@ -2,6 +2,25 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #212 · 2026-11-12T12:17:06Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #212 reviewer: probe a same-output test off its fixture
+What it changes: Inserts one sentence into `forge/prompts/reviewer.md:6` (step 3), after the "Two exceptions" sentence that exempts parity, equivalence and same-output tests from the run that must fail on old code. For those tests the reviewer must now run both sides (the reference, or the branch-point code restored under the step-3 rule) on one input the fixture does not use. A different output, or a panic or error on one side only, counts as a finding. No other file changes.
+Findings:
+- low forge/prompts/reviewer.md:6 The new sentence reads "a different output ... is a finding", with no tolerance. The tickets it targets compare floats against a tolerance (reflex1 `tickets/0011-vit-forward-parity.md:19`: `max|visual - ref| < 1e-3`). The PR body cites 0011 as its local instance, and that reviewer's own off-fixture probe (ticket line 39) measured visual 5.5e-7 and pre_merge 3.3e-6, which it correctly judged to be agreement. Read literally, the new sentence turns those diffs into a finding. Under the closing rule ("a problem in steps 1 to 6 ... is REJECT unless you can state why it cannot matter"), a weaker reviewer would reject a correct parity, refactor or speed-up diff. The next attempt would then chase bit-exactness, which can mean undoing the speed-up. The cost is a 30-min review (forge.py:1272), a builder attempt and quota. The gate and reviewer are not weakened; the problem is false REJECTs. Fix in Change needed.
+- info forge/prompts/reviewer.md:6 Security trace: the diff is a pure insertion. A character diff of base vs head line 6 shows one insert and no delete or replace, so the layer-deletion rule does not apply. The inserted text has no braces: placeholder counts are the same on base and head ({DIFF} 1, {GATE} 2, {PROJECT} 1, {TICKET} 1). It names no protected path, does not loosen "Do not edit files" beyond the existing restore exception, and only adds a way to reject.
+- info forge/forge.py:1272,1274-1284,1297 Side-effect trace: the extra probe runs inside the existing reviewer session (timeout_min=30; at most one rerun, and only when there is no verdict). After every review forge runs `git reset -q --hard {reviewed} && git clean -qfd`. That removes a restored source file and any scratch fixture or throwaway crate the probe leaves in the worktree, before land() and the conflict session's `git add -A` (selftest 22, forge/selftest.py:1408-1444). No new quota path, no GPU call, no ticket text reaching a shell, no state shared between lanes, and the prompt grows by a fixed ~430 chars.
+- info forge/selftest.py:741-759 Ran the PR tree (exported via `git archive`, nothing checked out): `python3 -m py_compile forge/forge.py` and `python3 forge/selftest.py` both pass ("all checks passed"). Every reviewer phrase the selftest asserts is still present; the inserted sentence sits mid-line, so the If/When-opener check does not see it.
+- info PR body claims: confirmed that 0011's reviewer went off-fixture on its own and REJECTed on a segfault (ticket lines 39-58). The cost figure says 25 of 140 tickets; my case-insensitive `parity|equivalen|same.output` grep finds 23 of 140. The gap does not matter.
+- nit forge/README.md:93-94,126 Every other step-3 reviewer rule has a row in the safeguard table (old-code run, guard removal, `Done when` numbers). This PR adds a reviewer check with no row, so the table no longer lists every step-3 check.
+- sibling #140 (forge/prompts/reviewer.md, stale base, updated 2026-11-05) edits the same line 6 and inserts at the same spot, after "(`0 passed` there is not a pass)". It turns "Two exceptions" into three, adding a path exception: a test that deletes or moves files through `$HOME`/`$TMPDIR`/cwd must not be run on old code. It applies that exception to the guard-removal run too. The two PRs do not contradict, but they will conflict as text, and PR 212's new "branch-point code restored under the same rule" run is one more old-code run. #140 is the side that should change: on rebase it should carry "the same path exception" into this sentence. #212 needs no change for this.
+- sibling #209 (reviewer.md closing paragraph: a bug outside the diff and the ticket goes on a `Noticed` line) is compatible. A divergence found off-fixture in code the diff changed is still a `Must change:`. #183 (step 2) and #86 (header) do not overlap.
+Change needed: In `forge/prompts/reviewer.md` line 6, replace `and a different output, or a panic or error on one side only, is a finding with the input and both outputs.` with `and an output outside the tolerance that test asserts (exact where it asserts equality), or a panic or error on one side only, is a finding with the input and both outputs.`
+
+
 ## PR #211 · 2026-11-12T08:43:10Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
