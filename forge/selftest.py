@@ -198,6 +198,19 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    assert!(1 == 1);\n}\n")
     git("add -A", repo); git("commit -qm asserting", repo)
     check("a test added with an assertion is no finding", f.test_tampering(repo, "") == [])
+    # 2e'''. A reference fixture changed or deleted under a fixture directory is refused unless the ticket names the
+    # file or a directory of it from the fixture root down; an added fixture and a changed non-fixture file pass.
+    git("reset -q --hard origin/main", repo)
+    (repo / "bench/fixtures/forward").mkdir(parents=True); (repo / "core/tests/fixtures").mkdir(parents=True)
+    (repo / "bench/fixtures/forward/s64.safetensors").write_bytes(b"ref"); (repo / "core/tests/fixtures/states.json").write_text("[1]\n"); (repo / "data.json").write_text("{}\n")
+    git("add -A", repo); git("commit -qm fixtures", repo); git("push -q -f origin work2:main", repo)
+    (repo / "bench/fixtures/forward/s64.safetensors").write_bytes(b"mine"); (repo / "core/tests/fixtures/states.json").unlink(); (repo / "data.json").write_text("{\"a\":1}\n")
+    (repo / "bench/fixtures/forward/s128.safetensors").write_bytes(b"new")
+    git("add -A", repo); git("commit -qm regen", repo)
+    got = f.test_tampering(repo, "Fix the parser.")
+    check("a changed or deleted reference fixture is refused, an added one and a non-fixture file are not", got == ["bench/fixtures/forward/s64.safetensors: changes a reference fixture the ticket does not name", "core/tests/fixtures/states.json: deletes a reference fixture the ticket does not name"], str(got))
+    check("the ticket naming the file or a directory from the fixture root waives it", f.test_tampering(repo, "regenerate ~/Dev/r/bench/fixtures/forward with dump_forward.py; core/tests/fixtures/states.json is replaced by the digest") == [])
+    check("the ticket naming only the directory above the fixture root does not", len(f.test_tampering(repo, "touch bench/ and core/tests/")) == 2)
     # 2e'. A line the branch adds with a bidi control, zero-width or tag character is refused with the file and the
     # code point; emoji (variation selector, joiner) and lines the branch removes are not.
     git("reset -q --hard origin/main", repo)
