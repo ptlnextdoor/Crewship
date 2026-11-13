@@ -2,6 +2,36 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #224 · 2026-11-13T20:21:12Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #224 forge: log the prompt chars the model received on every session's done line
+What it changes: `session_counts()` (forge.py:84-124) now also takes the first `role == "user"` message in the session files and measures its text length: a string counts whole, a block list counts only its `text` fields. When there is one, it adds ` prompt=P` between `tools=` and `in=` on `_agent_once`'s `agent <role> done` line (:427-428). The README row 69 and selftest #29 change to match. No prompt, gate, reviewer, claim, recover, PR, quota or GPU code is touched.
+Findings:
+- info forge/forge.py:100,113-115,123-124: blast radius. The only caller is the done-line f-string (:427-428). Nothing parses `prompt=`. A grep of `forge/` for `turns=|tools=|reply=|done model=` finds only selftest 4k's regex `rc=0 \d+s reply=`, and that path writes no session file, so `session_counts` returns "" there and the regex is unaffected. Each lane's session dir is its own (`log_path()` :348-361), so no state is shared between lanes. The line grows by a constant ~13 chars. The only reader that reaches a prompt is `status_text()`, which passes the last 8 forge.log lines to the steward's `{STATE}`, so that stays bounded.
+- info forge/forge.py:113-115: correctness, checked against omp 18.12.6 source (the PR body says it did not observe this). `cli/file-processor.ts:152` turns `@<file>` into `<file name="<abs path>">\n<content>\n</file>\n`. `session/agent-session.ts:7887,7955` stores that as `{role:"user", content:[{type:"text", text}]}`. The first-turn preludes and keyword notices are `role:"custom"` (`todo-tracker.ts:178,209`), so they are never taken as the first user message. Smoke, in memory, against the PR's `session_counts` with a 50,000-char prompt at a 75-char lane path: expanded gives `prompt=50099`, unexpanded (`@<path>`) gives `prompt=76`. So the signal works. It is not "prompt=0", which the PR body feared.
+- nit forge/forge.py:97-98: "the prompt file's length is the word, and the first user turn is the answer" reads as an exact echo. Under omp 18.12.6, a delivered prompt logs the `.prompt` file's characters plus the absolute path plus 24 (omp's `<file>` wrapper), measured above. Anyone comparing the two numbers will see a ~100-char gap on every healthy session. Fix below.
+- low forge/forge.py:115: new crash inputs. Probed: content `5` or `True` raises "not iterable", and a block `{"text": 7}` raises TypeError. Only OSError/ValueError are caught. omp 18.12.6 always writes `text` as a string, so only a session that hand-writes into its own session dir can trigger this (`FORGE_STATE_DIR` is in its env). Base already raises on `"message": null` or a `[]` line. Traced the effect: the raise comes after `out.write_text`. `agent()`'s `finally` restores .git/config. `cycle()`'s `except` closes the PR. Its `finally` removes the worktree and branch. The lane loop's `except` then calls `recover()`. So that attempt is lost, but no ticket is stuck `in_progress` and no worktree is left behind. This widens an existing class of failure and opens no new one.
+- info forge/selftest.py:1604-1609 (deleted lines): the clause "user messages … count nothing" goes from the #29 comment. It is still enforced: the exact-equality check `" turns=3 tools=4 prompt=4 in=2207 out=20"` (:1623) runs on a fixture holding two user messages, a list-form first one and a string-form follow-up. The old fixture's string-form first message `"p"` is replaced. A string user message still appears, as the follow-up, and the check asserts it adds no turn and no prompt. The `bare` check (" turns=1 tools=0") now also enforces "no user message, no prompt=". The `isinstance(c, str)` branch at the first position is no longer exercised by any check. Probed in memory, it returns `prompt=5` for "hello". No safeguard layer is lost.
+- info forge/README.md:69: the row is rewritten, not removed. Substring-checked: every clause of the old left and right columns is still in the new row. Nothing is deleted from forge/prompts/*.md.
+- info Gate: reviewctl's `gate()` runs base's `forge/selftest.py` (reviewctl.py:137). Base #29 asserts exactly `" turns=3 tools=4 in=2207 out=20"` on a fixture whose first user message is `"p"`. The PR's code returns `" turns=3 tools=4 prompt=1 in=2207 out=20"` there (probed), so the base selftest exits 1 and this PR will read "gate failed". Any change to that exact string does this. It is not a defect in the PR. If accepted, the owner lands it by hand.
+- info Siblings: I read the diffs of every open PR on `forge` that touches README.md, forge.py or selftest.py (#218 #215 #213 #211 #209 #205 #204 #197 #196 #195 #183 #182 #181 #165 #160 #148 #145 #140 #139 #136 #133 #132 #117 #111 #99 #86 #85). None touches `session_counts`, the done line, selftest #29 or README row 69. #139 inserts a README row near this one, on an older base that predates row 69, so there is no contradiction and no duplication.
+- nit forge/forge.py:94-98: the docstring repeats the README row's Tesseracted citation, in the file's existing style.
+- info PR text: the body and the one Copilot comment (a quota notice) contain no HTML comments. The body's claims (image blocks not counted, later user messages not counted, no `prompt=` without a user message, check #29's string) match the diff and the probes.
+Change needed (only for MERGE WITH CHANGE): forge/forge.py:98, replace
+```
+    word back); here the prompt file's length is the word, and the first user turn is the answer."""
+```
+with
+```
+    word back); here the `.prompt` file is the word and the first user turn the answer: omp 18.12.6 stores the
+    file as one text block, `<file name="<abs path>">`, the prompt and `</file>` on three lines, so a delivered
+    prompt logs the `.prompt` file's characters plus the path's plus 24, an unexpanded one the length of `@<path>`."""
+```
+
+
 ## PR #223 · 2026-11-13T19:17:55Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
