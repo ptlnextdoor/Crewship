@@ -106,7 +106,9 @@ def session_counts(session_dir: Path) -> str:
                 except ValueError:
                     continue
                 if e.get("type") == "model_change":
-                    omp = (e.get("runtime") or {}).get("version") or omp
+                    rt = e.get("runtime")
+                    # the session can write this file and forge.log's tail is the steward's {STATE}: version chars only
+                    omp = (re.sub(r"[^\w.+-]", "", str(rt.get("version") or ""))[:40] if isinstance(rt, dict) else "") or omp
                 elif e.get("type") == "message":
                     m = e.get("message", {})
                     role = m.get("role")
