@@ -748,7 +748,7 @@ class Forge:
                 continue
             path, root = parts[1], m.end() - 1  # the slash after the fixture directory
             names = [path] + [path[:i] for i, c in enumerate(path) if c == "/" and i >= root]
-            if not any(n.lower() in text for n in names):
+            if not any(re.search(re.escape(n.lower()) + r"(?![\w-]|[./][\w-])", text) for n in names):  # a whole path: `bench/fixtures` inside `bench/fixtures/reflex/sample` names nothing
                 out.append(f"{path}: {'deletes' if parts[0][0] == 'D' else 'changes'} a reference fixture the ticket does not name")
         return out
 

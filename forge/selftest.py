@@ -211,6 +211,7 @@ with tempfile.TemporaryDirectory() as d:
     check("a changed or deleted reference fixture is refused, an added one and a non-fixture file are not", got == ["bench/fixtures/forward/s64.safetensors: changes a reference fixture the ticket does not name", "core/tests/fixtures/states.json: deletes a reference fixture the ticket does not name"], str(got))
     check("the ticket naming the file or a directory from the fixture root waives it", f.test_tampering(repo, "regenerate ~/Dev/r/bench/fixtures/forward with dump_forward.py; core/tests/fixtures/states.json is replaced by the digest") == [])
     check("the ticket naming only the directory above the fixture root does not", len(f.test_tampering(repo, "touch bench/ and core/tests/")) == 2)
+    check("a ticket naming a sibling fixture path does not waive this one", len(f.test_tampering(repo, "train on `bench/fixtures/reflex/sample`")) == 2)
     # 2e'. A line the branch adds with a bidi control, zero-width or tag character is refused with the file and the
     # code point; emoji (variation selector, joiner) and lines the branch removes are not.
     git("reset -q --hard origin/main", repo)
