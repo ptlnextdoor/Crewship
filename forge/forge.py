@@ -82,12 +82,16 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` turns=N tools=M` from the omp session files under `session_dir` (one `assistant` message per model
-    turn, one `toolResult` per tool call), or "" when no session file was written. Turn count explains 84% of
-    the variance in a coding-agent trajectory's cost, mean observation size 4% (TurnCost, PromptOps 2026), and
-    a turn limit with reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the
-    same solve rate (Gao and Peng, ICSE-Companion 2026): this is the number that percentile is read from."""
-    turns = tools = 0
+    """` turns=N tools=M in=I out=O` from the omp session files under `session_dir` (one `assistant` message
+    per model turn, one `toolResult` per tool call; `in` sums each turn's input, cache-read and cache-write
+    tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
+    no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance in a
+    coding-agent trajectory's cost, mean observation size 4% (TurnCost, PromptOps 2026), and a turn limit with
+    reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the same solve rate (Gao
+    and Peng, ICSE-Companion 2026): this is the number that percentile is read from. The token sums are the
+    bill behind it: cache reads were 430-550k of a long session's per-turn tokens and most of its cost (Coral,
+    2026-11-11), and four harnesses within 6 points on one eval differed 39% in tokens per task (Schmid, 2026-11-13)."""
+    turns = tools = tin = tout = 0
     try:
         for f in session_dir.glob("*.jsonl"):
             for line in f.read_text(errors="replace").splitlines():
@@ -96,12 +100,18 @@ def session_counts(session_dir: Path) -> str:
                 except ValueError:
                     continue
                 if e.get("type") == "message":
-                    role = e.get("message", {}).get("role")
+                    m = e.get("message", {})
+                    role = m.get("role")
                     turns += role == "assistant"
                     tools += role == "toolResult"
+                    u = m.get("usage") or {}
+                    tin += (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
+                    tout += u.get("output") or 0
     except OSError:
         return ""
-    return f" turns={turns} tools={tools}" if turns else ""
+    if not turns:
+        return ""
+    return f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
@@ -404,8 +414,7 @@ class Forge:
         out.write_text(text)
         # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
         # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
-        # turns= and tools= come from the omp session file under out.with_suffix(""), which also holds the output
-        # tokens per turn.
+        # turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
         self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s{session_counts(out.with_suffix(''))} "
                  f"reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
