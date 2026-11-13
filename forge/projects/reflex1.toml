@@ -21,6 +21,11 @@ GPU_BUDGET_USD = "15"
 GPU_MAX_HOURS = "2"
 GPU_MIN_BALANCE = "3"
 CARGO_TARGET_DIR = "~/.cache/forge/reflex1-target"
+# Line-number debug info only for every dev/test build a lane runs: backtraces keep file:line, the variable
+# and type tables go. Measured on lane 1 (2026-11-13): each of the 168 test binaries is 309 MB, 289 MB of it
+# DWARF (.debug_loc 87, .debug_info 99, .debug_str 65 MB); the four lanes' target dirs hold 106 of 193 GB.
+# Set here rather than in reflex1's Cargo.toml so the owner's own checkout keeps full debug info.
+CARGO_PROFILE_DEV_DEBUG = "line-tables-only"
 HF_HOME = "~/.cache/huggingface"
 
 # Routing (owner, 2026-10-23): Opus 5.5, Fable 5.1, GPT 6.1 Sol and GPT 6 Astra, high effort.
