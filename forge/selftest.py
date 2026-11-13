@@ -1601,6 +1601,23 @@ with tempfile.TemporaryDirectory() as d:
           f"push={pushed.returncode} force={forced.returncode} read={read.returncode} {read.stderr[-200:]}")
     check("the loop's own push is not caught by it", ours.returncode == 0, ours.stderr[-200:])
 
+# 29. The done line's turns= and tools= are read from omp's session file: one assistant message per model turn,
+# one toolResult per tool call; user messages, non-message entries and a torn last line count nothing, and a
+# session that never wrote a file logs no counts rather than turns=0.
+with tempfile.TemporaryDirectory() as d:
+    s = Path(d) / "sessions" / "00001-builder"
+    s.mkdir(parents=True)
+    rows = [{"type": "session", "cwd": d}, {"type": "message", "message": {"role": "user", "content": "p"}}]
+    for _ in range(3):
+        rows += [{"type": "message", "message": {"role": "assistant", "content": []}},
+                 {"type": "message", "message": {"role": "toolResult", "content": []}}]
+    rows += [{"type": "message", "message": {"role": "toolResult", "content": []}}, {"type": "custom", "data": 1}]
+    (s / "a.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + '\n{"type": "mess')
+    check("turns and tool calls are counted from the session file", forge.session_counts(s) == " turns=3 tools=4",
+          repr(forge.session_counts(s)))
+    check("a session that wrote no file logs no counts", forge.session_counts(Path(d) / "none") == "",
+          repr(forge.session_counts(Path(d) / "none")))
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
