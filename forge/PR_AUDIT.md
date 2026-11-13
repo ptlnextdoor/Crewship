@@ -2,6 +2,38 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #227 · 2026-11-13T23:27:08Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #227 forge: ctx= peak per-turn context on every session's done line
+What it changes: `session_counts()` (forge.py:84-130, PR head b360c6d7) also tracks the largest single assistant turn's `input + cacheRead + cacheWrite`. It adds ` ctx=C` after `in= out=` on `_agent_once`'s `agent <role> done` line, and only when `in`/`out` are logged. The docstring, README row 70 and selftest #29 are extended to match. No prompt, gate, reviewer, claim, recover, PR, quota or GPU code is touched.
+Findings:
+- info forge/forge.py:121-124,130: blast radius. The new value comes from the same `t` that base already adds into `tin`, and the only caller is the done-line f-string (:434-435). Nothing in forge/ parses the done line. The only regex on it, selftest 4k's `rc=0 \d+s reply=` (:562), runs on a stub that writes no session file, so it is unaffected. Each lane reads only its own session dir. Nothing new is written except the existing append to forge.log, and `status_text()`'s 8-line `{STATE}` tail grows by about 12 chars per done line. That growth is bounded.
+- info forge/forge.py:123-124: no new crash or injection path. `ctx = max(ctx, t)` runs only after `tin += t` has succeeded, so `t` is already a number. I fuzzed base against PR with 13x13 `usage` values (None, ints, ±10**300, nan, inf, str, list, dict, bool) written into a session file. Every input either succeeded in both or raised in both (0 divergent). Output is a Python number repr, so no newline or text can reach forge.log through `ctx=`.
+- info forge/forge.py:123-124: correctness, checked on real data. I ran the PR's `session_counts` on this box's 4 omp 18.12.6 session dirs. Its output matched an independent per-turn max in all 4, and on every assistant turn `input+cacheRead+cacheWrite+output == totalTokens`, so nothing is double-counted. The PR body's three smoke lines reproduce exactly (`ctx=49945`, `ctx=45713`, `ctx=27566`). The cited papers exist and match their summaries: arXiv 2602.16069 (Raju et al., "successful agentic trajectories typically remain under 20k-30k tokens") and arXiv 2609.20804 (Fan et al., context management's benefit is "mostly ... preventing context-overflow failures").
+- nit forge/forge.py:433: the comment over the done line still says "omp=, turns=, tools=, in= and out= come from the omp session file". The PR adds `ctx=` to that line, so this field list is now stale. Fix below.
+- nit forge/selftest.py:1616,1622: the fixture's per-turn totals are 1101, 1101, 5, so the peak is also the first turn. `ctx=1101` would also pass for a "first turn" implementation. It does rule out the sum (2207) and the last turn (5). Not required.
+- nit forge/forge.py:96-98: the docstring repeats the README row's Raju/Fan citations, as the file already does for every other field.
+- info Deletions. Nothing is deleted from forge/prompts/*.md. No safeguard layer is retired:
+  - selftest.py:1607-1608, comment. The clauses "a file whose turns carry no usage logs neither" and "omp= ... a file without one logs no omp=" are reworded ("none of the three") and kept. The `bare` check (:1626, exact `" turns=1 tools=0"`) still enforces them, and now also rules out `ctx=`.
+  - selftest.py:1621, the old exact assertion `" omp=18.12.6 turns=3 tools=4 in=2207 out=20"`. It becomes the exact `"... ctx=1101"` (:1622) on the unchanged fixture. That is a strict superset: turn and tool counting, user messages, the non-message entries, the torn last line, `omp=` and `in=`/`out=` are all still asserted.
+  - README.md:70. Word-diff shows the only removed token is "sums," → "sums and no peak,". Everything else in the row is an insertion.
+- info Gate: reviewctl `gate()` checks out base's `forge/selftest.py` (reviewctl.py:137). I ran base's selftest against the PR's forge.py. It fails exactly one check, #29 "turns, tool calls and tokens are counted from the session file", because the output now ends in ` ctx=1101`, so this PR will read "gate failed". Any field added to that exact string does this (same as #224); it is not a defect. The PR's own selftest prints "all checks passed" and `py_compile` is clean. If accepted, the owner lands it by hand.
+- info Sibling #224 (base `forge`, open, stale base that predates #226's `omp=`). Both PRs edit the `session_counts` docstring head, its return line, the done-line comment (:433), README row 70's left column, and selftest #29's comment and expected string. There is no contradiction and no duplication: `prompt=` (first user message chars, between `tools=` and `in=`) and `ctx=` (peak per-turn tokens, after `out=`) are independent fields. #224 already has to rebase over #226, so #224 is the side that changes. Nothing in #227 changes for it.
+- info Other siblings. I pulled the diffs of #218 #215 #213 #211 #209 #205 #204 #197 #196 #195 #183 #182 #181 #174 #165 #160 #148 #145 #140 #139 #136 #133 #132 #124 #117 #111 #99 #86. For each one I listed every hunk range in README.md, forge.py and selftest.py, and I scanned every added or removed line for `session_counts`, the done line, `turns=`/`tools=`, `ctx`, `# 29.` and row 70's text. Only #224 matched. None of the others touches `session_counts`, the done line, README row 70 or selftest #29. #213 inserts a README row near 70, which can cause at most a textual merge conflict.
+- info PR text. The body and the one review (a Copilot quota notice) contain no HTML comments. The body's claims all match the diff and the probes: no `ctx=` without usage, check #29's strings, the smoke output, and "no prompt changes".
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py:433 (PR head), replace
+```
+        # omp=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+```
+with
+```
+        # omp=, turns=, tools=, in=, out= and ctx= come from the omp session file under out.with_suffix("").
+```
+
+
 ## PR #226 · 2026-11-13T22:26:49Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
