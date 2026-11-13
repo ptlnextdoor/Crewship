@@ -2,6 +2,58 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #225 · 2026-11-13T21:23:07Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #225 planner: one goal per ticket, a second defect or number is its own ticket
+What it changes: The PR touches prompt and README text only. Rule 31 of `forge/prompts/planner.md` still has the 400-line bound and now also says each ticket "carries one goal: one defect fixed or one SCORE.md number moved, every `## Done when` line checking that goal". A second goal becomes its own ticket, with `depends:` when it shares a file. `forge/README.md` gets one new row, line 33.
+Findings:
+- medium forge/prompts/planner.md:31 (README.md:33 says the same: "every `## Done when` line on it").
+  - Taken literally, the clause allows only `## Done when` lines that check the goal. That rules out guard lines that check something the change must leave alone.
+  - reflex1's planner writes such guard lines, and the reviewer reruns them:
+    - 0127 and 0138: `gpu.py list` prints no running pod of this ticket, with a cost cap of $0.6 / $0.4.
+    - 0101: cost under $0.6.
+    - 0047, 0048, 0050, 0053, 0058, 0076, 0088, 0102 and 0111: `git -C ~/code/reflex status --short` unchanged. This guards the owner's other repo, which builder.md:19 covers only in prose. 0047's review records "PASS (status half, run by me)".
+    - 0132: `act_us_p90` under 16700 µs in an S1 ticket.
+    - 0102 and 0111: the default path or earlier tracks byte-equal.
+  - In all, 27 "unchanged/still" lines appear across reflex1's `## Done when` sections.
+  - Who checks these lines: builder rule 22 runs them and reviewer step 1 (reviewer.md:4) reruns every one. The gate checks none of them. No other line of planner.md asks for them (`rg unchanged|no pod|regress` finds nothing), so the new clause is the only planner text on the subject, and it points against them.
+  - A planner that drops them takes a layer away from what the reviewer verifies: a pod left billing, writes into ~/code/reflex, latency regressions. The fix is one clause (below).
+- low forge/prompts/planner.md:31: "one defect fixed or one SCORE.md number moved" leaves out the class that line 17 of the same template allows ("S1, S2, latency, or a prerequisite named in ROADMAP for one of them"). It also leaves out the work-ahead tickets of line 32 (training scripts, bench). A tooling or prerequisite ticket fits neither branch. Line 5 already cancels tickets that move no number, so a literal planner could cancel or skip prerequisites. The same edit fixes this.
+- low forge/README.md:33, "69 of reflex1's 140 ticket titles join two goals with 'and'":
+  - 69 counts the titles in ~/Dev/reflex1/tickets/*.md that contain " and " (reproduced: 69, and 70 with case-insensitive `\band\b`). It does not count titles that hold two goals.
+  - At least 14 of them join two values of one parameter on one goal: 0054 and 0078 ("seeds 4 and 5 on one pod"), 0108, 0113 and 0123 ("0.5x and 2x", "`--width-mult 0.5` and `2`"), 0029 ("512x288 and 1280x720"), 0105 ("with and without summer1"), 0125 ("5 and 6 turns").
+  - The scout and the steward read README as fact.
+  - The paper numbers check out against the PDF (swesweep.com/paper §4.1): Meta FAIR, 684 bugs in the first 20 repos, 19.2→39.2 (Sol), 10.7→31.3 (Luna), 43.8→82.9.
+  - The paper's multi-bug arm hands one trajectory every bug in a repository, about 34 on average. "Two things at once" is an extrapolation that the paper does not measure. The planner text itself says "all of them", which is accurate.
+- low quota/GPU cost: each split adds a builder session, a gate run (8-25 min, builder.md:1), a 30-minute review by the other vendor, and a rebase plus re-gate for each goal.
+  - "One SCORE.md number per ticket" turns a single pod job that measured two numbers into two jobs. Examples: 0028 ("agreement and p50 measured there"), 0073 ("vs S1 and latency").
+  - The caps still hold: the quota floor `max_window_used_pct`, gpu.py's budget refusal, and planner.md:36 (2 hours per job, CPU-only below the remaining budget). Not blocking.
+- low forge/prompts/planner.md:31: the PR uses `depends:` to keep two tickets off a shared file, not for a real prerequisite. That ties the second goal to the first.
+  - `ready()` (forge.py:1008-1015) starts a ticket only once every dependency reads `status: done`.
+  - reflex1's planner cancels dependents along with their parent: 20 of its 40 cancelled tickets depend on a cancelled ticket. A goal split off this way is lost when the first one fails.
+  - It brings no lane collision. It agrees with planner.md:32 (startable tickets own different files) and :7 (dependents do not count toward {NEED}). Not blocking.
+- info Traced end to end; nothing weakens the gate, the reviewer or the protected paths.
+  - forge.py, selftest.py, builder.md and reviewer.md are untouched.
+  - The planner still edits only `tickets/`, ROADMAP.md and PROGRESS.md (planner.md:38). `commit_docs()` and `discard_strays("planner")` run after the turn (forge.py:977-978), and the turn is still serialized by plan.lock (forge.py:954).
+  - The placeholder sets are identical on base and on the head blob (`gh api .../contents?ref=e5bceb3f`): GATE GPU_BUDGET GPU_LEFT LANES MIN_TICKETS NEED PROJECT READY. `prompt()` raises on a missing one (forge.py:226).
+  - The new text has no braces and no remove/delete/drop word, which `test_tampering()` reads from tickets.
+  - Selftest's planner substring checks (selftest.py:779-780) hold on the head text (checked in memory). Ticket text reaches no shell command.
+  - The full selftest was not run on the head, because forge.py and selftest.py are unchanged.
+- info Deletions: none.
+  - planner.md:31 keeps its old text verbatim inside the new line: "Each ticket fits one focused session (roughly under 400 changed lines)" … "Split anything bigger."
+  - README gains one row (33). A line-set diff of base against head deletes nothing. No layer is retired.
+- nit forge/prompts/planner.md:31: "Split anything bigger." now comes after the one-goal rationale, so "bigger" points back two sentences to the 400-line budget.
+- info Siblings: no other open PR on `forge` touches planner.md.
+  - 23 others touch README.md: #224 #218 #215 #213 #211 #209 #197 #196 #195 #183 #182 #181 #165 #160 #148 #145 #140 #139 #136 #117 #111 #99 #86.
+  - None edits rule 31, this row or the Tests/Siblings row. #218 inserts a builder row two rows below, which is textual adjacency only. No contradiction or duplicate.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/prompts/planner.md:31: replace `and carries one goal: one defect fixed or one SCORE.md number moved, every `## Done when` line checking that goal.` with `and carries one goal: one defect fixed, one SCORE.md number moved, or one ROADMAP prerequisite for one, every `## Done when` line checking that goal or what the change must leave as it was (another number kept within its budget, a file or repo left unchanged, no pod left running); a line of the second kind is not a second goal.`
+2. forge/README.md:33: replace `(one defect or one SCORE.md number, every `## Done when` line on it)` with `(one defect, one SCORE.md number or one ROADMAP prerequisite for one, every `## Done when` line on it or on what the change must leave as it was: a number kept within budget, a repo left unchanged, no pod left running)`, and replace `69 of reflex1's 140 ticket titles join two goals with "and"` with `69 of reflex1's 140 ticket titles contain " and ", some of them joining two goals`.
+
+
 ## PR #224 · 2026-11-13T20:21:12Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
