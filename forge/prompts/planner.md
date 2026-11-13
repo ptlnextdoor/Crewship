@@ -28,7 +28,7 @@ What not to touch.
 ```
 
 Rules:
-- Each ticket fits one focused session (roughly under 400 changed lines). Split anything bigger.
+- Each ticket fits one focused session (roughly under 400 changed lines) and carries one goal: one defect fixed or one SCORE.md number moved, every `## Done when` line checking that goal. A second defect or number you find while planning is its own ticket (with `depends:` when it shares a file with the first), not a second section of this one, even when both fit the line budget: a run told to fix bugs one at a time resolves about twice as many as one run told to fix all of them, with every bug's location given in both cases. Split anything bigger.
 - Parallelism: tickets that can start now should own different crates or files (for example one in `reflex-serve`, one in `reflex-bench`, one in `tools/`, one in docs/tests), so lanes do not collide. Use `depends:` for real prerequisites instead of relying on order. Work ahead on later milestones (serve, vision preprocessing, training scripts, bench) whenever their inputs exist, rather than leaving lanes idle.
 - Order matters: the lowest-numbered open ticket runs first. Put prerequisites first.
 - A blocked ticket means the approach failed; read its forge notes and write a smaller or different ticket for the same goal rather than a copy.
