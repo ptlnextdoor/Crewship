@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #220 · 2026-11-13T13:39:27Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #220 forge: test_tampering refuses a changed or deleted reference fixture the ticket does not name
+What it changes: `test_tampering()` also reads `git diff --name-status origin/main...HEAD` and returns a finding for each file with status M or D under `fixtures/`, `fixture/`, `testdata/`, `golden/`, `snapshot(s)/` or `__snapshots__/`, unless the ticket text names the file or one of its directories. Both `cycle()` fail messages now mention fixtures, builder.md's Tests rule gets a fixture clause, README gets one guard row, and selftest gets 3 checks.
+Findings:
+- medium forge/forge.py:750-751 (new) The waiver is a plain substring test, and the names it tries include the fixture root itself (`path[:root]`, e.g. `bench/fixtures`). So a ticket that mentions any path under that root waives every change under the root. I reproduced it: with the ticket "Train on `bench/fixtures/reflex/sample`" and `bench/fixtures/forward/s64.safetensors` modified, the function returns `[]`. A ticket naming `bench/fixtures/forward2/a.bin` also waives `bench/fixtures/forward/*` (`[]`). On reflex1, 108 of the 111 fixture files sit under `bench/fixtures/`, and 48 of 140 tickets mention a `bench/fixtures/...` path in their own text, mostly as input data (`--data bench/fixtures/reflex/sample`). That includes both open tickets, 0132 and 0137. For roughly a third of tickets, the case the PR was written for (re-dumping `bench/fixtures/forward/*.safetensors`, which `crates/reflex-cpu/tests/parity.rs:31` reads) still passes. The README row says "only when the ticket names the file or one of its directories", which the code does not do. The selftest only checks a directory above the root, so it misses this. The fix below closes it: I ran the 0090 replay and the named-file, named-directory, `dir/*.safetensors` glob, trailing-slash and sentence-final-period wordings, and each is still waived; the sibling-path and `forward2` cases are now refused. The PR's selftest passes with the fix.
+- low forge/forge.py:747 (new) Only M and D are checked. A fixture replaced by a symlink shows as `T` in `--name-status` (I checked: `T\tbench/fixtures/forward/s64.safetensors`), and the guard returns `[]`, so a fixture pointed at a build output passes. Neither the shortcut comment nor the README lists this. Adding `"T"` to the status tuple closes it.
+- low forge/forge.py:745 (new) `sh()` runs git with `core.quotePath` at its default, so a non-ASCII path prints quoted (`M\t"fixtures/caf\303\251.json"`). The leading quote stops `FIXTURE_DIR`'s `(^|/)` from matching a fixture directory at the repo root (fail-open; I reproduced `[]`). A nested one still matches, but it can never be waived (fail-closed). This does nothing on reflex1 today: it has no root-level fixture directory and no non-ASCII fixture names. `git -c core.quotePath=false diff --name-status` would fix it.
+- low forge/forge.py:751 (new) Any mention counts as naming, so an `## Out of scope` line that forbids the change also waives it: "regenerating bench/fixtures/forward/*.safetensors" under Out of scope returns `[]`, with or without the fix. The same convention already applies to `unrequested_deps()` and the test-count waivers, but this case is not in the block's `shortcut:` comment.
+- info forge/forge.py:745-752 (new) Renames pass, including delete-and-re-add of a similar file (I reproduced `R099` → `[]`). This is documented in the shortcut comment and in README, and it needs the test repointed at the new path, which shows in the reviewed diff.
+- info forge/forge.py:745-752 (new) Side effects traced, none harmful:
+  - Ticket text never reaches a shell; it is only used in Python `in` and regex tests.
+  - The git call is read-only, in the lane's own worktree, and `check=True` raises the same way as the existing call at line 699. No new exception path, no shared state, no claim race.
+  - The block runs after the `len(out) <= gone` reset at line 712, so marker netting cannot erase a fixture finding.
+  - `text` drops the `## forge` notes, so the fail note naming the path does not waive the next attempt.
+  - The note is capped by `fail()`'s `why[-7000:]`, and reflex1 has only 111 fixture files.
+  - It is called only at the builder site (1230) and the repair site (1275), as the README says. It spends no GPU time and no quota.
+- info forge/prompts/builder.md:13, forge/README.md:39, forge/selftest.py: nothing is deleted. The Tests line keeps every earlier clause; only one "or" moved. "The first two and the last are checked mechanically" correctly leaves tolerance lowering as prose only. No wording grants permission to touch protected paths or skip tests.
+- info Claims checked: the 2 of 627 commits on reflex1 main that change an existing fixture are 41487fe and a5033de. The 0090 waiver holds when replayed against the real ticket text. The PR's selftest passes on the PR tree (I ran it).
+- info Siblings:
+  - #140 rewrites the same builder.md Tests line from an older base that lacks the "checked mechanically" sentence. The two do not contradict each other; #140 is the side that must rebase. Once both land, that line uses "fixture" both for a test's temp directory and for reference data, so #140 should reword "escapes the fixture".
+  - #136, #181 and #196 each add a `test_tampering()` rerun in `land()` after a conflict resolution, and they duplicate one another. Once #220 lands they inherit the fixture check, but their fail strings say only "skipped, deleted or stripped tests", so they should name fixtures when they rebase. Nothing changes on #220's side.
+  - #204 and #218 touch nearby text and do not contradict this PR.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `test_tampering()`, replace
+`            if not any(n.lower() in text for n in names):`
+with
+`            if not any(re.search(re.escape(n.lower()) + r"(?![\w-]|[./][\w-])", text) for n in names):  # a whole path: \`bench/fixtures\` inside \`bench/fixtures/reflex/sample\` names nothing`
+and in forge/selftest.py, after the "the ticket naming only the directory above the fixture root does not" check, add
+`    check("a ticket naming a sibling fixture path does not waive this one", len(f.test_tampering(repo, "train on \`bench/fixtures/reflex/sample\`")) == 2)`
+(I checked it: it fails on the PR as is and passes with the edit.)
+
+
 ## PR #219 · 2026-11-13T11:36:02Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
