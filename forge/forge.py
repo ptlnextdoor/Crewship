@@ -82,21 +82,25 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` omp=V turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
+    """` omp=V turns=N tools=M in=I out=O ctx=C` from the omp session files under `session_dir` (`omp` is the runtime
     version omp writes on its `model_change` entry, omitted when the file has none; one `assistant` message
     per model turn, one `toolResult` per tool call; `in` sums each turn's input, cache-read and cache-write
-    tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
-    no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance in a
-    coding-agent trajectory's cost, mean observation size 4% (TurnCost, PromptOps 2026), and a turn limit with
-    reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the same solve rate (Gao
-    and Peng, ICSE-Companion 2026): this is the number that percentile is read from. The token sums are the
+    tokens, `out` its output tokens, `ctx` is the largest one turn's input + cache-read + cache-write, the
+    context the model held at its fullest, all from the `usage` omp writes on the assistant message and omitted
+    when no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance
+    in a coding-agent trajectory's cost, mean observation size 4% (TurnCost, PromptOps 2026), and a turn limit
+    with reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the same solve rate
+    (Gao and Peng, ICSE-Companion 2026): this is the number that percentile is read from. The token sums are the
     bill behind it: cache reads were 430-550k of a long session's per-turn tokens and most of its cost (Coral,
     2026-11-11), and four harnesses within 6 points on one eval differed 39% in tokens per task (Schmid, 2026-11-13).
+    The peak is the number the context findings are stated in and the sum cannot give back: successful SWE-bench
+    trajectories stay under 20-30k tokens and longer accumulated contexts correlate with lower success (Raju et
+    al. 2026), and most of context management's gain is preventing overflow failures (Fan et al. 2026).
     The omp version is the confound to rule out first when those numbers move between days: a served model
     changes under its name without notice (dozens of unexplained shifts across hundreds of endpoints, Chauvin et
     al. 2025) and so does the harness, and a per-version grouping of turns and tokens is how one practitioner
     told the two apart (token-drift, 2026-11-12); `model=` on the same line is the other half of that grouping."""
-    turns = tools = tin = tout = 0
+    turns = tools = tin = tout = ctx = 0
     omp = ""
     try:
         for f in session_dir.glob("*.jsonl"):
@@ -115,13 +119,15 @@ def session_counts(session_dir: Path) -> str:
                     turns += role == "assistant"
                     tools += role == "toolResult"
                     u = m.get("usage") or {}
-                    tin += (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
+                    t = (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
+                    tin += t
+                    ctx = max(ctx, t)
                     tout += u.get("output") or 0
     except OSError:
         return ""
     if not turns:
         return ""
-    return (f" omp={omp}" if omp else "") + f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
+    return (f" omp={omp}" if omp else "") + f" turns={turns} tools={tools}" + (f" in={tin} out={tout} ctx={ctx}" if tin or tout else "")
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
