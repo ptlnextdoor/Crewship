@@ -2,6 +2,42 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #223 · 2026-11-13T19:17:55Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #223 forge: sum session tokens into the done line
+What it changes: `session_counts()` (forge.py:84-114) also sums each session message's `usage` into ` in=<input+cacheRead+cacheWrite> out=<output>`. That text goes on `_agent_once`'s `agent <role> done` line in forge.log (:419), and only when the sum is non-zero. The PR extends the README row 69 text and selftest #29 (one fixture with usage, plus one new no-usage check).
+Findings:
+- info forge/forge.py:84-114,419: no gate, reviewer, prompt, protected-path, claim, recover, PR or GPU code is touched. The only caller is the done-line f-string. Nothing in forge.py parses `in=`/`out=`; the only forge.log reader is `status_text()`, which passes the last 8 lines to the steward's `{STATE}` (:1754). That grows by a constant ~25 chars per done line, so nothing grows without bound. The values are Python numbers. On a forged session file I probed, the worst output was `in=nan`/`in=1.5`, so a session file cannot put text into forge.log through these fields. The function reads only the lane's own `sessions/<cycle>-<role>/`, so no state is shared between lanes.
+- info Correctness, verified against real data. In all 57 assistant messages in this box's 11 omp 18.12.6 session files, `input+output+cacheRead+cacheWrite == totalTokens`. The PR's `in+out` equals the `totalTokens` sum in all 4 session dirs (70292, 372948, 937157, 313640), so `input` already excludes cache tokens and nothing is double-counted. The `-tmp` dir reproduces the PR body's smoke exactly: `turns=18 tools=10 in=309965 out=3675`. For OpenAI/Codex, omp's `openai-shared.ts:4264` splits the prompt into uncached `input` plus `cacheRead`, the same convention. No local Codex session file was available to confirm it on data.
+- low forge/forge.py:107-109: new crash inputs. A truthy non-dict `usage` raises AttributeError, and a non-numeric field such as `"input":"5"` raises TypeError. Probed: on both inputs base returns ` turns=1 tools=0` and the PR raises. omp 18.12.6 types every field as `number`, and all 57 observed values were ints, so only a hand-written session file triggers this. A yolo builder can already crash base with `"message": null` (also probed), so this widens an existing class rather than opening one. Traced path: the exception leaves `_agent_once` after the session ran. `cycle()`'s except closes the PR (:1400) and `finally` removes the worktree. `lane_loop` logs `cycle error` and calls `recover()`, which sets the ticket to retry and blocks it after `max_attempts` interruptions (:1547-1552), with backoff of at most 1800 s. Not blocking.
+- nit forge/forge.py:416-418: the comment above the done line still reads "turns= and tools= come from the omp session file …, which also holds the output tokens per turn". It reads as though tokens are not logged, but this PR now logs `in=`/`out=` from that same file. The PR left that comment stale.
+- nit forge/forge.py:85-93, forge/README.md:69: the docstring says the sums are taken from "the `usage` omp writes on the assistant message" and "omitted when no turn carries one". The code sums `usage` on any message role and omits the keys whenever both sums are 0, which also covers sessions where every turn carries zero usage. omp writes `usage` only on assistant messages (57/57 here), so behaviour is the same today. The docstring also repeats the README row's citations (Coral, Schmid). Both citations exist in SCOUT.md:6604 and :6885. "The token sums are the bill behind it" overstates: `in` adds cache reads and cache writes at equal weight although they are priced differently. Not blocking.
+- info Deletions: nothing is deleted from forge/prompts/*.md. README row 69 is rewritten, but every clause of the old row is still in the new one (substring-checked; "a session that wrote no file logs no counts" is kept), so no safeguard is retired. Selftest #29's rewritten lines:
+  - the old exact check `" turns=3 tools=4"` (turn/tool counting, user messages, a non-message entry, a torn last line) is now carried by the exact `" turns=3 tools=4 in=2207 out=20"` check on the same fixture plus usage;
+  - the old fixture's no-usage case is now carried by the new `bare` check (`" turns=1 tools=0"`);
+  - the "no file, no counts" check is unchanged.
+
+  So no layer is lost.
+- info Verification:
+  - I exported the PR head (`3befe630`, one commit on `origin/forge` `aa03c60e`) with `git archive` to a /tmp dir and deleted it after the runs.
+  - `py_compile` is clean, and `python3 forge/selftest.py` passes every check, both #29 checks included.
+  - Negative controls: dropping the `cacheWrite` term fails the first check (`in=207`); always appending `in/out` fails the no-usage check (`in=0 out=0`).
+  - Selftest 4k's done-line regex (selftest.py:562) still matches because its stub writes no session file.
+- info Siblings: I read the diffs of every open PR on `forge` that touches README.md, forge.py or selftest.py (#218 #215 #213 #211 #209 #205 #204 #197 #196 #195 #183 #182 #181 #165 #160 #148 #145 #140 #139 #136 #133 #132 #117 #111 #99 #86 #85). None touches `session_counts`, the done line, selftest #29, or a `# 29`/`# 30` section. #145, #165 and #213 edit or insert other rows near README row 69 (different rows; at most a textual merge conflict). #117 edits `_agent_once`'s `cmd` line, which is a different hunk. No sibling contradicts or duplicates this PR.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, replace the two comment lines 417-418
+```
+        # turns= and tools= come from the omp session file under out.with_suffix(""), which also holds the output
+        # tokens per turn.
+```
+with
+```
+        # turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+```
+
+
 ## PR #222 · 2026-11-13T16:43:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
