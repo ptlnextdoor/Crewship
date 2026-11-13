@@ -82,7 +82,8 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` turns=N tools=M in=I out=O` from the omp session files under `session_dir` (one `assistant` message
+    """` omp=V turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
+    version omp writes on its `model_change` entry, omitted when the file has none; one `assistant` message
     per model turn, one `toolResult` per tool call; `in` sums each turn's input, cache-read and cache-write
     tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
     no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance in a
@@ -90,8 +91,13 @@ def session_counts(session_dir: Path) -> str:
     reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the same solve rate (Gao
     and Peng, ICSE-Companion 2026): this is the number that percentile is read from. The token sums are the
     bill behind it: cache reads were 430-550k of a long session's per-turn tokens and most of its cost (Coral,
-    2026-11-11), and four harnesses within 6 points on one eval differed 39% in tokens per task (Schmid, 2026-11-13)."""
+    2026-11-11), and four harnesses within 6 points on one eval differed 39% in tokens per task (Schmid, 2026-11-13).
+    The omp version is the confound to rule out first when those numbers move between days: a served model
+    changes under its name without notice (dozens of unexplained shifts across hundreds of endpoints, Chauvin et
+    al. 2025) and so does the harness, and a per-version grouping of turns and tokens is how one practitioner
+    told the two apart (token-drift, 2026-11-12); `model=` on the same line is the other half of that grouping."""
     turns = tools = tin = tout = 0
+    omp = ""
     try:
         for f in session_dir.glob("*.jsonl"):
             for line in f.read_text(errors="replace").splitlines():
@@ -99,7 +105,9 @@ def session_counts(session_dir: Path) -> str:
                     e = json.loads(line)
                 except ValueError:
                     continue
-                if e.get("type") == "message":
+                if e.get("type") == "model_change":
+                    omp = (e.get("runtime") or {}).get("version") or omp
+                elif e.get("type") == "message":
                     m = e.get("message", {})
                     role = m.get("role")
                     turns += role == "assistant"
@@ -111,7 +119,7 @@ def session_counts(session_dir: Path) -> str:
         return ""
     if not turns:
         return ""
-    return f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
+    return (f" omp={omp}" if omp else "") + f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
@@ -414,7 +422,7 @@ class Forge:
         out.write_text(text)
         # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
         # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
-        # turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+        # omp=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
         self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s{session_counts(out.with_suffix(''))} "
                  f"reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
