@@ -2,6 +2,30 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #217 · 2026-11-13T05:19:35Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #217 planner: Done when scores the goal on the real input, not a reduced fixture
+What it changes: Adds one sentence to `forge/prompts/planner.md` `## Done when`. The criterion that scores the goal must run on the real checkpoint, dataset, track or image size, not on a reduced fixture. Also adds a README safeguard row that says builder rule 22 and reviewer step 1 then "run it at that size", and a selftest string check for the sentence. No forge.py change.
+Findings:
+- medium forge/prompts/planner.md:23, forge/README.md:29: A full-size scoring line will not fit in the review session.
+  - The reviewer reruns every `## Done when` line (reviewer.md:4), and "a criterion you did not run counts as FAIL". The review session is capped at 30 min (forge.py:1307). A review that times out with no verdict is rerun once (forge.py:1309-1318), and if that also fails the attempt is lost. 4 of reflex1's 112 reviewer logs already end at `TIMEOUT after 1800s` (lane2 00005/00006, lane3 00005, lane4 00002).
+  - On reflex1 the goal is measured on CPU closed-loop drives. One `drive.py --track summer1` seed takes 117-683 s in `bench/results/*.md`. SCORE.md requires at least 3 seeds, and S2 covers 4 held-out tracks, so a full-size scoring line runs about 6-34 min for S1 and longer for S2, on a box at load 14-55.
+  - Today's score tickets (for example 0142) score by reading the result JSON the builder's run wrote, which takes seconds. The new sentence and the README row ask for the run itself at full size, inside both sessions. The likely outcome is REJECT or timeout on the very tickets that move SCORE.md: about 75 min builder + 60 min reviewer per attempt, then `blocked` after `max_attempts` 3.
+  - The reviewer prompt has no GPU rule (no `gpu` in reviewer.md). A scoring line that is a `gpu.py run` would therefore be rerun on a second pod. That spend is bounded by gpu.py's cap ($14.88 of $15 spent per the ledger, so it is refused today).
+  - Nothing here weakens the gate, the reviewer or the protected paths. The cost is time, quota and lost attempts.
+- low forge/prompts/planner.md:23: The reason clause "a check that passes only on a smaller input is the failure most read agent runs share" is garbled. It also overstates the source: Mercor wrote "Most failed runs shared one problem", not most runs (checked on the cited post). It repeats the README row's prevents column, and it is text that every planner turn reads.
+- none: Nothing is deleted. `git diff --word-diff` against origin/forge shows pure additions in all three files, so no prompt, selftest or safeguard-table layer is removed.
+- none: No ticket text reaches a forge-run command, and no new state is shared between lanes. The prompt grows by one fixed sentence.
+- none forge/selftest.py:764-765: The check follows the existing `b`/`r` string-check convention (selftest.py:756-771). It and the "not a reduced fixture" check both survive the edit below. A full `python3 forge/selftest.py` on a `git archive` of the PR head ended "all checks passed".
+- none siblings: 27 other open PRs on `forge` touch README.md or selftest.py, and none touch planner.md. A keyword scan of their diffs (fixture, reduced, real size, measured on, Done when, planner) finds no rule that duplicates or contradicts this one. #182 edits builder.md's Heavy-work line and keeps "Keep jobs small", which is not a file this PR touches. #84 and #86 change README rows at lines 30 and 32. The only overlap is that adjacent text; there is no contradiction.
+Change needed (only for MERGE WITH CHANGE):
+- In forge/prompts/planner.md:23, replace the added sentence "The command that scores the goal runs on the input the goal is measured on (the real checkpoint, dataset, track or image size, named in the line), not a reduced fixture or a shape the builder picks: a check that passes only on a smaller input is the failure most read agent runs share." with: "The command that scores the goal runs on the input the goal is measured on (the real checkpoint, dataset, track or image size, named in the line), not a reduced fixture or a shape the builder picks. The reviewer reruns every line inside a 30-minute session, so when the full measurement takes longer (several seeds or tracks, a `gpu.py` job), that line runs one seed or track of it at full size, and a second line checks that the builder's result files for the rest record the same input."
+- In forge/README.md:29, replace "so builder rule 22 and reviewer step 1 run it at that size" with "(when the full measurement outlasts the reviewer's 30-minute session: one seed or track of it at full size, plus a check that the rest's result files record that input), so builder rule 22 and reviewer step 1 run it at that size".
+
+
 ## PR #216 · 2026-11-13T01:17:04Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
