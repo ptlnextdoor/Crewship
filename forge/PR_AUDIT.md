@@ -2,6 +2,54 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #226 · 2026-11-13T22:26:49Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #226 forge: omp= runtime version on every session's done line
+What it changes: `session_counts()` (forge.py:84-122, PR head) now also reads `runtime.version` from the session file's `model_change` entry. It prefixes ` omp=V` to the `agent <role> done` line (:425-427), and when there is no such entry it adds nothing. The docstring, the comment above the done line, README row 70 and selftest #29 change to match. No prompt, gate, reviewer, protected-path, claim, recover, PR, quota or GPU code is touched.
+Findings:
+- info forge/forge.py:84-122,425-427: blast radius. The only caller is the done-line f-string. No forge code parses the done line. Selftest 4k's regex `rc=0 \d+s reply=` runs on a path that writes no session file, so `session_counts` returns "" there and adds no `omp=`. Each lane has its own session dir (`log_path()`), so the PR adds no shared state beyond the existing append to forge.log.
+- info forge/forge.py:108-109: the field is correct. In omp 18.12.6, `SessionEntryBase.runtime` is documented as "omp build that wrote this entry, set on every entry" and `RuntimeIdentity.version` as "omp package version" (dist/types/session/session-entries.d.ts:67-71, runtime-identity.d.ts). So `omp=` is omp's version, not Bun's. All 11 files under ~/.omp/agent/sessions hold exactly one `model_change` with `{"version":"18.12.6"}`, which matches `omp --version`. I reran base and PR on all 4 real session dirs: the output is identical apart from the ` omp=18.12.6` prefix, and the PR body's smoke string (` omp=18.12.6 turns=4 tools=5 in=68690 out=1602`) reproduces exactly. Not observed: a print-mode file. ~/.local/state/forge/reflex1/sessions holds no .jsonl. cli.js appends `model_change` on the new-session path whenever a model is set; [INFERENCE] that covers `-p --model=`. If it does not, `omp=` is simply left off.
+- low forge/forge.py:108-109: this is the first string from a session-writable file that forge copies verbatim into forge.log.
+  - Exposure: the session has `FORGE_STATE_DIR` in its env (:398), and its session dir sits under it.
+  - Probed: version `"1\n2026-11-13T00:00:00Z [l9] FORGED"` puts a raw newline into the done line, i.e. a forged forge.log line. `"v"*5000` adds a 5,000-character field.
+  - Where it lands: `status_text()` passes forge.log's last 8 lines into the steward's `{STATE}` (:1771).
+  - Existing convention it breaks: forge keeps session text out of that tail or bounds it. See :328 ("No config text here: the session wrote it, and forge.log's tail is the steward's {STATE}") and :1649 (first line only, `[:500]`).
+  - Not a new capability: lane 1's `FORGE_STATE_DIR` is the dir holding forge.log, and lanes 2-4 get a subdir of it, so a session can already append to forge.log directly. What changes is that forge itself now relays the text.
+  - Same lines, second problem: a truthy non-dict `runtime` (`"x"`, `[1]`) raises AttributeError, where base returns ` turns=1 tools=0` (probed). This widens an existing crash class (base already raises on `"message": null`).
+  - Crash path traced: the raise comes after `out.write_text` in `_agent_once`. `agent()`'s `finally` restores .git/config. `cycle()`'s `except` closes the PR, and its `finally` removes the worktree. `lane_loop` logs "cycle error" and `recover()` requeues the ticket. No ticket is stuck `in_progress` and no worktree is left behind.
+  - omp always writes an object here, so only a hand-edited transcript triggers either problem. The one edit below fixes both.
+- info forge/forge.py:100-111: restart collision. A lane hard-killed mid-session restarts on the same cycle number and reuses the session dir; this predates the PR (noted on #222). That dir then holds two files, and `omp=` comes from whichever file `glob` yields last, in scandir order. Probed: a.jsonl 18.12.5 plus b.jsonl 18.12.6 gives `omp=18.12.6`. The counts already sum both files in that case. No change asked.
+- info Deletions. Nothing is deleted from forge/prompts/*.md.
+  - selftest #29: the comment's clauses are kept and one is added. `rows` keeps every old entry and adds a `model_change` row. The first check is still an exact-equality check, now with the `omp=` prefix, so coverage of turns, tools, tokens, the torn last line and non-message entries (`session`, `custom`) is unchanged. The `bare` check still asserts ` turns=1 tools=0`; only its label changed.
+  - README row 70: every clause of the old left column is kept (only "and" moved). The right column keeps its old text verbatim and adds one sentence.
+  - No layer is retired.
+- info Gate. I simulated reviewctl `gate()`: the PR tree with base's `forge/selftest.py`. `py_compile` is clean and the run prints "all checks passed". The PR's own selftest also passes. Base #29's fixture has no `model_change`, so the PR's code returns the old string there. Unlike #224, this PR passes the base gate.
+- nit forge/README.md:70, PR body: "`forge.log` held the requested model and nothing about the harness version" is true of forge.log only. The omp release is already recorded per attempt as `harness` (forge.py:216, `omp --version`): on the history entry (:1491), in status's "per forge version + omp release" tally (:1683), in the PR body (:1110) and in the merge trailer (:1168). What this PR actually adds is a per-session version next to the per-session token sums, taken from the binary that ran rather than from `omp --version` at stamp time. The row does not say that.
+- nit forge/forge.py:94-98: the docstring gains 4 lines of citations that repeat the README row's new sentence. That is the file's existing style.
+- info Sibling #224 (base `forge`, open; audited MERGE WITH CHANGE and left open after a gate failure).
+  - Overlap: both PRs edit `session_counts`' docstring head and tail, its return line, the `_agent_once` comment, README row 70's left column, and selftest #29's comment, `rows` and expected string. That is 6 overlapping hunks across 3 files, not the "one-line rebase" the PR body claims.
+  - No contradiction: the fields are independent (`omp=` before `turns=`, `prompt=` between `tools=` and `in=`).
+  - #226 passes the base gate and #224 does not, so #224 is the side that rebases. Nothing in #226 changes for it.
+- info Other siblings. I read the diffs of #218 #215 #213 #211 #209 #205 #204 #197 #196 #195 #183 #182 #181 #165 #160 #148 #145 #140 #139 #136 #133 #132 #117 #111 #99 #86. None touches `session_counts`, the done line, README row 70 or selftest #29. #132 and #133 edit the history entry beside `harness`, which is a different hunk and no duplication.
+- info PR text: the body and the one comment (a Copilot quota notice) contain no HTML. The body's claims (field source, no `omp=` without `model_change`, check #29's strings, the smoke output) match the diff and the probes, except "one-line rebase" (see #224 above).
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py `session_counts`, replace
+```
+                if e.get("type") == "model_change":
+                    omp = (e.get("runtime") or {}).get("version") or omp
+```
+with
+```
+                if e.get("type") == "model_change":
+                    rt = e.get("runtime")
+                    # the session can write this file and forge.log's tail is the steward's {STATE}: version chars only
+                    omp = (re.sub(r"[^\w.+-]", "", str(rt.get("version") or ""))[:40] if isinstance(rt, dict) else "") or omp
+```
+(`re` is already imported.) I checked this edit on a copy: the PR's selftest and base's selftest both print "all checks passed". The real session dir still logs ` omp=18.12.6 turns=4 tools=5 in=68690 out=1602`. The forged-newline probe now logs one token, the 5,000-character probe logs 40 characters, and `"runtime": "x"` no longer raises.
+
+
 ## PR #225 · 2026-11-13T21:23:07Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
