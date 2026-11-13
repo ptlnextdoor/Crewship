@@ -760,6 +760,7 @@ check("reviewer must end with a verdict line", "VERDICT: APPROVE" in r and "VERD
 check("reviewer is not told to be lenient", "benefit of the doubt" not in r.lower())
 check("reviewer removes each added guard and requires a test to fail", "remove that one check" in r and "require a test to fail" in r)
 check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it for each file" in r and "quotes the entry" in r)
+check("reviewer writes what a complete change must touch before reading the diff", "Before you read the diff below" in r and "never the list against the diff" in r)
 check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in b and "existing code takes precedence" in b)
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
 check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
