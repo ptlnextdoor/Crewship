@@ -673,6 +673,8 @@ class Forge:
     # branch that strips them passed this guard. `+++`/`---` headers stay out either way.
     ASSERT_MARK = re.compile(r"^([-+])(?![-+]).*\b(debug_)?assert\w*")
 
+    FIXTURE_DIR = re.compile(r"(^|/)(fixtures?|testdata|golden|__snapshots__|snapshots?)/")
+
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
         """Tests the branch switches off, drops or strips: an added `#[ignore]`/`pytest.skip` marker, fewer test
         functions, fewer assertion lines than the branch point, or added test functions with no added assertion
@@ -681,7 +683,8 @@ class Forge:
         `#[test]`, 0 commits with a net loss of `assert` lines and 0 that add a test function without adding an
         assertion line, in 627 commits on main, so the prose has held; an agent that deletes the failing test
         instead of fixing the bug is the shape ImpossibleBench, arXiv 2510.20270, measures, and one that keeps
-        the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here)."""
+        the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here),
+        and a reference fixture the branch changes or deletes without the ticket naming it."""
         text = ticket_text.split("\n## forge")[0].lower()
         skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
         # shortcut: "remove the old test" anywhere in the ticket waives every count, "drop the assert" (within three
@@ -729,6 +732,24 @@ class Forge:
         # helpers an added test calls once an attempt fails on it.
         if net > 0 and not added and not assert_ok:
             out.append(f"{net} added test functions and no added assertion line")
+        # A reference fixture regenerated from the builder's own code (reflex1: `bench/fixtures/forward/*.safetensors`
+        # is the pinned PyTorch oracle `tests/parity.rs` compares candle against) makes the parity test compare the
+        # code with itself: the counts above stay level and the test passes. Vaccari, martinfowler.com 2026-11-11,
+        # "Protecting the test harness": with the contract in data files, a check on which files changed against
+        # the task's type catches it, and a refactor or new code expects no test-data change. A changed or deleted
+        # file under a fixture directory needs the ticket to name the file or one of its directories from the
+        # fixture root down (reflex1: 2 of 627 commits on main changed one; ticket 0090 named
+        # `bench/fixtures/reflex/policy_tiny` beside "regenerated", the other predates forge); an added file is a
+        # new test's data and passes.
+        # shortcut: a rename (`R<n>`, content changed or not) passes like a moved test; refuse `R<n>` under 100 once one lands.
+        for line in self.sh("git diff --name-status origin/main...HEAD", cwd=cwd, check=True).stdout.split("\n"):
+            parts = line.split("\t")
+            if len(parts) < 2 or parts[0][:1] not in ("M", "D") or not (m := self.FIXTURE_DIR.search(parts[1])):
+                continue
+            path, root = parts[1], m.end() - 1  # the slash after the fixture directory
+            names = [path] + [path[:i] for i, c in enumerate(path) if c == "/" and i >= root]
+            if not any(re.search(re.escape(n.lower()) + r"(?![\w-]|[./][\w-])", text) for n in names):  # a whole path: `bench/fixtures` inside `bench/fixtures/reflex/sample` names nothing
+                out.append(f"{path}: {'deletes' if parts[0][0] == 'D' else 'changes'} a reference fixture the ticket does not name")
         return out
 
     # Code points a reader does not see and a model does: bidi controls (Trojan Source, Boucher and Anderson 2021:
@@ -1229,7 +1250,7 @@ class Forge:
                 return self.fail(ticket, f"diff adds or bumps Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
-                return self.fail(ticket, f"diff skips, deletes or strips tests the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                return self.fail(ticket, f"diff skips, deletes or strips tests, or changes a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
             bad = self.invisible_chars(wt)
             if bad:
                 return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
@@ -1274,7 +1295,7 @@ class Forge:
                     return self.fail(ticket, f"the repair pinned Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
-                    return self.fail(ticket, f"the repair skipped, deleted or stripped tests the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                    return self.fail(ticket, f"the repair skipped, deleted or stripped tests, or changed a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
                 bad = self.invisible_chars(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
