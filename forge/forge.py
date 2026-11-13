@@ -81,6 +81,29 @@ def rate_interval(m: int, n: int) -> str:
     return f"{m}/{n} ({max(0.0, 100 * (mid - half)):.0f}-{100 * (mid + half):.0f}%)"
 
 
+def session_counts(session_dir: Path) -> str:
+    """` turns=N tools=M` from the omp session files under `session_dir` (one `assistant` message per model
+    turn, one `toolResult` per tool call), or "" when no session file was written. Turn count explains 84% of
+    the variance in a coding-agent trajectory's cost, mean observation size 4% (TurnCost, PromptOps 2026), and
+    a turn limit with reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the
+    same solve rate (Gao and Peng, ICSE-Companion 2026): this is the number that percentile is read from."""
+    turns = tools = 0
+    try:
+        for f in session_dir.rglob("*.jsonl"):
+            for line in f.read_text(errors="replace").splitlines():
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                if e.get("type") == "message":
+                    role = e.get("message", {}).get("role")
+                    turns += role == "assistant"
+                    tools += role == "toolResult"
+    except OSError:
+        return ""
+    return f" turns={turns} tools={tools}" if turns else ""
+
+
 def no_push(env: dict[str, str]) -> dict[str, str]:
     """`env` plus a `remote.origin.pushurl` that is not a URL, for the sessions forge starts.
 
@@ -381,8 +404,10 @@ class Forge:
         out.write_text(text)
         # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
         # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
-        # output tokens per turn are in the omp session file under out.with_suffix("").
-        self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s reply={len(text)}c log={out.name}")
+        # turns= and tools= come from the omp session file under out.with_suffix(""), which also holds the output
+        # tokens per turn.
+        self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s{session_counts(out.with_suffix(''))} "
+                 f"reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
 
     # ---------- budget ----------
