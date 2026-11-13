@@ -784,6 +784,7 @@ check("builder reruns an earlier Must change line before coding to it; the revie
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
 check("builder is told never to reach origin; forge pushes and lands", "`git push`" in b and "reaches `origin`" in b and "Forge pushes this branch" in b)
 check("builder previews a computed delete target before running it", "replaced by `echo` or `ls -d`" in b and "`-print0 | xargs -0`" in b)
+check("builder reports each `## Do` line met another way than first considered and rereads it", "met another way than the one you first considered" in b and "reread that `## Do` line against the way you kept" in b)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
 # A rule phrased as a condition on the agent's own action ("If the milestone is done, ...") is followed less
