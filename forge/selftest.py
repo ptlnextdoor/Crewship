@@ -1602,21 +1602,25 @@ with tempfile.TemporaryDirectory() as d:
     check("the loop's own push is not caught by it", ours.returncode == 0, ours.stderr[-200:])
 
 # 29. The done line's turns= and tools= are read from omp's session file: one assistant message per model turn,
-# one toolResult per tool call; user messages, non-message entries and a torn last line count nothing, and a
-# session that never wrote a file logs no counts rather than turns=0. in= and out= sum the assistant messages'
-# `usage` (input + cacheRead + cacheWrite, and output); a file whose turns carry no usage logs neither.
+# one toolResult per tool call; non-message entries and a torn last line count nothing, and a session that never
+# wrote a file logs no counts rather than turns=0. in= and out= sum the assistant messages' `usage` (input +
+# cacheRead + cacheWrite, and output); a file whose turns carry no usage logs neither. prompt= is the text of the
+# first user message as omp stores it (a list of blocks, text ones counted, an image block not; a later user
+# message, a follow-up, does not count), and a file with no user message logs no prompt=.
 with tempfile.TemporaryDirectory() as d:
     s = Path(d) / "sessions" / "00001-builder"
     s.mkdir(parents=True)
-    rows = [{"type": "session", "cwd": d}, {"type": "message", "message": {"role": "user", "content": "p"}}]
+    rows = [{"type": "session", "cwd": d},
+            {"type": "message", "message": {"role": "user", "content": [{"type": "text", "text": "ab"}, {"type": "image", "data": "zz"}, {"type": "text", "text": "cd"}]}}]
     for i in range(3):
         usage = {"input": 1, "output": 10, "cacheRead": 100, "cacheWrite": 1000} if i < 2 else {"input": 5}
         rows += [{"type": "message", "message": {"role": "assistant", "content": [], "usage": usage}},
                  {"type": "message", "message": {"role": "toolResult", "content": []}}]
-    rows += [{"type": "message", "message": {"role": "toolResult", "content": []}}, {"type": "custom", "data": 1}]
+    rows += [{"type": "message", "message": {"role": "toolResult", "content": []}}, {"type": "custom", "data": 1},
+             {"type": "message", "message": {"role": "user", "content": "follow-up"}}]
     (s / "a.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + '\n{"type": "mess')
-    check("turns, tool calls and tokens are counted from the session file",
-          forge.session_counts(s) == " turns=3 tools=4 in=2207 out=20", repr(forge.session_counts(s)))
+    check("turns, tool calls, prompt chars and tokens are counted from the session file",
+          forge.session_counts(s) == " turns=3 tools=4 prompt=4 in=2207 out=20", repr(forge.session_counts(s)))
     bare = Path(d) / "sessions" / "00002-reviewer"
     bare.mkdir()
     (bare / "a.jsonl").write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": []}}))
