@@ -89,7 +89,7 @@ def session_counts(session_dir: Path) -> str:
     same solve rate (Gao and Peng, ICSE-Companion 2026): this is the number that percentile is read from."""
     turns = tools = 0
     try:
-        for f in session_dir.rglob("*.jsonl"):
+        for f in session_dir.glob("*.jsonl"):
             for line in f.read_text(errors="replace").splitlines():
                 try:
                     e = json.loads(line)
