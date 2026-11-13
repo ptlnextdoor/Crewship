@@ -82,7 +82,7 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` turns=N tools=M in=I out=O` from the omp session files under `session_dir` (one `assistant` message
+    """` turns=N tools=M prompt=P in=I out=O` from the omp session files under `session_dir` (one `assistant` message
     per model turn, one `toolResult` per tool call; `in` sums each turn's input, cache-read and cache-write
     tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
     no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance in a
@@ -90,8 +90,14 @@ def session_counts(session_dir: Path) -> str:
     reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the same solve rate (Gao
     and Peng, ICSE-Companion 2026): this is the number that percentile is read from. The token sums are the
     bill behind it: cache reads were 430-550k of a long session's per-turn tokens and most of its cost (Coral,
-    2026-11-11), and four harnesses within 6 points on one eval differed 39% in tokens per task (Schmid, 2026-11-13)."""
+    2026-11-11), and four harnesses within 6 points on one eval differed 39% in tokens per task (Schmid, 2026-11-13).
+    `prompt` is the text characters of the first `user` message, the prompt as the model received it: forge hands
+    the prompt over as `@<file>` and omp expands it, so a release that stops expanding would run every session on
+    a 60-character path with rc 0 and a reply. A 200 is not a delivered instruction (Tesseracted, 2026-11-13: a
+    `developer`-role prompt silently dropped by an OpenAI-compatible endpoint, found only by asking for a secret
+    word back); here the prompt file's length is the word, and the first user turn is the answer."""
     turns = tools = tin = tout = 0
+    prompt = None
     try:
         for f in session_dir.glob("*.jsonl"):
             for line in f.read_text(errors="replace").splitlines():
@@ -104,6 +110,9 @@ def session_counts(session_dir: Path) -> str:
                     role = m.get("role")
                     turns += role == "assistant"
                     tools += role == "toolResult"
+                    if role == "user" and prompt is None:
+                        c = m.get("content")
+                        prompt = len(c) if isinstance(c, str) else sum(len(b.get("text") or "") for b in c or () if isinstance(b, dict))
                     u = m.get("usage") or {}
                     tin += (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
                     tout += u.get("output") or 0
@@ -111,7 +120,8 @@ def session_counts(session_dir: Path) -> str:
         return ""
     if not turns:
         return ""
-    return f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
+    return (f" turns={turns} tools={tools}" + (f" prompt={prompt}" if prompt is not None else "")
+            + (f" in={tin} out={tout}" if tin or tout else ""))
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
@@ -414,7 +424,7 @@ class Forge:
         out.write_text(text)
         # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
         # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
-        # turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+        # turns=, tools=, prompt=, in= and out= come from the omp session file under out.with_suffix("").
         self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s{session_counts(out.with_suffix(''))} "
                  f"reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
