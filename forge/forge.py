@@ -82,10 +82,10 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` omp=V turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
+    """` omp=V turns=N tools=M errs=E in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
     version omp writes on its `model_change` entry, omitted when the file has none; one `assistant` message
-    per model turn, one `toolResult` per tool call; `in` sums each turn's input, cache-read and cache-write
-    tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
+    per model turn, one `toolResult` per tool call, `errs` those whose `isError` is set; `in` sums each turn's
+    input, cache-read and cache-write tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
     no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance in a
     coding-agent trajectory's cost, mean observation size 4% (TurnCost, PromptOps 2026), and a turn limit with
     reminders set at the 75th percentile of the loop's own sessions cut cost 24-68% at the same solve rate (Gao
@@ -95,8 +95,11 @@ def session_counts(session_dir: Path) -> str:
     The omp version is the confound to rule out first when those numbers move between days: a served model
     changes under its name without notice (dozens of unexplained shifts across hundreds of endpoints, Chauvin et
     al. 2025) and so does the harness, and a per-version grouping of turns and tokens is how one practitioner
-    told the two apart (token-drift, 2026-11-12); `model=` on the same line is the other half of that grouping."""
-    turns = tools = tin = tout = 0
+    told the two apart (token-drift, 2026-11-12); `model=` on the same line is the other half of that grouping.
+    `errs` is the half of the tool count the turn limit cannot see: a session that spends its turns on
+    commands that fail (a missing binary, a path from another repo, a retried flake) looks like a long one, and
+    ~20% of ReAct runs on one benchmark were repeated calls after a failed one (Kim et al., LLMCompiler 2023)."""
+    turns = tools = errs = tin = tout = 0
     omp = ""
     try:
         for f in session_dir.glob("*.jsonl"):
@@ -114,6 +117,7 @@ def session_counts(session_dir: Path) -> str:
                     role = m.get("role")
                     turns += role == "assistant"
                     tools += role == "toolResult"
+                    errs += role == "toolResult" and bool(m.get("isError"))
                     u = m.get("usage") or {}
                     tin += (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
                     tout += u.get("output") or 0
@@ -121,7 +125,7 @@ def session_counts(session_dir: Path) -> str:
         return ""
     if not turns:
         return ""
-    return (f" omp={omp}" if omp else "") + f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
+    return (f" omp={omp}" if omp else "") + f" turns={turns} tools={tools} errs={errs}" + (f" in={tin} out={tout}" if tin or tout else "")
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
@@ -424,7 +428,7 @@ class Forge:
         out.write_text(text)
         # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
         # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
-        # omp=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+        # omp=, turns=, tools=, errs=, in= and out= come from the omp session file under out.with_suffix("").
         self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s{session_counts(out.with_suffix(''))} "
                  f"reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
