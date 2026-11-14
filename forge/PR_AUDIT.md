@@ -2,6 +2,83 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #231 · 2026-11-14T04:38:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #231 forge: fell= on every session's done line when omp's retry fallback moved the session off --model
+What it changes: `session_counts()` keeps the sanitized `model` of the last `model_change` entry marked `resolvedModelIsFallback: true` (forge.py:119-120 at head 2b303f48). It prints ` fell=P/M` between `omp=` and `turns=` on `_agent_once`'s `agent <role> done` line (:133-134, :438). The docstring (:85-104), README row 70 and selftest #29 (comment :1608-1610, new check :1624-1631) are extended to match. No prompt, gate, reviewer, routing, claim, recover, discard_strays, PR, quota, timeout or GPU code is touched.
+Findings:
+- info forge/forge.py:119-120,133-134,438 Blast radius, traced.
+  - The only caller of `session_counts` is the done-line f-string at :438.
+  - `fell` reaches nothing else: not `last_model` (:364), not the reviewer pick (:1368), not `record()`, not the PR body. Routing and verdicts are unchanged.
+  - The only forge.log reader that reaches a prompt is `status_text()` (:1783): the last 8 lines go into the steward's `{STATE}`. Each done line grows by at most 66 chars, so the growth is bounded.
+  - Each lane reads only its own session dir, so there is no new shared state.
+  - No new exception path. I probed a dict `model`, a non-dict `runtime` and the string `"true"`: each returns a string and none raises.
+- info forge/forge.py:120 Input a session can write.
+  - The session dir is under `FORGE_STATE_DIR` (:410), so a yolo session can forge this entry.
+  - Sanitizer is `[^\w./:+-]` capped at 60 chars. A model with a newline-injected forged log line came out as one token, `x2026-11-14T00:00:00Zl9FORGEDdone`, with no newline. A 500-char model was cut to 60.
+  - `\w` is Unicode-aware, so U+3164 (renders as a blank) gets through. The existing `omp=` at :111 has the same gap.
+  - Not a new capability: a session can already append to forge.log directly.
+- info Claims checked against the omp 18.12.6 source shipped on this box. All match:
+  - `applyRetryFallbackCandidate` writes `appendModelChange(candidateSelector, "fallback", true)` (src/session/turn-recovery.ts:2188; the role constant is at session-entries.ts:36).
+  - `retry.enabled` and `retry.modelFallback` default to true (settings.ts:679, 730-732).
+  - `~/.omp/agent/config.yml:80-88` holds the chains the body names and overrides neither default. forge/omp.yml sets no retry key.
+  - `omp --help`: `--config` is "Load an extra config.yml-style overlay".
+  - The 11 `model_change` entries on this box are all `false`.
+  - Both citations exist and the numbers match their abstracts. arXiv 2603.03111: "-8 to +13 percentage points in Multi-IF strict success". arXiv 2608.08239: "rewriting 61-94% of post-fork actions" and "All five outcome flips ... occur in swap arms".
+- low forge/forge.py:119-120, README.md:70 `fell=` means the session ran turns on P/M at some point, not that it ended there.
+  - omp's default `retry.fallbackRevertPolicy` is `cooldown-expiry` (settings.ts:847-850; the owner's config does not override it). It restores the primary model and writes `model_change(primary, "fallback", false)` (turn-recovery.ts:2503). This code ignores that entry.
+  - Probe: start on Opus, fall back to Fable, restore Opus. Output: `fell=anthropic/claude-fable-5-1`.
+  - The docstring's "a builder that finished its ticket on Fable" reads the field as the model that finished the ticket.
+  - The error goes toward reporting a switch, which is the signal the cited handoff paper measures. No change asked.
+- low forge/forge.py:437 The comment over the done line still says "omp=, turns=, tools=, in= and out= come from the omp session file". `fell=` now comes from that file too. #226 fixed the same comment for `omp=`, and #227/#228 update it for their fields. Fix below.
+- low forge/README.md:70 (right column) "so `forge.log` named Opus for a ticket Fable finished" reports as observed something with no instance on record.
+  - reflex1's forge.log has 0 `done model=` lines.
+  - `~/.local/state/forge/reflex1/sessions` holds 0 `.jsonl` files.
+  - All 11 `model_change` entries on this box are `false`, which the PR body says itself.
+  - The column's other entries cite observed reflex1 incidents. This one describes a mechanism. Fix below.
+- nit forge/selftest.py:1627 The fixture uses `"role": "temporary"`, but omp writes `"fallback"` (`EPHEMERAL_MODEL_CHANGE_ROLE`). The code ignores `role`, so the check still pins the behaviour. The fixture has no restore entry, so it cannot tell "last entry marked true" from "last entry, if marked true". Not required.
+- nit forge/forge.py:100-104 The docstring repeats the new README row 70 text (owner's chain, Khraishi, Gonuguntla). It also hardcodes the chain in the owner's machine-local `~/.omp/agent/config.yml`, which goes stale when that file changes. The file does this for every other field. Not required.
+- info Deletions. No layer is retired:
+  - Nothing is removed from forge/prompts/*.md.
+  - selftest.py:1608 keeps the old clause "a file without one logs no omp=." and appends to it.
+  - The exact assertion at :1623 (`" omp=18.12.6 turns=3 tools=4 in=2207 out=20"`) is unchanged. Its fixture has no marked entry, so it now also rules out a spurious `fell=`.
+  - The README row 70 word-diff is insertions only, after "version" and after "2026-11-12)".
+- info Gate. All runs pass:
+  - `py_compile` is clean.
+  - The PR's own selftest prints "all checks passed".
+  - reviewctl `gate()` simulation (PR tree plus base `forge/selftest.py`) prints "all checks passed".
+  - Negative control: the PR's selftest on base forge.py fails only the new check (it got `' omp=18.12.6 turns=3 tools=4 in=2207 out=20'`).
+  - Smoke: base and PR `session_counts` give identical output on all 4 `~/.omp/agent/sessions` dirs.
+- info Siblings. No contradiction and no duplication.
+  - #224 (`prompt=`), #227 (`ctx=`) and #228 (`errs=`) edit the same docstring head, return line, README row 70 and selftest #29.
+  - The fields are independent. `fell=` sits between `omp=` and `turns=`, `errs=` after `tools=`, `prompt=` between `tools=` and `in=`, `ctx=` after `out=`.
+  - The conflict is textual only. `patch --dry-run`: #227 and #228 apply cleanly to base but fail on the PR tree in all three files, and #224 already fails on base.
+  - #231 passes the base gate and #227/#228 do not (PR_AUDIT.md:58,112), so they are the side that rebases.
+  - #160 (the reviewer avoids `last_model[builder]`) has the blind spot this PR logs: `last_model` is forge's chain, not omp's switch inside the session. The two are complementary, and nothing in #231 needs to change for it.
+  - None of the other 23 open sibling PRs that share a file with this one touches `session_counts`, the done line, row 70 or #29.
+- info PR text. The body and the one review (a Copilot quota notice) contain no HTML. The only `<...>` is `<requested>` in a code span. The body's claims match the diff and the probes, except the README tense above.
+Change needed (only for MERGE WITH CHANGE): two text corrections, no code change.
+1. In forge/forge.py:437, replace
+```
+        # omp=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+```
+with
+```
+        # omp=, fell=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+```
+2. In forge/README.md:70, replace
+```
+so `forge.log` named Opus for a ticket Fable finished
+```
+with
+```
+so `forge.log` would name Opus for a ticket Fable finished
+```
+
+
 ## PR #230 · 2026-11-14T02:34:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
