@@ -2,6 +2,60 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #228 · 2026-11-14T00:31:49Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #228 forge: errs= failed tool results on every session's done line
+What it changes: `session_counts()` (forge.py:102,120,128 at PR head aa8c26ee) now also counts `toolResult` messages whose `isError` is set. It prints ` errs=E` right after `tools=` on every `agent <role> done` line (:432), and the comment above that line (:431) now lists it. The docstring, README row 70 and selftest #29 are updated to match. No prompt, gate, reviewer, protected-path, claim, recover, discard_strays, PR, quota, timeout or GPU code is touched.
+Findings:
+- info forge/forge.py:120,128,431-432 Blast radius. The only caller of `session_counts` is the done-line f-string (:432). The only code that reads forge.log is `status_text()`, which passes the last 8 lines into the steward's `{STATE}` (:1777). Each done line grows by a constant ` errs=N`. Each lane reads only its own session dir, so no state is shared between lanes. Selftest 4k's regex `rc=0 \d+s reply=` runs on a stub that writes no session file, so it still gets "". The PR's full selftest passes, 4k included.
+- info forge/forge.py:120 No new crash or injection path. `m.get("isError")` runs only after `role == "toolResult"` has matched, so `m` is already a dict, and `bool()` of any JSON value cannot raise. I fuzzed base against PR on 88 session files: 14 `isError` values × 6 roles, plus null, string and list `message` lines. Raised-or-returned was the same in every case (0 divergent). The value is a Python int no bigger than `tools`, so no text reaches forge.log or `{STATE}`.
+- info forge/forge.py:120 Correctness, checked on real data.
+  - omp 18.12.6 declares `ToolResultMessage.isError: boolean` as non-optional (pi-ai dist/types/types.d.ts:1107).
+  - In this box's 11 omp session files, all 52 toolResults carry the key, no other role does, and 4 are true.
+  - The PR's output on the 4 real session dirs is base's output plus `errs=`, and the count matches an independent count.
+  - The body's smoke line (` omp=18.12.6 turns=18 tools=10 errs=3 in=309965 out=3675`, the `-tmp` dir) reproduces exactly.
+- low forge/forge.py:99-101, forge/README.md:70 (right column) The text presents `errs` as wasted failing commands ("a missing binary, a path from another repo, a retried flake"), but omp sets `isError` on every non-zero exit.
+  - Evidence from session files: bash results with `details.exitCode` 1 and 127 are `isError: true`, and all 23 exit-0 bash results are false. This audit's own `rg` no-match run through omp's bash also came back as an error.
+  - Consequence for a builder session: `errs` also counts builder.md:4's `rg` lookups that match nothing (`rg` exits 1, checked) and the failing run that builder.md:13 requires ("write the test ... first, see it fail"). So the field cannot tell a failing session from a test-first one, which is the exact use the text gives it. Read later as waste, it would argue against the test-first rule.
+  - The LLMCompiler citation does not support `errs`. arXiv 2312.04511 §5/A.1 says ~20% of LLaMA-2 70B examples had repetitive calls, made when a Wikipedia search returned insufficient information. Those are successful calls, which `errs` does not count. "After a failed one" is not in the paper.
+  - Today nothing reads `errs`, so the fix is only to state what it counts (below).
+- nit forge/forge.py:88, forge/selftest.py:1605 Words were inserted without rewrapping, leaving 145- and 140-character lines among ~110-character neighbours. ruff selects no E501 here, so this is cosmetic only.
+- info Deletions. Nothing is deleted from forge/prompts/*.md. No safeguard layer is retired:
+  - README.md:70: a word-diff shows only three tokens replaced (`tools=M\``, `call),`, `2026-11-12)`), each re-emitted with additions. No clause is removed.
+  - selftest.py:1605 (comment): the old clauses are kept, with one insertion.
+  - selftest.py:1617-1618: every toolResult row in the fixture now carries an explicit `isError`. `tools=4` is still asserted exactly, and the `custom` row and the torn last line are kept. A toolResult without the key no longer appears in the fixture. omp types the key as non-optional and all 52 observed results carry it, so no reachable case loses coverage.
+  - selftest.py:1621,1625: both expected strings are exact supersets of the old ones. `bare` still rules out `omp=`, `in=` and `out=`.
+- info Gate. `py_compile` is clean and the PR's own selftest prints "all checks passed". I simulated reviewctl `gate()` (base `forge/selftest.py` on the PR tree): it fails 2 checks, both #29, because `errs=0`/`errs=1` is now always printed. So reviewctl will report "gate failed". That is inherent to an always-printed field under exact-string checks, not a defect. The PR merges cleanly onto current origin/forge (25efc611, which only changed SCOUT.md).
+- info Siblings.
+  - #227 (`ctx=`) and #224 (`prompt=`) edit the same docstring, return line, README row 70 and selftest #29. The fields are independent: `errs=` sits after `tools=`, `ctx=` after `out=`, and `prompt=` between `tools=` and `in=`. There is no contradiction and no duplication.
+  - `git merge-tree` of #228 and #227 gives 5 conflict blocks (README 1, forge.py 3, selftest 1), not the "one-line rebase" the body claims. Whichever lands second rebases, with no text change on either side.
+  - #224's base predates `omp=`, so #224 is the side that rebases.
+  - Other siblings: I scanned the diffs of #218 #215 #213 #211 #209 #205 #204 #197 #196 #195 #183 #182 #181 #165 #160 #148 #145 #140 #139 #136 #133 #132 #117 #111 #99 for `session_counts`, the done line, `turns=`/`tools=`, `isError`, row 70 and `# 29.`, and checked their hunk ranges. None touches these. #213, #165 and #145 add or edit neighbouring README rows only (context overlap). #160's match is an `_agent_once` stub in an unrelated test.
+- info PR text. The body and the one review (a Copilot quota notice) contain no HTML. Every claim matches the diff and the probes except "one-line rebase".
+Change needed (only for MERGE WITH CHANGE): state what `errs` counts at both places that describe it.
+In forge/README.md:70, replace
+```
+one `toolResult` per tool call, `errs` those omp marks `isError`)
+```
+with
+```
+one `toolResult` per tool call, `errs` those omp marks `isError`, which it sets on every non-zero exit, so an `rg` that matched nothing and the failing test run the builder's test-first rule asks for count too)
+```
+and in forge/forge.py:101, replace
+```
+    ~20% of ReAct runs on one benchmark were repeated calls after a failed one (Kim et al., LLMCompiler 2023)."""
+```
+with
+```
+    ~20% of ReAct runs on one benchmark were repeated calls after a failed one (Kim et al., LLMCompiler 2023).
+    omp sets `isError` on every non-zero exit, so an `rg` that matched nothing and the failing test run the
+    builder's test-first rule asks for count too: compare `errs` between sessions, do not read it as waste."""
+```
+
+
 ## PR #227 · 2026-11-13T23:27:08Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
