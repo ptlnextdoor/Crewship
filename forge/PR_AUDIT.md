@@ -2,6 +2,41 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #234 · 2026-11-14T11:45:40Z · MERGE · risk low · gate pass · merged
+
+Verdict: MERGE
+Risk: low
+
+## PR #234 forge: keep Cargo.lock hunks out of the reviewer's diff body
+What it changes: `cycle()` builds the reviewer's diff body from `git diff origin/main...HEAD -- . ':!Cargo.lock'` instead of the full diff. The root `Cargo.lock` stays in the `--stat`, and when it changed a one-line marker sends the reviewer to step 6. The 120 KB cut is now measured on that body. `self.reviewed` and land() still use the full diff. It adds one selftest check, rewrites the "opens with --stat" check as a regex, and extends README row 91.
+Findings:
+- info forge/forge.py:1389-1393: **What leaves the reviewer's view.** The diff now removes one thing the reviewer used to be handed: the root lock's hunks in the diff body. Two places still show the lock to the reviewer: the `--stat` line, and step 6's own `git diff origin/main...HEAD -- Cargo.toml Cargo.lock '*/Cargo.toml'` (reviewer.md:11). The marker sends the reviewer to that step.
+  - `unrequested_deps()` and `vulnerable_deps()` are unchanged and still run before both gate runs (forge.py:1299-1304 and 1350-1355). They key on `(name, version)` with `source` (forge.py:639).
+  - So a lock change that keeps the name and version is now visible only through step 6's own diff. Example: a git dependency's `#sha` moving.
+  - No verdict flips because of this. Step 6 rejects a crate that is "new to Cargo.lock or changes version there", and a rev-only move is neither, so it was not rejected before this PR either. reflex1's lock has 0 `git+` sources (`grep -c 'source = "git+' ~/Dev/reflex1/Cargo.lock`).
+  - The PR body names both the retired layer and the remaining carriers.
+- info forge/forge.py:1389-1391: **Exclusion scope, checked in a scratch repo.** The `:!Cargo.lock` pathspec drops only the root lock; `crates/a/Cargo.lock` stays in the body. The `" Cargo.lock "` stat test does not match `crates/a/Cargo.lock` (a `/` comes before the name), so no marker appears for a nested lock.
+  - This matches step 6, which also diffs only the root lock. Nothing is left out that step 6 doesn't diff.
+  - The command is a constant string with no ticket text in it, so there is no injection path. It is a read-only git call in the lane's own worktree, so there is no shared state.
+  - The prompt stays capped at 120000 characters plus the stat.
+- info forge/forge.py:1392-1394: **Cut message offsets.** The cut now says `{len(body)}` characters (lock excluded), but tells the reviewer to read the rest with the full `git diff origin/main...HEAD`. The offsets differ, but there is no gap: the full diff is a superset, and the shown body starts later in it. A reviewer reading from character 120000 of the full diff re-reads some code it already saw and skips none.
+- info forge/selftest.py:1379-1381: **Replaced selftest line.** The deleted line `seen[0].find(" big.txt |")` checked that the --stat comes before the first hunk. The replacement regex ` big\.txt +\|` makes the same assertion; the change is needed because git now pads names to `Cargo.lock`'s width. The PR body names this. No layer is retired.
+- info forge/forge.py:1391: **The marker text, read against the reviewer prompt's own rules.**
+  - reviewer.md:21 calls the body "the diff itself". Case: a ticket "bump tokio and adapt call sites". Before, step 2 saw the bump in the body. Now the marker sends the reviewer to step 6's diff, which it must run anyway, and `unrequested_deps()` already enforces naming before the gate. Same answer.
+  - reviewer.md:21 says to go file by file past 150 lines. The lock stays in the stat, so it is still taken. Same answer.
+  - Step 6's "read the diff's added lines for where bytes can leave": a lock `source =` URL still appears in step 6's own diff, and Cargo.toml / `.cargo/config.toml` source changes stay in the body. Same answer.
+  - No case the older rules got right changes.
+- info PR #229 (same base `forge`): it edits README row 64 (LEARNINGS `seen:`), plus `builder.md` and `steward.md`. This PR edits README row 91 and touches no prompt. The two neither contradict nor duplicate each other.
+- info **Verification.**
+  - Selftest on the PR head: 207 ok, 0 FAIL. Base `435a0d5c`: 206 ok.
+  - PR selftest run against the old forge.py: only the new check fails, with `lock hunk at 15476, big.txt hunk at 19165`, as the body claims.
+  - The PR's reflex1 figures reproduce on `~/Dev/reflex1`: 12 commits touch the lock; 0bf2f04 has a 194,675 B diff with a 47,167 B lock, 1,631/2,300 lines, and the lock is the first hunk.
+  - Only 0bf2f04 of the 12 went past 120 KB, so the cut problem itself is rare. The other gain is fewer lock lines for the reviewer to read (237/496 and 591/1017 on two other commits).
+- low forge/selftest.py:1384: **One check clause can't fail.** `" Cargo.lock " in seen[0]` always holds, because the rendered reviewer prompt contains step 6's `Cargo.toml Cargo.lock '*/Cargo.toml'`. The "lock is in the --stat" half of the check is therefore carried only by the marker clause: the marker is emitted only when the stat contains it. A meaningful version would be `re.search(r" Cargo\.lock +\|", seen[0])`. Not blocking.
+- low forge/forge.py:1385-1386: **Comment percentage is wrong.** The comment says "20-58% of three" of the 12 commits. The three listed commits give 48-71% by lines (237/496, 591/1017, 1631/2300) and 24-47% by bytes, so the range matches neither. The other figures in the comment are correct.
+- low forge/README.md:91: **README row is incomplete.** The rule column gains the lock clause, but the "prevents" column is unchanged and does not name the failure it fixes (the lock's hunks using up the 120 KB cut on 0bf2f04). The table is defined as rules "each mapped to a failure it prevents".
+
+
 ## PR #233 · 2026-11-14T10:17:08Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
