@@ -1605,7 +1605,9 @@ with tempfile.TemporaryDirectory() as d:
 # one toolResult per tool call; user messages, non-message entries and a torn last line count nothing, and a
 # session that never wrote a file logs no counts rather than turns=0. in= and out= sum the assistant messages'
 # `usage` (input + cacheRead + cacheWrite, and output); a file whose turns carry no usage logs neither. omp= is
-# the runtime version on the `model_change` entry; a file without one logs no omp=.
+# the runtime version on the `model_change` entry; a file without one logs no omp=. fell= is the model of the last
+# `model_change` entry marked `resolvedModelIsFallback: true` (omp's mid-session retry fallback); a session that
+# stayed on its starting model logs no fell=.
 with tempfile.TemporaryDirectory() as d:
     s = Path(d) / "sessions" / "00001-builder"
     s.mkdir(parents=True)
@@ -1619,6 +1621,14 @@ with tempfile.TemporaryDirectory() as d:
     (s / "a.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + '\n{"type": "mess')
     check("turns, tool calls and tokens are counted from the session file",
           forge.session_counts(s) == " omp=18.12.6 turns=3 tools=4 in=2207 out=20", repr(forge.session_counts(s)))
+    fell = Path(d) / "sessions" / "00001-builder-fell"
+    fell.mkdir()
+    (fell / "a.jsonl").write_text("\n".join(json.dumps(r) for r in rows[:3] + [
+        {"type": "model_change", "model": "anthropic/claude-fable-5-1", "role": "temporary", "resolvedModelIsFallback": True,
+         "runtime": {"version": "18.12.6"}}] + rows[3:]))
+    check("a session omp moved to its retry-fallback model logs fell=",
+          forge.session_counts(fell) == " omp=18.12.6 fell=anthropic/claude-fable-5-1 turns=3 tools=4 in=2207 out=20",
+          repr(forge.session_counts(fell)))
     bare = Path(d) / "sessions" / "00002-reviewer"
     bare.mkdir()
     (bare / "a.jsonl").write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": []}}))

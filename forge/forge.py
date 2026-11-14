@@ -82,8 +82,10 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` omp=V turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
-    version omp writes on its `model_change` entry, omitted when the file has none; one `assistant` message
+    """` omp=V fell=P/M turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
+    version omp writes on its `model_change` entry, omitted when the file has none; `fell` is the model of the last
+    `model_change` entry omp wrote with `resolvedModelIsFallback: true`, the mid-session switch its `retry.fallbackChains`
+    make after a provider error, omitted when the session stayed on the model it was started with; one `assistant` message
     per model turn, one `toolResult` per tool call; `in` sums each turn's input, cache-read and cache-write
     tokens, `out` its output tokens, both from the `usage` omp writes on the assistant message and omitted when
     no turn carries one), or "" when no session file was written. Turn count explains 84% of the variance in a
@@ -95,9 +97,14 @@ def session_counts(session_dir: Path) -> str:
     The omp version is the confound to rule out first when those numbers move between days: a served model
     changes under its name without notice (dozens of unexplained shifts across hundreds of endpoints, Chauvin et
     al. 2025) and so does the harness, and a per-version grouping of turns and tokens is how one practitioner
-    told the two apart (token-drift, 2026-11-12); `model=` on the same line is the other half of that grouping."""
+    told the two apart (token-drift, 2026-11-12); `model=` on the same line is the other half of that grouping, and
+    `fell=` is where that half lies: `--model` names the model asked for, the owner's `~/.omp/agent/config.yml` chains
+    Opus 5.5 to Fable 5.1 on retry and `--config` only overlays it, so a builder that finished its ticket on Fable is
+    logged as Opus unless the session file is read. A mid-dialogue handoff moved strict success -8 to +13 points on
+    Multi-IF and the authoring model per turn is the log the authors ask for (Khraishi et al., arXiv 2603.03111); live
+    SWE-bench forks swapped to another model rewrote 61-94% of the actions after the fork (Gonuguntla, arXiv 2608.08239)."""
     turns = tools = tin = tout = 0
-    omp = ""
+    omp = fell = ""
     try:
         for f in session_dir.glob("*.jsonl"):
             for line in f.read_text(errors="replace").splitlines():
@@ -109,6 +116,8 @@ def session_counts(session_dir: Path) -> str:
                     rt = e.get("runtime")
                     # the session can write this file and forge.log's tail is the steward's {STATE}: version chars only
                     omp = (re.sub(r"[^\w.+-]", "", str(rt.get("version") or ""))[:40] if isinstance(rt, dict) else "") or omp
+                    if e.get("resolvedModelIsFallback") is True:
+                        fell = re.sub(r"[^\w./:+-]", "", str(e.get("model") or ""))[:60] or fell
                 elif e.get("type") == "message":
                     m = e.get("message", {})
                     role = m.get("role")
@@ -121,7 +130,8 @@ def session_counts(session_dir: Path) -> str:
         return ""
     if not turns:
         return ""
-    return (f" omp={omp}" if omp else "") + f" turns={turns} tools={tools}" + (f" in={tin} out={tout}" if tin or tout else "")
+    return ((f" omp={omp}" if omp else "") + (f" fell={fell}" if fell else "") + f" turns={turns} tools={tools}"
+            + (f" in={tin} out={tout}" if tin or tout else ""))
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
