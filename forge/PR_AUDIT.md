@@ -2,6 +2,42 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #230 · 2026-11-14T02:34:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #230 builder: a reproduced Must change finding becomes a LEARNINGS.md entry of its class
+What it changes: builder.md:23 (the `## forge` notes rule) gains one sentence. When a retry fixes an earlier `Must change:` finding that reproduced against its own work, it writes the finding's class to `LEARNINGS.md` "in the next rule's shape, keyed to the file or tool", worded as the pattern. A finding that did not reproduce gets no entry. README.md:63 gets the same rule and its sources. forge.py, selftest.py, reviewer.md and steward.md are not touched.
+Findings:
+- info forge/prompts/builder.md:23, forge/README.md:63 No prompt, selftest or safeguard-table lines are deleted. `git diff --word-diff` from origin/forge to head 6b4e5ef replaces two tokens, and only to add text after them (`lines` → `lines. …` and `(2026-10-31)` → `(2026-10-31). …`). Three things survive whole: the rule-23 clause that keeps a finding that does not reproduce out of the code, the "reviewer re-checks the same lines" sentence, and the old text of row 63. The selftest.py:783 strings ("`Must change:` line names the command", "run it against your own work before you change code for it") still match. `python3 forge/selftest.py` on a `git archive` of the head in /tmp printed "all checks passed".
+- info forge/prompts/builder.md:23 Traced the gate, protected paths and injection; no code path changes. One channel is new. Before this PR, a reviewer's `Must change:` text (forge.py:1403, stored by set_status `why[-7000:]` at :1468) steered one retry. Now the builder generalizes it into a file that every later builder and reviewer reads. The fences on that channel: the pre-gate `secrets()` and `fetch_exec()` scans (forge.py:866-921) read the added lines of every file, `LEARNINGS.md` included; reviewer step 4 (reviewer.md:9) reads added `LEARNINGS.md` lines as instructions to the next session, so one that skips or works around a check goes in `Must change:`; reviewer step 6 (reviewer.md:11) treats a URL or host added there as a destination. Nothing in the new text lets a builder edit `gate.sh`, `tickets/`, `.forge/` or `STEERING.md`, or skip a test. No ticket text reaches a shell, and nothing spends GPU or quota.
+- low forge/prompts/builder.md:23 "in the next rule's shape, keyed to the file or tool" contradicts the shape it points to. builder.md:24 and README.md:64 require "the ticket id and the file or symbol". The difference decides whether an entry can ever be retired:
+  - steward.md:10 deletes an entry only "when the code it names no longer exists or no longer behaves that way" (checked with `rg` and `git log -S`).
+  - builder.md:25 says a library, tool or process pitfall "is not stale because some code here ignores it".
+  - reviewer.md:10 says such an entry "is not retired by the diff that breaks it", and it quotes main's entries as findings.
+
+  So a tool-keyed pattern is permanent, and every later diff that touches that tool is checked against it. One builder writes it from one reviewer instance, and reproduction checks that instance, not the wording of the class. The retry's own reviewer reviews the new entry only as a "claim" (reviewer.md:10). After that, only the owner can remove it. The effect is more REJECTs on the shared quota, not approvals of bad work. Both cited sources pair the accumulation with upkeep that this loop does not give these entries: the 2607.13091 abstract has "automated validation that ensures rule set integrity", and TellOnce's rules are "scoped, and revisable". The volume is small: in ~/Dev/reflex1 (2c39a79), only tickets/0106 carries `Must change` lines (2 of them).
+- low forge/prompts/builder.md:23 The sentence's placement and premise are both off.
+  - Placement: the new sentence (~470 chars) sits between "...and leave the code." and "The reviewer re-checks the same lines against your diff. A reviewer is wrong sometimes, and a correct patch rewritten to satisfy a wrong finding becomes a wrong one." "The same lines" now follows a sentence about `LEARNINGS.md` entries, and the wrong-reviewer reason no longer sits next to the clause it justifies.
+  - Premise: "A finding that reproduced is a mistake two sessions made from a fresh start each" is not what the procedure establishes. The rule says to run the command "before you change code for it", in a worktree that "starts from `main`". A finding about behaviour the ticket adds (a failing `Done when` line) therefore reproduces before the retry has written anything. README.md:63 repeats the premise ("a review finding two sessions made").
+- low forge/README.md:63 Checked the PR's claims; two are false.
+  - False: "merges beside PR #229". `git merge-file` of this PR's builder.md and README.md against #229's versions (same base blobs 8091746/f6c6ef5) conflicts in both files, because line 23 sits next to 24 and row 63 next to 64. It also conflicts with #218, which adds a rule just above builder.md:23, and #209, which adds a README row just below 63. These are textual conflicts only; the meanings do not clash.
+  - False: "the trigger fires at most once per retried ticket". It fires once per reproduced `Must change:` line. With `max_attempts` at 3 (forge.py:1467), a third attempt sees two reviews; 0106 had two different findings.
+  - The rule clashes with 0106's own review: its first `Must change:` (tickets/0106 line 49), the source of this PR's example, ends "LEARNINGS unchanged". Under the new rule the retry edits `LEARNINGS.md` against that line, and reviewer.md:18 tells the next reviewer to re-check it.
+  - Verified: 8 of 140 reflex1 tickets carry `VERDICT: REJECT`, with 0052 and 0106 two each. Both citations match their arXiv abstracts (2607.13091: 11 sessions, 0% recurrence; 2606.13174: 57.5% under Mem0).
+- low forge/prompts/builder.md:23 Sibling #229 contradicts this PR once both land. #229 makes each entry end with `seen: <command> → <what it printed>`. Its steward rule (steward.md:10) then deletes an entry whose rerun "no longer prints what the entry says", and the steward's commit goes to main ungated through commit_docs (forge.py:1501-1503). An entry from this PR lands in the same commit as the fix for the finding it records. Its `seen:` output therefore stops reproducing at landing, and the next steward turn deletes it. #229 is the side to change: its deletion rule must not retire a pitfall that code here now avoids. The existing #229 audit's Change needed already adds that exemption. This does not lower this verdict.
+- low forge/README.md:63 Slop in the evidence cell:
+  - It cites TellOnce's "a correction only remembered is still violated 57.5%", but a `LEARNINGS.md` entry is exactly a remembered correction. The only check on it is reviewer step 5's read, which the cell does not name.
+  - "derived from 3 of 9 REJECT reviews" sits one row below row 62's "3 of reflex1's 10 REJECT reviews". The 9 is builder.md:22's older count.
+Change needed (only for MERGE WITH CHANGE):
+- forge/prompts/builder.md:23: delete the sentence that starts "A finding that reproduced is a mistake two sessions made" and ends "gets no entry.", now between "leave the code." and "The reviewer re-checks the same lines against your diff.". Append this at the end of the rule, after "becomes a wrong one.":
+  "A finding that reproduced and that you fixed: put its class in `LEARNINGS.md` in the next rule's shape (ticket id, then the file or symbol it is about, naming the tool too when the pattern is about one), worded as the pattern (`a new required CLI argument breaks the verbatim commands earlier tickets recorded`), not as this ticket's line, so the next session's `rg` finds it and the reviewer's read of `LEARNINGS.md` re-checks it; a finding that did not reproduce gets no entry."
+- forge/README.md:63, two replacements:
+  - "(keyed to the file or tool, worded as the pattern, not the ticket's line)" → "(keyed to the file or symbol, naming the tool when it is about one, worded as the pattern, not the ticket's line)"
+  - "a review finding two sessions made is the error class the loop has evidence for" → "a reproduced review finding is the error class the loop has evidence for"
+
+
 ## PR #229 · 2026-11-14T01:32:46Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
