@@ -1381,8 +1381,16 @@ class Forge:
             # read's quality collapses with size (arXiv 2606.15689: F1 0.66 on diffs under 10 lines, 0.04 over
             # 150; 47 of reflex1's 79 merged PRs are over 150). The prompt tells it to go file by file past that.
             stat = self.sh("git diff --stat=1000 --stat-graph-width=40 origin/main...HEAD", cwd=wt).stdout
-            shown = stat + "\n" + diff[:120000] + ("" if len(diff) <= 120000 else
-                                                   f"\n\n[cut here: {len(diff)} characters of diff, first 120000 shown. "
+            # Cargo.lock stays in the stat and out of the body: `C` sorts before `src/`, so its hunks come first and
+            # eat the cut (reflex1 0bf2f04: 47 of the first 120 KB, 1,631 of 2,300 lines; 20-58% of three of the
+            # 12 merged lock-touching commits), and no reader needs them here - reviewer step 6 runs its own
+            # `git diff ... -- Cargo.toml Cargo.lock`, unrequested_deps()/vulnerable_deps() parse the lock as TOML
+            # (scalac, "filter generated files before review", 2026-11-12). `self.reviewed` above keeps the lock.
+            body = self.sh("git diff origin/main...HEAD -- . ':!Cargo.lock'", cwd=wt).stdout
+            if " Cargo.lock " in stat:
+                body = "[Cargo.lock's hunks are left out below; step 6 diffs it itself.]\n\n" + body
+            shown = stat + "\n" + body[:120000] + ("" if len(body) <= 120000 else
+                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown. "
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=self.unanchor(ticket.read_text()), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)

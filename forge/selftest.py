@@ -1366,6 +1366,8 @@ with tempfile.TemporaryDirectory() as d:
             seen.append(prompt)
             return 0, "VERDICT: APPROVE"
         (cwd / "big.txt").write_text("x" * 200000 + "\n")    # one file, well past the 120 KB cut
+        # a lock with no third-party entry (nothing for unrequested_deps() to refuse), long enough to show
+        (cwd / "Cargo.lock").write_text('version = 3\n\n[[package]]\nname = "t"\nversion = "0.1.0"\n' + "# pad\n" * 500)
         git("add -A", cwd); git("commit -qm work", cwd)
         return 0, ""
 
@@ -1374,9 +1376,14 @@ with tempfile.TemporaryDirectory() as d:
     check("a diff cut at 120 KB tells the reviewer it was cut and how to read the rest",
           len(seen) == 1 and "cut here:" in seen[0] and "git diff origin/main...HEAD" in seen[0],
           f"{len(seen)} review(s), tail: {seen[0][-200:]!r}" if seen else "no review ran")
+    stat_at = m.start() if (m := re.search(r" big\.txt +\|", seen[0] if seen else "")) else -1    # git pads names to one width
     check("the reviewer's diff opens with its --stat, so the shape is known before the first hunk",
-          len(seen) == 1 and 0 <= seen[0].find(" big.txt |") < seen[0].find("diff --git"),
-          f"stat at {seen[0].find(' big.txt |')}, first hunk at {seen[0].find('diff --git')}" if seen else "no review ran")
+          len(seen) == 1 and 0 <= stat_at < seen[0].find("diff --git"),
+          f"stat at {stat_at}, first hunk at {seen[0].find('diff --git')}" if seen else "no review ran")
+    check("Cargo.lock is in the reviewer's --stat and out of the diff body, with a line saying so",
+          len(seen) == 1 and " Cargo.lock " in seen[0] and "diff --git a/Cargo.lock" not in seen[0]
+          and "Cargo.lock's hunks are left out" in seen[0] and "diff --git a/big.txt" in seen[0],
+          f"lock hunk at {seen[0].find('diff --git a/Cargo.lock')}, big.txt hunk at {seen[0].find('diff --git a/big.txt')}" if seen else "no review ran")
 
     # 21. Every history entry names the omp release that ran it. `forge status` groups merged/attempts by
     # forge.py+prompts hash (PR #12), but ~/.local/bin/omp is a symlink into a versioned install, so an
