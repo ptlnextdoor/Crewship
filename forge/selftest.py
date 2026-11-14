@@ -1259,9 +1259,10 @@ with tempfile.TemporaryDirectory() as d:
     check("a repair that edits the gate is rejected before that gate is run again",
           "gate.sh" in note and runs.read_text().count("run") == 1 and "reviewer" not in turns,
           f"{turns} {runs.read_text().count('run')} runs: {note[-300:]!r}")
-    check("the repair session gets the builder's rules, the branch as the earlier patch, the gate output and its own kill time",
+    check("the repair session gets the builder's rules, the branch as the earlier patch, the gate output, its own kill time, and the earlier entry as a claim to correct under",
           len(prompts) > 1 and "Credentials:" in prompts[1] and "git diff origin/main...HEAD" in prompts[1] and "\n\nGate output:\n" in prompts[1]
-          and "{KILL}" not in prompts[1] and re.search(r"killed at \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\d+ minutes", prompts[1]),
+          and "{KILL}" not in prompts[1] and re.search(r"killed at \d{4}-\d\d-\d\d \d\d:\d\d UTC \(\d+ minutes", prompts[1])
+          and "a claim the gate output below overrides" in prompts[1] and "Leave that entry as it is" in prompts[1],
           prompts[1][-400:] if len(prompts) > 1 else str(turns))
 
 # 18b. A repair session that leaves the tree as the gate failed it (reflex1 PR #2: the session died on a
