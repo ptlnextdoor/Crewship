@@ -2,6 +2,49 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #235 · 2026-11-14T23:38:20Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #235 forge: test_tampering refuses an added assertion that cannot fail
+What it changes: adds a `TAUTOLOGY` regex to `test_tampering()`. An added `*.rs`/`*.py` assertion line that matches it (`assert!(true)`, `assert_eq!(X, X)`, `assert!(X == X)`, `assert True`, `assert X == X`/`is X`) becomes an unwaivable finding before the builder's and the repair's gate run, and no longer counts as the new test's assertion. The README row 40 text and the selftest 2e fixtures are updated to match.
+Findings:
+- low forge/forge.py:734 The `_eq!` arm (`([^,]+?)`) and the Python arm (`(\S+)`) accept call operands, so assertions that can fail are refused as "cannot fail", and no ticket can waive it. Ran the regex at c30f26a2: `assert_eq!(rng.next_u64(), rng.next_u64())`, `assert_eq!(run(42), run(42), "deterministic")`, `assert_eq!(model.forward(&x), model.forward(&x))` and `assert f(seed) == f(seed)` all match. A same-seed determinism check is something reflex1 asks for: crates/reflex-vision/src/testing.rs:35 "deterministic in `seed`", bench/workloads/build_workloads.py:7 "same seed give byte-identical files", tools/render_bench.py:15. If a builder writes that test as a one-liner, the attempt is lost before the gate (forge.py:1316/1367 → fail()), and the note tells the retry the check "cannot fail". The arms are also inconsistent: `assert!(f(1) == f(1))` does not match, because that arm excludes parens. selftest.py:204/208 pins `assert_eq!(f(1), f(1))` as the canonical case. honest-tests' README does list `expect(f(1)).toBe(f(1))`, but there it is a lint finding. Here it costs a whole attempt with no waiver. On the record the cost is zero: no added line on reflex1 main ever matched (below).
+- low forge/forge.py:734 Cubic backtracking. `\(\s*([^,]+?)\s*,` and `\(\s*([^()=!]+?)\s*==` stack three quantifiers that can all match whitespace. Timed `TAUTOLOGY.search("+assert_eq!(" + " "*n + "x")`: n=500 took 0.07 s, n=1000 took 0.42 s, n=3000 took 10.8 s (×26 for ×3 in n). The search runs inside the lane process, where nothing times it out (sh() timeouts only cover subprocesses). The supervisor's run() (forge.py:1626-1638) only polls for a lane's exit, so a hung lane keeps its ticket `in_progress` and keeps the supervisor running past the deadline. Triggering it needs a whitespace run thousands of characters long right after `assert_eq!(`/`assert!(` in one added line. [INFERENCE] That is unlikely by accident. The edit below brings n=100000 down to 0.006 s.
+- low forge/forge.py:734 `\s+True\b` matches `assert True == is_valid(x)`, `assert True in seen` and the comment `# we assert True only after warmup` (all verified). Like the other arms, this finding is unwaivable.
+- info forge/forge.py:734 `assert!(loss == loss)` and `assert x == x` are self-equality NaN checks, and they can fail. They stay flagged even after the edit below. reflex1 writes `x.is_nan()` (git grep on origin/main), and the finding names the line, so a retry rewrites it. Acceptable.
+- info forge/forge.py:757-781 Traced end to end, the new code only adds refusals:
+  - `added` skips tautology lines, so `assert!(true)` no longer satisfies the "added test functions and no added assertion line" check.
+  - `asserts` still counts them, so the net-assertion check is unchanged.
+  - `out += taut` comes after the `len(out) <= gone` reset, so a moved skip marker cannot clear a tautology finding.
+  - It is appended whatever `skip_ok`/`drop_ok`/`assert_ok` say (selftest.py:209 checks this).
+  - It runs at both pre-gate call sites (forge.py:1316, 1367).
+  - No new subprocess, and no ticket text reaches a command (TAUTOLOGY only reads diff lines).
+  - Each entry is clipped to 48 characters, and fail() keeps the note to `why[-7000:]` and the log to 200 characters, so its length is bounded.
+  - No shared state, quota or GPU use. Gate, protected paths, reviewer prompt and recover() are untouched.
+
+  Easy workarounds remain (`let a = x; assert_eq!(a, x)`, `self.assertEqual(x, x)`, an asserting helper). None of them is a regression.
+- info forge/README.md:40 The word diff of the replaced safeguard row shows only additions, plus "lines and" → "lines,". No safeguard text is removed.
+- info forge/selftest.py:174,184,190,198 Four deleted fixture lines are each replaced in place: literal tautologies (`assert_eq!(1, 1)`, `assert!(true)`, `assert!(1 == 1)`, `debug_assert!(true)`) become `assert_eq!(f(1), 2)`, `assert!(ok())`, `assert!(f(1) == 2)`, `debug_assert!(ok())`. The new guard would otherwise flag these fixtures. Every `check()` keeps its name and expected result: "4 fewer assertion lines", a rewrite in place incl. `debug_assert` nets to zero, a bare test is refused, a test with an assertion passes. No layer is removed, and the PR body names the swap. No `forge/prompts/*.md` file is touched, so there is no added or deleted prompt rule to trace.
+- info Claims checked:
+  - reflex1 origin/main (2c39a79) has 77 `#[test]`, 0 TAUTOLOGY matches in the tree, and 0 matching added lines in the whole `git log -p` over `*.rs`/`*.py`.
+  - github.com/mintwork/honest-tests exists (created 2026-11-14) and its README lists `tautological-assertion`.
+  - `python3 forge/selftest.py` at c30f26a2: all checks passed, run from a temporary extract.
+- low forge/forge.py:1318,1369 (unchanged context) Both fail messages still say each finding "needs the ticket to say so". The tautology finding cannot be waived by any ticket. The finding line itself says "cannot fail", so this is wording only.
+- low forge/selftest.py:201 Slop: the new block is labelled `2e''''`, a label selftest.py:248 already uses for the fetch-and-run guard.
+- info Siblings: I read all 27 open PRs on `forge` that touch these files.
+  - None duplicates the tautology check (searched each diff for TAUTOLOG/tautolog/"cannot fail"/test_tampering).
+  - #136 and #196 (and #181 through its own row) re-run `test_tampering()` in `land()` after a conflict resolution. That complements this PR: the tautology check would also run at landing.
+  - #136 and #196 rewrite README row 40 from a text older than this base, one without the "added test functions with no added assertion line" clause. Landing their row would drop that clause and this PR's. They are the side that has to change (rebase onto the current row).
+  - The other hunk overlaps (#139 rebase_onto_main, #204 INVISIBLE, #148/#160/#197 other README rows) are at old-base line numbers in unrelated code.
+Change needed (only for MERGE WITH CHANGE): The edit below takes call operands, whitespace inside operands and Yoda/comment `True` out of the regex, and removes the cubic backtracking. I applied it to a temporary copy of c30f26a2: selftest passed in full, including both new checks.
+1. forge/forge.py:734 — replace the regex with:
+   `TAUTOLOGY = re.compile(r"\b(?:debug_)?assert(?:!\(\s*true\s*[,)]|_eq!\(\s*([^\s,()]+)\s*,\s*\1\s*[,)]|!\(\s*([^\s()=!]+)\s*==\s*\2\s*[,)]|\s+True\s*(?:,|$)|\s+([^\s()]+)\s+(?:==|is)\s+\3\s*(?:,|$))")`
+2. forge/selftest.py:204 and :208 — change both `assert_eq!(f(1), f(1))` to `assert_eq!(x, x)`.
+3. forge/README.md:40 — change "the same operand text on both sides" to "the same name, field or index, not a call, on both sides".
+
+
 ## PR #234 · 2026-11-14T11:45:40Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
