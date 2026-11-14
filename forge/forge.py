@@ -726,13 +726,20 @@ class Forge:
     # commits touching *.py/*.rs count differently under the two, and 15 such lines are in the tree today, so a
     # branch that strips them passed this guard. `+++`/`---` headers stay out either way.
     ASSERT_MARK = re.compile(r"^([-+])(?![-+]).*\b(debug_)?assert\w*")
+    # An added assertion that holds whatever the code does counts above as the new test's assertion and in the
+    # gate's `test result:` line while checking nothing: `assert!(true)`, `assert_eq!(x, x)`, `assert!(x == x)`,
+    # `assert True`, `assert x == x`/`is x` (honest-tests' `tautological-assertion` rule, 2026-11-14; reflex1
+    # main: 0 in 77 tests, 0 added since 2026-10-20). Same operand text on both sides only, so `assert_eq!(a, b)`
+    # and `assert!(a == b)` pass; no ticket waiver: no ticket needs an assertion that cannot fail.
+    TAUTOLOGY = re.compile(r"\b(?:debug_)?assert(?:!\(\s*true\s*[,)]|_eq!\(\s*([^,]+?)\s*,\s*\1\s*[,)]|!\(\s*([^()=!]+?)\s*==\s*\2\s*[,)]|\s+True\b|\s+(\S+)\s+(?:==|is)\s+\3\s*(?:,|$))")
 
     FIXTURE_DIR = re.compile(r"(^|/)(fixtures?|testdata|golden|__snapshots__|snapshots?)/")
 
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
         """Tests the branch switches off, drops or strips: an added `#[ignore]`/`pytest.skip` marker, fewer test
-        functions, fewer assertion lines than the branch point, or added test functions with no added assertion
-        line at all, unless the ticket says so. Builder rule 12 and reviewer step 3 say this in prose and the
+        functions, fewer assertion lines than the branch point, added test functions with no added assertion
+        line at all, unless the ticket says so, or an added assertion that cannot fail (`assert!(true)`,
+        `assert_eq!(x, x)`), which no ticket waives. Builder rule 12 and reviewer step 3 say this in prose and the
         review runs after the gate (8 to 25 min); here it costs seconds (reflex1: 0 added `#[ignore]`, 0 removed
         `#[test]`, 0 commits with a net loss of `assert` lines and 0 that add a test function without adding an
         assertion line, in 627 commits on main, so the prose has held; an agent that deletes the failing test
@@ -747,7 +754,7 @@ class Forge:
         # positives over reflex1's 627).
         drop_ok = re.search(r"\b(remove|delete|drop)\b[^\n]*\btests?\b", text)
         assert_ok = drop_ok or re.search(r"\b(remove|delete|drop)\W+(\w+\W+){0,3}?(debug_)?assert", text)
-        out, f, net, gone, asserts, added = [], "", 0, 0, 0, 0
+        out, taut, f, net, gone, asserts, added = [], [], "", 0, 0, 0, 0
         # `split("\n")`, not `splitlines()`: Python also breaks lines at U+2028, U+2029, U+0085, U+000B, U+000C
         # and U+001C-U+001E, so everything an added line carries after one of those became a separate piece with
         # no leading `+` and no guard read it. git puts one diff line per `\n` and nothing else.
@@ -765,9 +772,13 @@ class Forge:
                 net += 1 if m[1] == "+" else -1
             elif m := self.ASSERT_MARK.match(line):
                 asserts += 1 if m[1] == "+" else -1
-                added += m[1] == "+"
+                if m[1] == "+" and self.TAUTOLOGY.search(line):
+                    taut.append(f"{f}: adds an assertion that cannot fail: {line[1:].strip()[:48]}")
+                else:
+                    added += m[1] == "+"
         if len(out) <= gone:
             out = []  # a marker moved or re-indented with its test nets to zero, like the test itself
+        out += taut
         if net < 0 and not drop_ok:
             out.append(f"{-net} fewer test functions than the branch point")
         if asserts < 0 and not assert_ok:
