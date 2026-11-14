@@ -786,6 +786,7 @@ check("builder is told never to reach origin; forge pushes and lands", "`git pus
 check("builder previews a computed delete target before running it", "replaced by `echo` or `ls -d`" in b and "`-print0 | xargs -0`" in b)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
+check("pr audit traces a rule a PR adds to a prompt against the cases the older rules in it already handled", "A rule the diff adds to `forge/prompts/*.md`" in a and "give different answers" in a and "flips a case the older rule had right" in a)
 # A rule phrased as a condition on the agent's own action ("If the milestone is done, ...") is followed less
 # than the same rule as a direct instruction (78.0% vs 64.2% Opus 5, 71.6% vs 35.6% Sonnet 5; arXiv 2611.04367).
 cond = [f"{p.name}: {l[:60]}" for p in (ROOT / "prompts").glob("*.md") if p.name != "scout.md"
