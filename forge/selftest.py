@@ -1602,7 +1602,7 @@ with tempfile.TemporaryDirectory() as d:
     check("the loop's own push is not caught by it", ours.returncode == 0, ours.stderr[-200:])
 
 # 29. The done line's turns= and tools= are read from omp's session file: one assistant message per model turn,
-# one toolResult per tool call; user messages, non-message entries and a torn last line count nothing, and a
+# one toolResult per tool call, errs= those with `isError` set; user messages, non-message entries and a torn last line count nothing, and a
 # session that never wrote a file logs no counts rather than turns=0. in= and out= sum the assistant messages'
 # `usage` (input + cacheRead + cacheWrite, and output); a file whose turns carry no usage logs neither. omp= is
 # the runtime version on the `model_change` entry; a file without one logs no omp=.
@@ -1614,15 +1614,15 @@ with tempfile.TemporaryDirectory() as d:
     for i in range(3):
         usage = {"input": 1, "output": 10, "cacheRead": 100, "cacheWrite": 1000} if i < 2 else {"input": 5}
         rows += [{"type": "message", "message": {"role": "assistant", "content": [], "usage": usage}},
-                 {"type": "message", "message": {"role": "toolResult", "content": []}}]
-    rows += [{"type": "message", "message": {"role": "toolResult", "content": []}}, {"type": "custom", "data": 1}]
+                 {"type": "message", "message": {"role": "toolResult", "content": [], "isError": i == 1}}]
+    rows += [{"type": "message", "message": {"role": "toolResult", "content": [], "isError": False}}, {"type": "custom", "data": 1}]
     (s / "a.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + '\n{"type": "mess')
     check("turns, tool calls and tokens are counted from the session file",
-          forge.session_counts(s) == " omp=18.12.6 turns=3 tools=4 in=2207 out=20", repr(forge.session_counts(s)))
+          forge.session_counts(s) == " omp=18.12.6 turns=3 tools=4 errs=1 in=2207 out=20", repr(forge.session_counts(s)))
     bare = Path(d) / "sessions" / "00002-reviewer"
     bare.mkdir()
     (bare / "a.jsonl").write_text(json.dumps({"type": "message", "message": {"role": "assistant", "content": []}}))
-    check("a session whose file has no model_change and no usage logs neither", forge.session_counts(bare) == " turns=1 tools=0",
+    check("a session whose file has no model_change and no usage logs neither", forge.session_counts(bare) == " turns=1 tools=0 errs=0",
           repr(forge.session_counts(bare)))
     check("a session that wrote no file logs no counts", forge.session_counts(Path(d) / "none") == "",
           repr(forge.session_counts(Path(d) / "none")))
