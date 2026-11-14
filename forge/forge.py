@@ -434,7 +434,7 @@ class Forge:
         out.write_text(text)
         # Session end: four lanes share forge.log, so the start line alone does not bound a session, and rc is
         # logged nowhere else. reply= is the chars `out` holds (stdout + stderr, a TIMEOUT keeps 4,000 of stdout);
-        # omp=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
+        # omp=, fell=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").
         self.log(f"agent {role} done model={model} rc={rc} {int(time.monotonic() - t0)}s{session_counts(out.with_suffix(''))} "
                  f"reply={len(text)}c log={out.name}")
         return rc, text[-6000:]
