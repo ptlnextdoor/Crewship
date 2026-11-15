@@ -2,6 +2,35 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #237 · 2026-11-15T18:45:42Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
+
+Verdict: MERGE WITH CHANGE
+Risk: medium
+
+## PR #237 forge: one build jobserver for all lanes (cargo shares nproc instead of 4×nproc)
+What it changes: `run()` (forge.py:1618-1630 on the PR head) creates a fifo at `<state_dir>/jobserver`, writes `os.cpu_count()` tokens into it, keeps it open read-write and sets `MAKEFLAGS=-j<n> --jobserver-auth=fifo:<path>` in `os.environ` before it starts the lanes. Each lane copies that into `self.env` (forge.py:210), so every gate run (`sh()`, 312-314) and every omp session (`_agent_once`, 410) inherits it, and cargo/rustc in all lanes draw from one token pool.
+Findings:
+- medium forge/forge.py:1622-1629 Tokens taken by a killed build never come back, and nothing in forge can notice. When a session times out, `_agent_once` sends SIGTERM and then SIGKILL to its process group (421-424). I measured this on this box with cargo 1.100.0, a throwaway 6-crate workspace and an 8-token fifo: killing the group mid-build (SIGTERM, then SIGKILL) left 3 of 8 tokens in the fifo, and SIGKILL alone also left 3 of 8. So SIGTERM loses them too, not only SIGKILL as the shortcut comment says. reflex1's record (forge.log, 2026-10-23 to 10-25) has 8 such kills: `^TIMEOUT after` appears in 5 builder logs at 4500 s and 3 reviewer_alt logs at 1800 s. builder.md has the builder run `{GATE}` (cargo) right before its last commit, so a kill near the timeout lands mid-compile. Once the fifo is empty, every cargo in every lane runs on its implicit token alone (-j1) for the rest of the run. The supervisor is restarted only on failure (forge@.service `Restart=on-failure`), and the watchdog acts only after a 2-hour log stall, which a slow loop never causes. What follows: reflex1's gate (8-25 min, `gate_timeout_min = 30`) times out, and `gate()` raises "the code was not judged" (566). `recover()` then sends the ticket back to retry, and to `blocked` after `max_attempts` interruptions (1590-1595), with the builder session already spent. Slower builds also cause more session timeouts, and each one leaks more tokens. The comment's remedy ("refill from FIONREAD if forge.log shows it") can never be triggered: no line in forge.py logs the fifo's count (`rg FIONREAD|jobserver` finds only the diff's lines). The one figure a gate timeout records, `/proc/loadavg` (565-566), reads low when builds are starved for tokens rather than loaded, so it points away from the cause. No bad code can pass this way, because a timed-out gate never passes; the cost is throughput, quota and tickets blocked while nobody is watching.
+- low forge/forge.py:1620 "the lanes together never exceed nproc" is false. Each cargo holds one implicit token outside the fifo. Measured: a 2-token fifo ran 3 rustc at once; the PR body's own 1-token figure (8.5 s against 4.6 s at -j8) is two at a time. Four lanes compiling run up to nproc+4. The real bound is nproc plus one per running cargo; the comment and the PR body both claim nproc.
+- low sibling #148 ("forge: kill the whole process group when sh() times out", open, base `forge`, touches forge/forge.py): the text does not conflict (#148 edits `sh()`, this PR edits `run()`), but the two compound. With both merged, every gate timeout SIGKILLs the gate's cargo/rustc (`os.killpg(p.pid, 9)` in #148), and under this PR that leaks their tokens (measured above: SIGKILL leaves 3 of 8). A gate starved of tokens is exactly the gate that times out, so each timeout makes the next one more likely. #148 is right on its own (its orphans held the target-dir lock). This PR should change: it creates the pool that a group kill drains, so its recovery has to cover any kill, not only session timeouts. The other open PRs on `forge` that touch forge/forge.py (236, 235, 228, 227, 224, 213, 211, 205, 204, 197, 196, 195, 181, 165, 160, 145, 139, 136, 133, 132): I grepped their +/- lines for MAKEFLAGS, jobserver, cpu_count, CARGO_BUILD_JOBS, killpg, start_new_session, os.environ and `def run(`, with no hits.
+- none Gate, reviewer, protected paths, claim race, `recover()`, `discard_strays()`, PR creation/merge: the diff touches only the supervisor's `run()`, before the lanes start. The fifo lives in the state dir, outside every repo, so neither a diff nor `touched_protected()` ever sees it. `gate.sh`, the gate timeout and the 0-passed check are unchanged. The diff adds and removes no lines in prompts/*.md, selftest.py or the README table, so the rule-layer and added-rule checks have nothing to apply to. The fifo path is in every session's env: a yolo session can drain or fill it and slow the other lanes' builds, but the worst outcome is a slower or timed-out gate, never a pass. No GPU spend or quota cap is touched. This box has no `make` (`make: command not found`), so the `fifo:` auth form cannot reach a GNU make older than 4.4 here.
+- low (slop) The benefit was measured on one cargo building a toy workspace, not on four lanes compiling at once, the case the PR targets. The scout's own SCOUT.md note found no kill or OOM lines in reflex1's log, so the claimed harm (32 rustc in 22 GB) is plausible but not on record. There is no README safeguard row and no selftest check for the mechanism, while the table maps every other forge.py mechanism to a row. This is a missing claim, not a false one.
+Change needed (only for MERGE WITH CHANGE): in `run()`, delete the two `# shortcut:` comment lines (1622-1623). Change 1620's "so the lanes together never exceed nproc" to "so the lanes together run at most nproc plus one rustc per running cargo (each keeps an implicit token)". Add `import struct` and `import termios` beside `import fcntl` (26). In `while procs:` right after `time.sleep(20)` (1640), add:
+```python
+            # A killed build (a session timeout's killpg, any SIGTERM/SIGKILL) keeps the tokens its rustc held. With no
+            # cargo or rustc of ours running, every token belongs in the fifo: put the count back to `jobs`.
+            if subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "cargo|rustc"], capture_output=True).returncode == 1:
+                have = struct.unpack("i", fcntl.ioctl(self.jobserver, termios.FIONREAD, b"\0\0\0\0"))[0]
+                if have != jobs:
+                    self.log(f"jobserver: {have} of {jobs} tokens in the fifo with no build running; reset to {jobs}")
+                    if have < jobs:
+                        os.write(self.jobserver, b"+" * (jobs - have))
+                    else:
+                        os.read(self.jobserver, have - jobs)
+```
+plus one selftest check: a fifo drained to 3 of 8 is back at 8 after one pass, and one holding 10 is back at 8. I ran this logic against a real fifo on this box: 3 went back to 8, 10 went back to 8, nothing changed while a cargo build held tokens, and after a killpg left 3, one pass restored 8.
+
+
 ## PR #236 · 2026-11-15T00:38:42Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
 
 Verdict: MERGE WITH CHANGE
