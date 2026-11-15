@@ -1615,6 +1615,19 @@ class Forge:
         self.log(f"forge supervisor: {self.cfg['name']} with {self.lanes} lane(s)")
         self.recover(all_lanes=True)
         procs: dict[int, subprocess.Popen] = {}
+        # One build jobserver for every lane: each lane's cargo (gate, builder session) otherwise runs -j<nproc>
+        # on its own, so four lanes compiling at once put 32 rustc on 8 cores. The fifo holds nproc tokens that
+        # cargo and rustc take from MAKEFLAGS, so the lanes together never exceed nproc and a lone build still
+        # gets all of it. Opened read-write and kept open: a fifo drops its bytes when its last fd closes.
+        # shortcut: a rustc killed by the session timeout's SIGKILL never returns its token, so a long run with
+        # many kills slows builds until the supervisor restarts; refill from FIONREAD if forge.log shows it.
+        jobs = os.cpu_count() or 2
+        fifo = self.base_home / "jobserver"
+        fifo.unlink(missing_ok=True)
+        os.mkfifo(fifo)
+        self.jobserver = os.open(fifo, os.O_RDWR)
+        os.write(self.jobserver, b"+" * jobs)
+        os.environ["MAKEFLAGS"] = f"-j{jobs} --jobserver-auth=fifo:{fifo}"
 
         def start(k: int) -> None:
             procs[k] = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "lane",
