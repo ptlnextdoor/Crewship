@@ -759,6 +759,17 @@ check("it keeps the earlier findings and the ticket's own text",
       and "Parse the `VERDICT: REJECT` line in reviewer output." in u, u)
 check("a ticket with no forge notes is unchanged", forge.Forge.unanchor("## Do\nx\n") == "## Do\nx\n")
 
+# 4u. An APPROVE with no PASS/FAIL line is not an approval: step 1's ledger is the only trace the `Done when`
+# commands ran, and a reviewer's own account of its work is not evidence (OverclaimBench, arXiv 2609.20812).
+V = forge.Forge.verdict
+check("an approve with a ledger counts", V("PASS (forge) gate\nPASS 0001 `cargo test x`: 3 passed\nVERDICT: APPROVE\n") == "APPROVE")
+check("an approve with no PASS/FAIL line does not",
+      V("The diff looks complete and the tests are sensible.\nVERDICT: APPROVE\n") == "APPROVE without ledger")
+check("a reject without a ledger is still a reject", V("Must change: x.rs:3 handle None\nVERDICT: REJECT\n") == "REJECT")
+check("the last verdict wins", V("FAIL 0001\nVERDICT: REJECT\n...\nPASS 0001\nVERDICT: APPROVE\n") == "APPROVE")
+check("passing prose is not a ledger", V("Nothing surpassed the failure modes I tried.\nVERDICT: APPROVE\n") == "APPROVE without ledger")
+check("no verdict line is None", V("I could not finish.") is None)
+
 # 5. GPU guards: pods carry a deadline in the name, the budget is capped, and reap can kill them.
 gsrc = (ROOT / "gpu.py").read_text()
 check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in gsrc)
@@ -1029,7 +1040,7 @@ with tempfile.TemporaryDirectory() as d:
     # 11b. A review that comes back with no verdict and nothing said (rc 0, empty stdout: a reply spent whole on
     # thinking, as Fable 5.2 at xhigh/max did on 128K output tokens; or rc 127, a session that never started,
     # reflex1 0065) is rerun once like the timeout, not charged as "reviewer did not approve".
-    reviews = ["\n[stderr]\nWorking...\n", "VERDICT: APPROVE"]
+    reviews = ["\n[stderr]\nWorking...\n", "PASS (forge)\nVERDICT: APPROVE"]
     reviewer_runs: list[int] = []
     def build_or_review(role, prompt, cwd, timeout_min=None):
         (cwd / "src.rs").write_text(f"fn main() {{}} // {role}\n")
@@ -1325,7 +1336,7 @@ with tempfile.TemporaryDirectory() as d:
     def build_then_take_main(role, prompt, cwd, timeout_min=None):
         turns.append(role)
         if role == "reviewer":
-            return 0, "VERDICT: APPROVE"
+            return 0, "PASS (forge)\nVERDICT: APPROVE"
         (cwd / "a.txt").write_text("the work\n")
         git("add -A", cwd); git("commit -qm work", cwd)
         # another lane lands a ticket note on main while this session runs, and the builder takes main in
@@ -1364,7 +1375,7 @@ with tempfile.TemporaryDirectory() as d:
     def build_big_then_review(role, prompt, cwd, timeout_min=None):
         if role == "reviewer":
             seen.append(prompt)
-            return 0, "VERDICT: APPROVE"
+            return 0, "PASS (forge)\nVERDICT: APPROVE"
         (cwd / "big.txt").write_text("x" * 200000 + "\n")    # one file, well past the 120 KB cut
         # a lock with no third-party entry (nothing for unrequested_deps() to refuse), long enough to show
         (cwd / "Cargo.lock").write_text('version = 3\n\n[[package]]\nname = "t"\nversion = "0.1.0"\n' + "# pad\n" * 500)
@@ -1435,7 +1446,7 @@ with tempfile.TemporaryDirectory() as d:
     def build_same_vendor(role, prompt, cwd, timeout_min=None):
         f.last_model[role] = "c/x" if role == "builder" else "c/d"   # both chains fell back into vendor `c`
         if role == "reviewer":
-            return 0, "VERDICT: APPROVE"
+            return 0, "PASS (forge)\nVERDICT: APPROVE"
         (cwd / "v.txt").write_text("v\n")
         git("add -A", cwd); git("commit -qm work", cwd)
         return 0, ""
@@ -1475,7 +1486,7 @@ with tempfile.TemporaryDirectory() as d:
             (cwd / "note.txt").write_text("probe\n"); git("add note.txt", cwd); git("commit -qm 'reviewer: probe'", cwd)  # a commit, moving HEAD
             git("checkout -q origin/main -- src.txt", cwd)     # test against the old code, never put back
             (cwd / "probe.log").write_text("scratch\n")
-            return 0, "VERDICT: APPROVE"
+            return 0, "PASS (forge)\nVERDICT: APPROVE"
         (cwd / "src.txt").write_text("new\n")
         git("add -A", cwd); git("commit -qm work", cwd)
         return 0, ""
