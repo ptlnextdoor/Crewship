@@ -873,6 +873,22 @@ class Forge:
         spec, sep, notes = ticket_text.partition("\n## forge ")
         return spec + sep + cls.PRIOR_VERDICT.sub("[earlier verdict withheld]", notes)
 
+    LEDGER = re.compile(r"\b(?:PASS|FAIL)\b")
+
+    @classmethod
+    def verdict(cls, review: str) -> str | None:
+        """The reviewer's last `VERDICT:` word, or None. An APPROVE in a review with no `PASS`/`FAIL` token at all
+        is `"APPROVE without ledger"`: reviewer step 1 writes PASS or FAIL beside each `Done when` line it ran
+        (`PASS (forge)` for the gate), so a review with neither word ran none of them, and the only trace that
+        the commands ran is that ledger (agents' final responses misreport their own work in 80% of incomplete
+        runs, OverclaimBench arXiv 2609.20812). All 51 reflex1 approvals to date carry 3+ PASS lines."""
+        found = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", review)
+        if not found:
+            return None
+        if found[-1] == "APPROVE" and not cls.LEDGER.search(review):
+            return "APPROVE without ledger"
+        return found[-1]
+
     def secrets(self, cwd: Path, rev: str = "origin/main...HEAD") -> list[str]:
         """Files whose added lines carry a credential-shaped token, with the issuer. Runs before the branch is
         pushed: a pushed key is public in seconds and in history for good, and the builder's environment holds the
@@ -1394,7 +1410,7 @@ class Forge:
                                                    "Read the rest with `git diff origin/main...HEAD` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=self.unanchor(ticket.read_text()), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
-            verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+            verdict = self.verdict(rout)
             if not verdict and (rc in (124, 127) or not rout.split("[stderr]")[0].strip()):
                 # a review that ends with no verdict and no review is a harness failure, not a finding: the
                 # timeout (4 of the first 22 reflex1 reviews), a session that never started (0065: E2BIG, rc 127),
@@ -1405,7 +1421,7 @@ class Forge:
                 self.log(f"review of {tid} ended rc={rc} with no verdict; rerunning once")
                 self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
                 rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
-                verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
+                verdict = self.verdict(rout)
             review = rout.split("[stderr]")[0].strip()
             rev_by = self.last_model.get(reviewer, self.cfg["roles"][reviewer]["model"])
             # The pick above reads the *configured* reviewer model; a review role's fallback can land in the builder's vendor
@@ -1419,12 +1435,14 @@ class Forge:
             # Reset to `reviewed`, not HEAD: a review session that committed moved HEAD, and the verdict is for
             # the tree the gate ran on (hivemill refuses a PASS whose sha is not the head it checked).
             self.sh(f"git reset -q --hard {reviewed} && git clean -qfd", cwd=wt)
-            if not verdict or verdict[-1] != "APPROVE":
+            if verdict != "APPROVE":
                 # The whole review, not its tail: a REJECT's PASS/FAIL ledger (which "Done when" line failed, on what
                 # input) sits at the head and the `Must change:` block at the end; the next attempt needs both. In
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
-                return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
+                # An `APPROVE without ledger` names itself in the note, so the next builder knows the diff was not judged.
+                note = "" if verdict != "APPROVE without ledger" else "[forge: the review has no PASS/FAIL line, so step 1 ran nothing; the APPROVE does not count.]\n"
+                return self.fail(ticket, f"reviewer did not approve.\n{note}{review or rout[-3000:]}")
             why = self.land(wt, branch, tid, builder)
             if why:
                 return self.fail(ticket, why)
