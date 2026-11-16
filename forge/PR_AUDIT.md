@@ -2,6 +2,36 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #240 · 2026-11-16T14:26:14Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #240 forge: reviewer diff orders code files before docs and data
+What it changes: the reviewer's `--stat` and diff body now run under `git diff -O<state_dir>/review.order` (`REVIEW_ORDER` = `src/*`, `crates/*`, `tools/*`, `tests/*`, `*.rs`, `*.py`, `*.toml`, or the project's `review_order`), so code hunks come before docs and data. reviewer.md line 21 says so, README row 91 gets an appended sentence, and selftest case 20 gets a `src/lib.rs` beside the 200 KB `big.txt` plus one check.
+Findings:
+- medium forge/forge.py:1402-1403 (lines the diff leaves as they are, but whose meaning it changes) The cut notice still says "first 120000 shown. Read the rest with `git diff origin/main...HEAD`". After this PR the handed body is in `-O` order, and that command gives git's path order with `Cargo.lock` in it. So "the rest" is no longer the tail of that command. Repro in a scratch repo: `crates/a.rs` (150 KB), `bench/x.py`, `LEARNINGS.md`. The PR hands `crates/a.rs` (cut inside it), and `bench/x.py` and `LEARNINGS.md` fall past the cut. `git diff origin/main...HEAD | tail -c +120001` shows only the tail of `crates/a.rs`. The `*.py` code file is in neither read. On base, `bench/x.py` is in the handed 120 KB. On base the plain command can only over-cover, never skip, because the lock hunk only adds bytes in front. The old answer was right for this case and the new one is wrong, so this is at most MERGE WITH CHANGE. The Change below makes the notice order-free and uses the per-file read that reviewer.md:21 already prescribes.
+- low forge/prompts/reviewer.md:21 (added clause "both with code files first and docs, results and data after them"). I traced it against the older rules for the same step. (a) Line 21: "take the files from the stat one at a time with `git diff origin/main...HEAD -- <path>`". Case: a 400-line diff over `crates/x.rs`, `PROGRESS.md` and `runs/r.json`. The same files are read with an order-free command, now crates first. Same answer. (b) Step 3: "numbers in PROGRESS.md with no command behind them". Case: a 200 KB body with a PROGRESS.md claim. On base, PROGRESS.md is inside the handed 120 KB, because uppercase sorts first. After the merge it is past the cut and reachable only through the cut notice (finding 1, fixed by the Change). Step 1 still reruns each `Done when` command itself. (c) The label "`git diff --stat origin/main...HEAD`" is qualified by the new clause, with no conflict. The label "code files first" is true only for paths REVIEW_ORDER names. A `*.sh`, `*.mjs`, `*.ts` or `*.cu` file outside src/crates/tools/tests sorts after `LEARNINGS.md`. On `~/Dev/reflex1`, `git log --all --name-only` shows no such file ever touched except `gate.sh` (protected). For reflex1 the label holds. A project with another layout sets `review_order`.
+- none forge/forge.py:1390-1398 State, injection and exception paths. `self.home` is `base_home` for lane 1 and `base_home/lane{k}` for the other lanes (forge.py:170-174), so no two lanes write the same `review.order`. The file is rewritten just before both git calls, with no agent session between them, so a builder cannot change what git reads. The path is `shlex.quote`d. The patterns come from forge.py or the owner's project toml, not from ticket text. A `write_text` error goes to the `cycle()` handler like any other `sh` failure: the PR is closed and the exception is raised again. No new state stays behind. Side effect: `-O` overrides a `diff.orderFile` that a yolo builder could set in its clone. Tested: config alone puts `scripts/run.sh` first, and `-O` wins. This is a small hardening.
+- none gate, protected paths, quota, GPU. The diff does not touch `touched_protected()`, `gate()`, `recover()`, `discard_strays()`, `agent()` or `gpu.py`. `self.reviewed` keeps the plain diff, and `patch_lines()` returns a set (forge.py:1062-1064), so the landing-delta check in `land()` does not depend on order, as the PR body says. `" Cargo.lock " in stat` still matches, because the lock stays in the stat (unmatched, so after the code).
+- none deleted safeguard text. The `-` lines are only the old reviewer.md:21 and README row 91. New line 21 is the old line with the clause inserted, and the rest of the line is unchanged. The old row 91 is an exact prefix of the new row (checked by script). No selftest line is deleted. No layer is retired.
+- none forge/selftest.py:1368-1392 With the PR's selftest on base forge.py, the run fails `src/lib.rs hunk at -1, big.txt hunk at 15562`. On the PR head, all checks pass (rc 0). The PR's measurement reproduces on this box's `~/Dev/reflex1` main (2c39a79): of the last 40 merges, 17 touch code (PR: 16), the mean first-code offset is 62% (PR: 64%), 13 are past the half, and the maximum is 97%. With the orderfile, 0 bytes come before code in all 17.
+- nit forge/forge.py:1393-1394 The comment "`C` sorts before `src/`, so its hunks come first and eat the cut" is out of date under `-O`: `Cargo.lock` matches no pattern and now sorts after the code. The exclusion still stands on "no reader needs them here". Trim the first reason. This is not required.
+- nit forge/selftest.py:1391 `seen[0].find(" src/lib.rs ") < seen[0].find(" big.txt ")` passes when `" src/lib.rs "` is absent (-1). The hunk-order half (`0 <= code_at < text_at`) is the part that does the check. This is not required.
+- none siblings. I grepped all 29 other open PRs on `forge` for `review_order`, `-O`, `orderFile`, `--stat` and `120000`. None duplicates this PR or contradicts it. #236 edits the verdict parse just below (its context starts at base line 1394, the cut notice). There is no semantic conflict, but the Change below touches that context line, so the second PR to land needs a trivial rebase. #195 and #160 carry stale context for row 91 and the review block (older base), with no semantic overlap. #140, #183 and #209 edit reviewer.md lines 3, 2 and 14, not line 21.
+Change needed (only for MERGE WITH CHANGE): in forge/forge.py, replace the two cut-notice lines
+```
+                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown. "
+                                                   "Read the rest with `git diff origin/main...HEAD` before you decide.]")
+```
+with
+```
+                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown, in the --stat's order. "
+                                                   "Read every file from the last one shown to the end of the --stat with `git diff origin/main...HEAD -- <path>` before you decide.]")
+```
+I applied this edit to a scratch copy of the PR head. `python3 forge/selftest.py` passes all checks, and the existing check "a diff cut at 120 KB tells the reviewer it was cut and how to read the rest" still finds `git diff origin/main...HEAD`.
+
+
 ## PR #239 · 2026-11-16T09:14:39Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
