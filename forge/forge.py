@@ -88,6 +88,19 @@ def rate_interval(m: int, n: int) -> str:
     return f"{m}/{n} ({max(0.0, 100 * (mid - half)):.0f}-{100 * (mid + half):.0f}%)"
 
 
+def pace_line(label: str, line: str) -> float | None:
+    """Percent of a usage window its elapsed time has earned: 0 at the reset, 100 at the next one. The
+    window's length comes from its label ("Claude 7 Day", "5 hours", "30 days") and the time left from
+    `omp usage`'s "resets in 2d4h"; a window with neither (a credits balance) has no line."""
+    span = re.search(r"(\d+)\s*(d|h)", label, re.I)
+    left = re.search(r"resets in ((?:\d+[dhm])+)", line)
+    if not span or not left:
+        return None
+    span_h = int(span.group(1)) * (24 if span.group(2).lower() == "d" else 1)
+    left_h = sum(int(n) * {"d": 24, "h": 1, "m": 1 / 60}[u] for n, u in re.findall(r"(\d+)([dhm])", left.group(1)))
+    return max(0.0, 100 * (1 - left_h / span_h))
+
+
 def session_counts(session_dir: Path) -> str:
     """` omp=V fell=P/M turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
     version omp writes on its `model_change` entry, omitted when the file has none; `fell` is the model of the last
@@ -448,8 +461,14 @@ class Forge:
 
     # ---------- budget ----------
     def quota_ok(self) -> bool:
-        """Stop spending when the shared Claude/Codex windows are nearly used (the owner works too)."""
-        floor = self.cfg.get("limits", {}).get("max_window_used_pct", 85)
+        """Stop spending when the shared Claude/Codex windows are nearly used (the owner works too).
+        Two ceilings per window: the fixed floor (`max_window_used_pct`), and when `max_window_ahead_pct`
+        is set, a line that rises from 0% at the window's reset to 100% at the next one plus that many
+        points, so four lanes cannot spend most of a 7-day window on its first day and leave the owner
+        with the floor's remainder for six."""
+        limits = self.cfg.get("limits", {})
+        floor = limits.get("max_window_used_pct", 85)
+        ahead = limits.get("max_window_ahead_pct")
         r = subprocess.run([OMP, "usage"], capture_output=True, text=True, timeout=120)
         # Pause only when every vendor the roles use has a window over the floor; one vendor out is handled
         # by per-role fallback. A window labelled for one model ("Claude 7 Day (Fable)") is keyed
@@ -467,8 +486,11 @@ class Forge:
                     continue  # the block's header and its `capacity:` summary carry no "% used"
                 q = re.search(r"\(([^)]+)\)", line.split("%")[0])  # the label's qualifier, e.g. "(Fable)"
                 key = f"{vendor}:{q.group(1).strip().lower()}" if q else vendor
-                over[key] = over.get(key, False) or float(m.group(1)) >= floor
                 label = re.split(r"[█░]", line)[0].replace("●", "").strip()  # the text before the bar: "Claude 7 Day (Fable)"
+                ceiling = floor
+                if ahead is not None and (pace := pace_line(label, line)) is not None:
+                    ceiling = min(ceiling, pace + ahead)
+                over[key] = over.get(key, False) or float(m.group(1)) >= ceiling
                 meter[f"{vendor} {label}"] = float(m.group(1))
         self.meter = meter
         for k, is_over in over.items():
@@ -478,7 +500,7 @@ class Forge:
                 self.exhausted.pop(k, None)
         vendors = {x["model"].split("/")[0] for x in self.cfg["roles"].values()}
         if vendors and all(any(o for k, o in over.items() if k.split(":")[0] == v) for v in vendors):
-            self.log(f"quota: every vendor over {floor}% ({over}), pausing")
+            self.log(f"quota: every vendor over its ceiling (floor {floor}%, ahead {ahead}) ({over}), pausing")
             return False
         return True
 

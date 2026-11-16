@@ -1222,6 +1222,32 @@ with tempfile.TemporaryDirectory() as d:
     check("quota_ok keeps each window's % used under its vendor and label",
           f.meter == {"anthropic Claude 5 Hour": 57.0, "anthropic Claude 7 Day": 60.0,
                       "anthropic Claude 7 Day (Fable)": 100.0, "openai-codex 5 hours": 90.0}, str(f.meter))
+    # 17b. The fixed floor lets four lanes spend 80% of a 7-day window on its first day and leave the owner
+    # the remainder for six. With `max_window_ahead_pct`, a window is also over when its % used passes the
+    # share its elapsed time has earned plus that many points (one Reddit user's weekly straight-line rule,
+    # r/ClaudeCode 2026-11-16).
+    usage = ("Anthropic — 1 account\n"
+             "  ● someone@example.com\n"
+             "      ● Claude 7 Day          ████░░ 50.0% used · resets in 6d\n"
+             "  capacity: 7d → 0.50/1 account used\n\n"
+             "Openai Codex — 1 account\n"
+             "  ● someone@example.com · plan: plus\n"
+             "      ● 5 hours  ░░░░░░ 90.0% used · resets in 4h59m\n")
+    forge.subprocess.run = lambda cmd, **kw: (subprocess.CompletedProcess(cmd, 0, usage, "")
+                                              if list(cmd)[-1:] == ["usage"] else real_run(cmd, **kw))
+    try:
+        under_floor = f.quota_ok()  # 50% < 80%: the floor alone lets the loop run
+        f.cfg["limits"]["max_window_ahead_pct"] = 10
+        over_line = not f.quota_ok()  # day 1 of 7 has earned 14.3%, plus 10 is 24.3%; 50% is past it
+    finally:
+        forge.subprocess.run = real_run
+    check("a window ahead of its elapsed-time share pauses the loop only when max_window_ahead_pct is set",
+          under_floor and over_line and "anthropic" in f.exhausted, f"{under_floor} {over_line} {sorted(f.exhausted)}")
+    check("pace_line reads the window length from the label and the time left from the line",
+          round(forge.pace_line("Claude 7 Day", "x 58.0% used · resets in 2d4h"), 1) == 69.0
+          and forge.pace_line("5 hours", "x 0.0% used · resets in 4h59m") < 0.4
+          and forge.pace_line("SuperGrok Weekly Credits", "x 0.0% used · resets in 6d23h") is None,
+          str(forge.pace_line("Claude 7 Day", "x 58.0% used · resets in 2d4h")))
 
 # 18. The repair session after a failed gate is the one place where a gate.sh the agent just rewrote was
 # executed: its edits were read only after the second gate run, so the rewritten oracle ran and posted its

@@ -14,6 +14,9 @@ protected_paths = ["gate.sh", "tickets/", ".forge/"]
 deadline = "2026-10-24T17:00:00Z"
 # Pause when any Claude/Codex usage window passes this percent, so the owner keeps headroom.
 max_window_used_pct = 80
+# Also pause a window whose % used is more than this many points past the share its elapsed time has
+# earned (a 7-day window at day 1 has earned 14%), so the lanes cannot spend most of a week on its first day.
+max_window_ahead_pct = 10
 gate_timeout_min = 30
 
 [env]
