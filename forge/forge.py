@@ -51,6 +51,13 @@ UTC = dt.timezone.utc
 # request (`Error: Invalid --thinking value`, rc 2, ~2 s); agent() returns that from the role's first model without
 # trying its fallback, so every attempt reaching the role is charged to its ticket (a review only after a full build).
 THINKING = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "auto")
+# File order of the reviewer's diff (`git diff -O`; a project's `review_order` replaces it). git orders by path, so
+# LEARNINGS.md, PROGRESS.md, bench/ and runs/ precede crates/ and tools/ on every reflex1 merge: of the last 40 merges
+# on main (2026-11-16), 16 touch code and their first code hunk starts on average 64% of the way into the diff, past
+# the half in 13, at 95-97% in two. Past the 120 KB cut below, code is what goes unseen; before it, code is what the
+# reviewer reads last (Fregnan et al., ESEC/FSE 2022: a seeded defect found at 64% lower odds when its file came last;
+# Rahman et al. 2026, 330,343 PRs: latent-bug rate rises with file position). Files no pattern names keep git's order after these.
+REVIEW_ORDER = ("src/*", "crates/*", "tools/*", "tests/*", "*.rs", "*.py", "*.toml")
 # gpu.py appends one line per terminated pod here and refuses a run whose estimated cost exceeds
 # GPU_BUDGET_USD minus this sum; the planner is told the same number so it stops writing GPU tickets
 # the builder cannot run (reflex1: $14.88 of $15 spent, 85 of 140 tickets name a GPU).
@@ -1380,18 +1387,20 @@ class Forge:
             # The --stat first: a reviewer handed one long diff reads it once and rates it as a whole, and that
             # read's quality collapses with size (arXiv 2606.15689: F1 0.66 on diffs under 10 lines, 0.04 over
             # 150; 47 of reflex1's 79 merged PRs are over 150). The prompt tells it to go file by file past that.
-            stat = self.sh("git diff --stat=1000 --stat-graph-width=40 origin/main...HEAD", cwd=wt).stdout
+            order = self.home / "review.order"  # git takes the order from a file; fnmatch, `dir/` does not match, `dir/*` does
+            order.write_text("\n".join(self.cfg.get("review_order", REVIEW_ORDER)) + "\n")
+            stat = self.sh(f"git diff -O{shlex.quote(str(order))} --stat=1000 --stat-graph-width=40 origin/main...HEAD", cwd=wt).stdout
             # Cargo.lock stays in the stat and out of the body: `C` sorts before `src/`, so its hunks come first and
             # eat the cut (reflex1 0bf2f04: 47 of the first 120 KB, 1,631 of 2,300 lines; 20-58% of three of the
             # 12 merged lock-touching commits), and no reader needs them here - reviewer step 6 runs its own
             # `git diff ... -- Cargo.toml Cargo.lock`, unrequested_deps()/vulnerable_deps() parse the lock as TOML
             # (scalac, "filter generated files before review", 2026-11-12). `self.reviewed` above keeps the lock.
-            body = self.sh("git diff origin/main...HEAD -- . ':!Cargo.lock'", cwd=wt).stdout
+            body = self.sh(f"git diff -O{shlex.quote(str(order))} origin/main...HEAD -- . ':!Cargo.lock'", cwd=wt).stdout
             if " Cargo.lock " in stat:
                 body = "[Cargo.lock's hunks are left out below; step 6 diffs it itself.]\n\n" + body
             shown = stat + "\n" + body[:120000] + ("" if len(body) <= 120000 else
-                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown. "
-                                                   "Read the rest with `git diff origin/main...HEAD` before you decide.]")
+                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown, in the --stat's order. "
+                                                   "Read every file from the last one shown to the end of the --stat with `git diff origin/main...HEAD -- <path>` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=self.unanchor(ticket.read_text()), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)

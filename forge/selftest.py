@@ -1366,6 +1366,8 @@ with tempfile.TemporaryDirectory() as d:
             seen.append(prompt)
             return 0, "VERDICT: APPROVE"
         (cwd / "big.txt").write_text("x" * 200000 + "\n")    # one file, well past the 120 KB cut
+        (cwd / "src").mkdir(exist_ok=True)
+        (cwd / "src/lib.rs").write_text("pub fn f() -> u8 { 1 }\n")    # sorts after big.txt: alphabetical order puts it past the cut
         # a lock with no third-party entry (nothing for unrequested_deps() to refuse), long enough to show
         (cwd / "Cargo.lock").write_text('version = 3\n\n[[package]]\nname = "t"\nversion = "0.1.0"\n' + "# pad\n" * 500)
         git("add -A", cwd); git("commit -qm work", cwd)
@@ -1384,6 +1386,10 @@ with tempfile.TemporaryDirectory() as d:
           len(seen) == 1 and " Cargo.lock " in seen[0] and "diff --git a/Cargo.lock" not in seen[0]
           and "Cargo.lock's hunks are left out" in seen[0] and "diff --git a/big.txt" in seen[0],
           f"lock hunk at {seen[0].find('diff --git a/Cargo.lock')}, big.txt hunk at {seen[0].find('diff --git a/big.txt')}" if seen else "no review ran")
+    code_at, text_at = (seen[0].find("diff --git a/src/lib.rs"), seen[0].find("diff --git a/big.txt")) if seen else (-1, -1)
+    check("the reviewer's diff puts code hunks before docs and data, so a code file is never the one past the cut",
+          len(seen) == 1 and 0 <= code_at < text_at and seen[0].find(" src/lib.rs ") < seen[0].find(" big.txt "),
+          f"src/lib.rs hunk at {code_at}, big.txt hunk at {text_at}" if seen else "no review ran")
 
     # 21. Every history entry names the omp release that ran it. `forge status` groups merged/attempts by
     # forge.py+prompts hash (PR #12), but ~/.local/bin/omp is a symlink into a versioned install, so an
