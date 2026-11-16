@@ -1399,8 +1399,8 @@ class Forge:
             if " Cargo.lock " in stat:
                 body = "[Cargo.lock's hunks are left out below; step 6 diffs it itself.]\n\n" + body
             shown = stat + "\n" + body[:120000] + ("" if len(body) <= 120000 else
-                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown. "
-                                                   "Read the rest with `git diff origin/main...HEAD` before you decide.]")
+                                                   f"\n\n[cut here: {len(body)} characters of diff, first 120000 shown, in the --stat's order. "
+                                                   "Read every file from the last one shown to the end of the --stat with `git diff origin/main...HEAD -- <path>` before you decide.]")
             rprompt = self.prompt("reviewer", TICKET=self.unanchor(ticket.read_text()), DIFF=shown)
             rc, rout = self.agent(reviewer, rprompt, wt, timeout_min=30)
             verdict = re.findall(r"VERDICT:\s*(APPROVE|REJECT)", rout)
