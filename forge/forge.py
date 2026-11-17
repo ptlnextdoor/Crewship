@@ -1209,14 +1209,20 @@ class Forge:
             if bad:
                 return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
-            # patch (context shifts on any rebase, so a clean one posts nothing).
+            # patch (context shifts on any rebase, so a clean one posts nothing). A `-` line new since the review is
+            # a line main has that the resolution took away (another lane's landed work, or main's version of a
+            # line this branch rewrote): the gate catches it only when a test covers that line, so count it first.
             sha, lines = self.reviewed
             now = self.patch_lines(self.sh("git diff origin/main...HEAD", cwd=wt).stdout)
+            dropped = [ln for ln in now - lines if ln.startswith("-")]
             delta = "\n".join(["now, not reviewed:", *sorted(now - lines), "reviewed, gone:", *sorted(lines - now)])
             if lines and now != lines and delta != posted:
-                self.log(f"landing patch differs from the one reviewed at {sha[:9]}: +{len(now - lines)} -{len(lines - now)} lines")
+                self.log(f"landing patch differs from the one reviewed at {sha[:9]}: +{len(now - lines)} -{len(lines - now)} lines, "
+                         f"{len(dropped)} of main's removed")
+                head = (f"**{len(dropped)} line(s) main has are removed by the conflict resolution** (not in the reviewed "
+                        f"patch; check them against the other lane's ticket).\n\n" if dropped else "")
                 self.pr_comment(self.pr, f"**landing patch differs from the one reviewed at {sha}** (the sync with main was "
-                                         f"resolved after the review; gated, not reviewed)\n\n```\n{delta[:6000]}\n```")
+                                         f"resolved after the review; gated, not reviewed)\n\n{head}```\n{delta[:6000]}\n```")
                 posted = delta
             # `sha` is the commit the gate passed (cycle() reads it right after the gate, before the review). A
             # rebase onto a main that moved only in tickets/ (other lanes' claim/done/retry commits) leaves a tree
