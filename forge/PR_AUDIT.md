@@ -2,6 +2,42 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #249 · 2026-11-17T18:19:08Z · REJECT · risk medium · gate fail · left open: gate failed
+
+Verdict: REJECT
+Risk: medium
+
+## PR #249 agent: a review role whose model omp's catalog lacks moves onto its fallback
+What it changes: The PR removes `not role.startswith("reviewer")` from the catalog-miss branch of `Forge.agent()` (base forge.py:368, head :372). Now a review role whose model omp does not know moves to the next model in its chain. The PR also turns the selftest section 10 check (selftest.py:1001) to expect that fallback, and it rewrites README safeguard row 80.
+Findings:
+- high forge/forge.py:367-374 (head) The PR reverses a fail-closed reviewer rule that the PR #171 audit added on purpose, for this same case. The PR adds no evidence against the reason for that rule.
+  - PR_AUDIT.md:2601-2609 and 2639-2654: #171 first let review roles fall through on a catalog miss. Its audit found that "a config error becomes a same-vendor review that repeats for the rest of the run". The audit then wrote the exact guard, README clause and selftest check that this PR deletes.
+  - Trace on head: `cycle()` (1429-1431) picks `reviewer_alt` for every Anthropic build. In ~/.config/forge/reflex1.toml, `reviewer_alt` is `openai-codex/gpt-6-astra` with fallback `["anthropic/claude-fable-5-1"]`. I ran `omp models openai-codex` here and it lists only `gpt-5.6-luna`, `gpt-5.6-terra` and `gpt-6-luna`, so every review gets a catalog miss. On base, `agent()` returns rc 1, review() reruns once (1455), then calls `fail()` (1484), and the ticket note carries `Model "openai-codex/gpt-6-astra" not found` through `rout[-3000:]`. Nothing lands. On head, Fable reviews the Opus diff and its APPROVE goes to `land()` (1485).
+  - Replay with a stub `_agent_once` (reviewer_alt as in reflex1.toml): base gives `ran=[astra] rc=1`. Head gives `ran=[astra, fable-5-1] rc=0 APPROVE`.
+  - Same model as builder: the builder chain also falls back to `claude-fable-5-1`. When an Opus-only window is spent (`spent()`, 485-491), Fable builds, then `reviewer_alt` falls to Fable, so Fable reviews its own diff. On base, this case fails closed.
+  - The PR body says this "makes the two unavailable-Codex cases behave the same". They are different. A quota refusal sets `exhausted` (360, 476), and `quota_ok()` removes the mark when the window is back under the floor (477-478). A catalog miss sets nothing and fails again on every review until a person edits the config. On head, same-vendor review becomes the permanent mode for 100% of Anthropic-built tickets in the current config.
+  - What remains is a record, not a check. The "same-vendor review" PR comment (1470-1473) and the done note (1488) record the case, and the code says "the verdict is unchanged" (1469). `record()` (1564) stores only the builder role and model, so `status` and the steward's `{STATE}` do not show it. reviewer.md:1 still tells the Fable reviewer that "A builder from a different model family wrote the diff".
+- medium forge/selftest.py:1001, forge/README.md:80 Two safeguard lines are deleted. One remaining layer, which does not block a merge, now carries their job alone.
+  - selftest.py:1001 "a review role whose model omp lacks fails the review, not onto its fallback": this check stopped a later edit from sending a review role to a fallback in the builder's vendor on a catalog miss. The PR replaces it with a check that requires the opposite. No check is left for the old behavior.
+  - README.md:80 "a review role fails the review as before, since `reviewer_alt`'s next model is the builder's vendor": this clause stopped a config error that never clears from turning cross-vendor review (row 42) into same-vendor or same-model review for the rest of the run. After the merge, only the row 42 label/done-note carries this, and it does not change the verdict. The PR body names the guard it drops and the label that remains. It does not name the #171 reason, which is that a quota mark clears and a catalog miss does not.
+- low forge/forge.py:372 with 1727-1730 and 1648-1655 A review chain in which every model is a catalog miss (or is a miss or spent) now raises `QuotaExhausted`, but only after a full build session and gate run.
+  - `lane_loop` calls `recover(quota=True)`. Line 1648 skips the `max_attempts` block for quota, so the ticket goes back to `retry` with no charge and no cap. Each pass appends `## forge-quota … no model had quota` (1655), which gives the wrong cause, and that ticket text goes into every later builder and reviewer prompt. `quota_ok()` does not pause because nothing is marked. Thus each lane builds the same ticket again on each cycle until the deadline.
+  - On base, the same chain returned rc 1, the ticket was charged, and it went to `blocked` after `max_attempts`.
+  - Replay on head: "astra missing, fable missing" gives `QuotaExhausted(reviewer_alt)`. reflex1 does not reach this today because `claude-fable-5-1` is in `omp models anthropic`. But the new README row itself names models "dropped from" the catalog as the case.
+- low forge/forge.py:372 (head) The catalog branch does not check that the refusal came "before any request", although its comment says so. For review roles, it now discards a finished review whenever rc != 0 and stderr has a line `Model "…" not found`.
+  - Replay: astra writes `VERDICT: REJECT`, exits rc 1 and prints that stderr line. Base returns the session, and review() reads REJECT (1454). Head runs Fable and returns its APPROVE.
+  - The #171 audit gave the fix as optional (PR_AUDIT.md:2618: also require an empty stdout). With review roles in scope, that condition protects the verdict.
+  - [INFERENCE] The current config cannot reach this: the owner's omp retry chains (opus-5-5 -> fable-5-1, fable-5-1 -> opus-5) name only models in the catalog. I did not test whether omp writes this line to stderr in the middle of a session.
+- info I checked the PR's claims. The `omp models openai-codex` listing is correct. The PR body's description of the base path is correct (1453-1484). `python3 forge/selftest.py` on a copy of base `forge/` with the PR diff applied gave "all checks passed" (18 s).
+  - The loop does not run now. The last forge.log line is 2026-10-25T22:08:24Z "deadline reached", against reflex1.toml's `deadline = "2026-10-24T17:00:00Z"`. No ticket loses attempts today. A restart needs a config edit for the deadline, and that edit can also move `reviewer_alt` to a model id that omp lists (for example `openai-codex/gpt-6-luna`). The PR leaves that edit to the owner, and base's loud failure is what makes the owner do it.
+  - Context: the reflex1 log has 103 `reviewer_alt` starts on `claude-fable-5-1` and 25 on `gpt-6-astra` (quota fallback). So most reviews were already same-vendor. That was a state the owner accepted and that clears. This PR adds a state that does not clear.
+- info Siblings: 56 open PRs on `forge` touch forge.py, README.md or selftest.py. I grepped all of their diffs for the catalog regex, `startswith("reviewer")`, the row 80 text and the section 10 check. None duplicates this change. Only #213 has row 80, as unchanged context.
+  - #213 (signed-out vendor) adds a branch next to the same lines and a row after row 80. The text is adjacent but does not conflict. It marks the vendor so that `quota_ok()` clears it, which is the distinction this PR drops.
+  - #160 (`avoid=built_by`) would stop the same-model case in the first finding, but on a catalog miss it would send that case to the uncapped requeue in the third finding. The two PRs do not conflict, and neither one must change.
+  - #20 (Grok before Fable in `reviewer_alt`) and #133 (reviewer vendor in the tally) make the first finding less severe and do not conflict with this PR. #145 and #47 change the quota branch above this one, and their text is only adjacent.
+- nit forge/forge.py:367-371 (head) The new comment holds history ("used to return rc 1 …") and a dated catalog listing ("Live case 2026-11-17: … lists gpt-5.6-luna, gpt-5.6-terra and gpt-6-luna only"). That listing will be wrong after the next `omp models refresh`, so it belongs in the commit message. The new README row also does not say what happens at the end of the chain (`QuotaExhausted`, "no model had quota", requeue with no charge).
+
+
 ## PR #248 · 2026-11-17T17:17:57Z · MERGE WITH CHANGE · risk medium · gate pass · left open: MERGE WITH CHANGE risk=medium needs the owner
 
 Verdict: MERGE WITH CHANGE
