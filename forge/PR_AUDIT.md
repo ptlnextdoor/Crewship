@@ -2,6 +2,40 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #250 · 2026-11-17T19:21:06Z · MERGE WITH CHANGE · risk low · gate fail · left open: gate failed
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #250 forge: log cacheRead/cacheWrite split per session
+What it changes: `session_counts()` (forge/forge.py:113,134-135,146 at head bc6c7f9d) sums the `usage.cacheRead` and `usage.cacheWrite` of each assistant message and prints them as ` cacher=R cachew=W` between `in=` and `out=` on the `agent <role> done` line (:450). The comment and the two exact expected strings of selftest #29 get the new fields.
+Findings:
+- info forge/forge.py:146,450 Blast radius. The only caller of `session_counts` is the done-line f-string at :450. The only reader of forge.log is `status_text()`, which puts the last 8 lines (`[-8:]`) into the steward's `{STATE}` and the `status` command. Each done line grows by about 30 characters, so the growth is bounded. No prompt, gate, reviewer, protected-path, claim, `recover()`, `discard_strays()`, PR, quota, timeout or GPU code changes. Each lane reads only its own session dir, so no state is shared between lanes.
+- info forge/forge.py:134-135 Correctness, checked on real data. I ran the PR-head and base `session_counts` on the 42 omp session dirs in `~/.omp/agent/sessions`. In all 42, the PR output is the base output plus the two fields. The fields equal an independent sum of `cacheRead`/`cacheWrite`, and `cacher + cachew <= in` in every dir. Sample: ` omp=18.20.2 turns=40 tools=44 in=1831063 cacher=1642032 cachew=188939 out=26316`.
+- info forge/forge.py:134-135 No new crash input and no log injection. I sent `usage` values `"5"`, `[1]`, `{"x":1}`, three strings and `"\n[l1] fake"`: base and PR both raise TypeError on the same inputs. Bool, float and NaN print as numbers in both. `tread`/`twrite` start at int 0, so only a number can get into forge.log and the steward's `{STATE}`.
+- low forge/forge.py:143-145 The added comment (and the PR body) argue from a wrong premise. They say the 8-25 min gate pause is "past a 5m cache TTL", so the write share "decides" `providers.cacheRetention`. In omp 18.20.2 that setting defaults to `auto`, documented as "Anthropic OAuth subscriber sessions default to 1h, API keys use 5m" (pi-coding-agent/src/session/settings.ts:1297-1312). `~/.omp/agent/config.yml`, `forge/omp.yml` and the forge unit's environment do not set it or `PI_CACHE_RETENTION`. All 4,000 cache-writing turns in `~/.omp/agent/sessions` (13,094,668 tokens) carry `cttl: {ephemeral1h: ...}`, and none carries `ephemeral5m`. [INFERENCE] The lanes use the same omp binary and agent dir, so their writes also go to the 1h tier. I could not read a lane session file, because `~/.local/state/forge/reflex1/sessions` holds only `.log` files. The two fields are correct. The comment can cause a later reader to change the retention setting for a 5m exposure that the lanes do not have. It also puts a Reddit citation inside a return expression, but the file keeps its citations in the docstring.
+- nit forge/forge.py:449 The comment above the done line still lists "omp=, fell=, turns=, tools=, in= and out=". Siblings #224 and #228 update this list for their field, and merged #226 did the same for `omp=`.
+- low forge/README.md:70 The PR does not update the guard row that lists the done-line fields. After the merge, the README names `in=I out=O` but not `cacher=`/`cachew=`. Siblings #224, #227 and #228 each update this row for their field.
+- info forge/selftest.py:1678-1679,1695,1702,1707 Deleted lines, no layer removed. The comment clause "a file whose turns carry no usage logs neither" becomes "none of them". The unchanged exact `bare` check at :1707 (`" turns=1 tools=0"`) still enforces it, and now also rules out `cacher=`/`cachew=`. The two deleted expected strings (base :1694, :1701) become exact strict supersets on the same fixture. Coverage of turns, tools, user messages, the torn last line, `omp=`, `fell=`, `in=` and `out=` stays the same. Negative control: the PR's selftest on base forge.py fails exactly those two checks.
+- info Gate. The PR head passes `py_compile` and its own `python3 forge/selftest.py` ("all checks passed"). reviewctl's `gate()` runs base's selftest (forge/reviewctl.py:137). On the PR code, that run fails the two #29 checks because base pins the exact string (got `' omp=18.12.6 turns=3 tools=4 in=2207 cacher=200 cachew=2000 out=20'`). reviewctl will report "gate failed", and the owner must land the PR by hand, as with #224, #227 and #228. This is not a defect in the PR.
+- info Siblings #224 (`prompt=`), #227 (`ctx=`) and #228 (`errs=`) edit the same docstring head, return f-string and selftest #29 strings. There is no contradiction and no duplicate. `ctx=` is the largest single-turn total of `in=`, and `cacher`/`cachew` are per-session sums of two parts of `in=`. Because the text overlaps, the PR that lands second must rebase its #29 strings and return line. The three siblings also predate `fell=`, so they need a rebase anyway. On the docs, #250 is the side that should change (README row 70 and :449, above). #241 adds `pace_line()` directly above `session_counts` and changes no line that #250 edits. I also checked the hunks of the 20 other open PRs on `forge` that touch forge.py or selftest.py (#249 #248 #245 #237 #236 #235 #213 #211 #205 #204 #197 #196 #195 #183 #182 #181 #165 #160 #148 #145). None of them touches `session_counts`, the done line or selftest #29.
+- info PR text. The body, the Copilot review and the Copilot comment (a quota notice) contain no HTML comments. "Log string only" and "selftest passes" are true. "Past a 5m TTL" is false for this box, as shown above.
+Change needed (only for MERGE WITH CHANGE): Make the done-line docs state what the fields are, without the 5m premise. Change only these three places.
+1. forge/forge.py:143-145, replace the three comment lines
+```
+            # cacher/cachew inside in=: a builder session pauses 8-25 min inside the gate, past a 5m cache TTL and
+            # inside a 1h one, so the write share per role is the number that decides omp's `providers.cacheRetention`
+            # (one Pro user's 2.5 months of logs: a cold rebuild cost 14-16x a warm request, r/ClaudeCode 2026-11-17)
+```
+with
+```
+            # cacher/cachew: the cacheRead and cacheWrite parts of in=, the per-role write share a change to omp's
+            # `providers.cacheRetention` would move (its `auto` already writes OAuth sessions to the 1h tier, `cttl.ephemeral1h`)
+```
+2. forge/forge.py:449, replace `# omp=, fell=, turns=, tools=, in= and out= come from the omp session file under out.with_suffix("").` with `# omp=, fell=, turns=, tools=, in=, cacher=, cachew= and out= come from the omp session file under out.with_suffix("").`
+3. forge/README.md:70, replace `(input + cache-read + cache-write, and output), and `omp=V`` with `(input + cache-read + cache-write, and output), `cacher=R cachew=W`, the cache-read and cache-write parts of `in`, and `omp=V``.
+
+
 ## PR #249 · 2026-11-17T18:19:08Z · REJECT · risk medium · gate fail · left open: gate failed
 
 Verdict: REJECT
