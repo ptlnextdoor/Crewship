@@ -1070,6 +1070,25 @@ class Forge:
         """The +/- lines of a diff without the file headers: what a reviewer approved, hunk positions aside."""
         return {ln for ln in diff.split("\n") if ln[:1] in ("+", "-") and not ln.startswith(("+++", "---"))}  # `split`, not `splitlines`: test_tampering
 
+    def attach(self, wt: Path, branch: str) -> str:
+        """Put HEAD back on the lane's branch after a session; "" when it is, else why the tree is not the branch's.
+        Every push, `gh pr` and merge in this file names `branch`, not HEAD. A session that ran `git checkout <sha>`
+        or `git bisect` (a "before" number on a perf ticket, a reviewer reading one commit) left HEAD detached, and
+        what it committed after that is not on the branch: `git push -q origin <branch>` then prints nothing, since
+        the branch did not move, the PR stays on the old commit, and the review and the gate run on a tree that
+        never lands (r/ClaudeCode 1xylnge, 2026-11-17: three such commits, every push clean). When the branch is
+        behind HEAD the fix is lossless, a fast-forward; a HEAD the branch is not behind holds a tree the session's
+        own commits are not on, and the attempt fails saying so rather than landing the branch's older tree."""
+        head = self.sh("git symbolic-ref --short -q HEAD", cwd=wt).stdout.strip()
+        if head == branch:
+            return ""
+        where = f"{'on ' + head if head else 'detached'} at {self.sh('git rev-parse --short HEAD', cwd=wt).stdout.strip()}"
+        if self.sh(f"git merge-base --is-ancestor {branch} HEAD", cwd=wt).returncode:
+            return f"the session left HEAD {where}, not on {branch} and not ahead of it, so its tree is not the branch's; work on {branch} (a baseline checkout belongs in a second worktree: `git worktree add /tmp/<name> <commit>`)"
+        self.sh(f"git checkout -q -B {branch}", cwd=wt)
+        self.log(f"HEAD was {where}; {branch} fast-forwarded to it")
+        return ""
+
     def rebase_onto_main(self, wt: Path, builder: str) -> bool:
         """Bring the branch up to date with main. Conflicts (another lane landed nearby) go to the builder once."""
         self.sh("git fetch -q origin", cwd=wt, timeout=120)
@@ -1195,8 +1214,14 @@ class Forge:
         model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
         trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}\nSession: {self.session_ref(builder)}"
         for _ in range(3):
+            why = self.attach(wt, branch)
+            if why:
+                return why
             if not self.rebase_onto_main(wt, builder):
                 return "could not bring the branch up to date with main (conflicts the builder could not resolve)"
+            why = self.attach(wt, branch)  # the conflict session is a session like any other
+            if why:
+                return why
             # rebase_onto_main may run a builder session to resolve the conflict (29 reflex1 cycles did), and its
             # `git add -A` commits whatever that session touched. The protected check before the gate ran two
             # agent turns earlier, so until here the only thing stopping that session from editing gate.sh or
@@ -1303,6 +1328,9 @@ class Forge:
                                                if gated else
                                                f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
             rc, out = self.agent(builder, bprompt(), wt)
+            why = self.attach(wt, branch)
+            if why:
+                return self.fail(ticket, f"{why}; not committed, not pushed.\n{out[-1500:]}")
             self.sh("git add -A && git commit -qm 'forge: builder work in progress' || true", cwd=wt)
             if not self.sh("git diff --stat main...HEAD", cwd=wt).stdout.strip():
                 return self.fail(ticket, f"builder produced no diff (rc={rc}).\n{out[-1500:]}")
@@ -1355,6 +1383,9 @@ class Forge:
                 # (arXiv 2611.14654, AgentCE-Bench and AppWorld, frozen mid-task, eight receiver models).
                 # The probe sentence, for runtime failures only (a fmt, clippy or compile error names its fix): agents' patches pass the tests without fixing the cause (17-26% overfitting for open-process agents over 500 SWE-bench tasks, Ceka et al. PACMSE 2026; Opus 5.5 and Fable 5.2 each fixed the wrong file in 3 of 4 trials on one compiler bug, polybdenum 2026-11-17); a repair framework that reads runtime values at the suspected line raised correct fixes 51.3% over vanilla across five backbones (DebugRepair, arXiv 2604.19305).
                 rc, out = self.agent(builder, f"Repair pass: an earlier session implemented the ticket on this branch (`git diff origin/main...HEAD` is its work; local `main` sits at the branch point) and `{self.cfg.get('gate', './gate.sh')}` failed on it; the output is at the end, so skip the starting gate run. Fix the code (never the gate or tests' expectations unless the ticket says so) until the gate passes, then commit. The tree must differ from the failed commit {failed[:12]} when you stop: a branch that comes back unchanged fails this attempt without a second gate run, so if the fix is not clear from the output below, read the code the failing check runs (not the check or its expected values) and change that rather than returning the same patch. When the failure is a test or a runtime check (a wrong value, a panic, a threshold missed), locate before you edit: the line it names is where the wrong value was noticed, often not where it arose. Put a probe (`dbg!`, `eprintln!`, an `assert!`) in the code the failing check runs (never in the check, its expected values or `gate.sh`), rerun only that check while you probe, and move the probe until it shows the wrong value; fix the code there, remove every probe before you commit, and name the line and the value you saw in your `PROGRESS.md` entry. A fmt, clippy or compile error names its own fix, and the sibling rule below still applies once you have the cause. The branch's `PROGRESS.md` entry for this ticket is that session's report, written before this gate run: a line in it that reads a check as passed or a number as measured is a claim the gate output below overrides, not the state of the tree. Leave that entry as it is and write this session's entry directly under it as its correction: the gate stage that failed, what you changed, and your own gate run after the change with its result, beside what the rules below ask of every entry; an entry rewritten to read as if the failure never happened leaves the reviewer and the next session worse off than the untouched one. Every rule below still holds.\n\n{bprompt()}\n\nGate output:\n{gout}", wt)
+                why = self.attach(wt, branch)
+                if why:
+                    return self.fail(ticket, f"{why}; not committed, not pushed.\n{out[-1500:]}")
                 self.sh("git add -A && git commit -qm 'forge: repair after gate' || true", cwd=wt)
                 if self.sh("git rev-parse HEAD", cwd=wt).stdout.strip() == failed:
                     # The tree the gate just failed would be gated again for the same verdict (8-25 min on
