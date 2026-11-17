@@ -89,7 +89,7 @@ def rate_interval(m: int, n: int) -> str:
 
 
 def session_counts(session_dir: Path) -> str:
-    """` omp=V fell=P/M turns=N tools=M in=I out=O` from the omp session files under `session_dir` (`omp` is the runtime
+    """` omp=V fell=P/M turns=N tools=M in=I cacher=R cachew=W out=O` from the omp session files under `session_dir` (`omp` is the runtime
     version omp writes on its `model_change` entry, omitted when the file has none; `fell` is the model of the last
     `model_change` entry omp wrote with `resolvedModelIsFallback: true`, the mid-session switch its `retry.fallbackChains`
     make after a provider error, omitted when the session stayed on the model it was started with; one `assistant` message
@@ -110,7 +110,7 @@ def session_counts(session_dir: Path) -> str:
     logged as Opus unless the session file is read. A mid-dialogue handoff moved strict success -8 to +13 points on
     Multi-IF and the authoring model per turn is the log the authors ask for (Khraishi et al., arXiv 2603.03111); live
     SWE-bench forks swapped to another model rewrote 61-94% of the actions after the fork (Gonuguntla, arXiv 2608.08239)."""
-    turns = tools = tin = tout = 0
+    turns = tools = tin = tread = twrite = tout = 0
     omp = fell = ""
     try:
         for f in session_dir.glob("*.jsonl"):
@@ -131,6 +131,8 @@ def session_counts(session_dir: Path) -> str:
                     turns += role == "assistant"
                     tools += role == "toolResult"
                     u = m.get("usage") or {}
+                    tread += u.get("cacheRead") or 0
+                    twrite += u.get("cacheWrite") or 0
                     tin += (u.get("input") or 0) + (u.get("cacheRead") or 0) + (u.get("cacheWrite") or 0)
                     tout += u.get("output") or 0
     except OSError:
@@ -138,7 +140,10 @@ def session_counts(session_dir: Path) -> str:
     if not turns:
         return ""
     return ((f" omp={omp}" if omp else "") + (f" fell={fell}" if fell else "") + f" turns={turns} tools={tools}"
-            + (f" in={tin} out={tout}" if tin or tout else ""))
+            # cacher/cachew inside in=: a builder session pauses 8-25 min inside the gate, past a 5m cache TTL and
+            # inside a 1h one, so the write share per role is the number that decides omp's `providers.cacheRetention`
+            # (one Pro user's 2.5 months of logs: a cold rebuild cost 14-16x a warm request, r/ClaudeCode 2026-11-17)
+            + (f" in={tin} cacher={tread} cachew={twrite} out={tout}" if tin or tout else ""))
 
 
 def no_push(env: dict[str, str]) -> dict[str, str]:
