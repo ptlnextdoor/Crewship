@@ -1084,8 +1084,9 @@ class Forge:
             return ""
         where = f"{'on ' + head if head else 'detached'} at {self.sh('git rev-parse --short HEAD', cwd=wt).stdout.strip()}"
         if self.sh(f"git merge-base --is-ancestor {branch} HEAD", cwd=wt).returncode:
-            return f"the session left HEAD {where}, not on {branch} and not ahead of it, so its tree is not the branch's; work on {branch} (a baseline checkout belongs in a second worktree: `git worktree add /tmp/<name> <commit>`)"
-        self.sh(f"git checkout -q -B {branch}", cwd=wt)
+            return f"the session left HEAD {where}, not on {branch} and not ahead of it, so its tree is not the branch's; end every session on {branch} (`git checkout {branch}` after a baseline checkout, `git bisect reset` after a bisect)"
+        if self.sh(f"git checkout -q -B {branch}", cwd=wt).returncode:
+            return f"the session left HEAD {where} and `git checkout -B {branch}` failed there (an unresolved merge in the index?); not landed"
         self.log(f"HEAD was {where}; {branch} fast-forwarded to it")
         return ""
 
