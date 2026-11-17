@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #244 · 2026-11-17T08:28:23Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #244 forge: PR body and landing trailer name the lane and the builder session log
+What it changes: adds `session_ref(builder)` (`[lane<k>/]sessions/<cycle>-<role>.log`, relative to the state dir). It puts lane, cycle and that path on the PR body's first line, and it adds a third merge-commit trailer `Session: <ref>` on the `gh pr merge` path and on the local `--no-ff` path. Selftest checks both. README row 118 is extended.
+Findings:
+- low forge/forge.py:1117-1121 (head) The stamp names the refused session after a quota fallback, and the docstring says it is "the session that wrote the reviewed diff". Trace: `agent()` (:339-372) calls `_agent_once` once per model in the chain. Each call takes a new `log_path(role)` (:383-387), so a refusal writes `<cycle>-builder.log` and the fallback model writes `<cycle>-builder-2.log`. `session_ref` always returns the first name. Probe on the PR head with a fake `omp` (model a/b refuses with `usage_limit_reached` on stderr, c/d answers): `last_model` = `c/d`, `session_ref` = `sessions/00006-builder.log`, and that file holds only the refusal. The work is in `00006-builder-2.log`. This case occurs on this box: reflex1 lane 1 `sessions/00006-builder.log` and `00007-builder.log` are 100-byte Codex refusals, and forge.log shows a builder fallback at 2026-10-23T04:54:32Z. The PR body then shows `Builder: <fallback model>` beside the log of the refused model, and `land()` (:1194) writes the same pair into main's merge commit, where nobody can correct it. After a gate repair the trailer also names the first build, not the repair (`-2`) that changed the reviewed tree. The pointer still finds the correct directory and prefix, so this is a record defect, not a gate defect.
+- low forge/README.md:118 The row gives the pattern `Session: <lane>/sessions/<cycle>-<role>.log`. Lane 1 has no `lane1/` directory: its home is the state dir itself (forge.py:177-178). Thus a lane-1 landing's trailer is `sessions/00032-builder.log` with no lane token. On the local path that trailer is the only lane record in the commit. The selftest regex `(lane\d+/)?` knows this. The README does not.
+- info PR body premise "the lane was only in the ticket's `status:` line" is not correct for PR pages. The head ref `forge/l<lane>-<cycle>-<tid>` (forge.py:1274) names lane and cycle on every PR (reflex1 #124: `forge/l1-00032-0128-first-decision-at-tick-zero`). The gh-path merge subject also carries it ("Merge pull request #120 from ptlnextdoor/forge/l4-00049-0122-..."). The real gain is on the local `--no-ff` path: 64 of reflex1's 80 landings have the subject `forge: land <tid>` and no lane or cycle. The trailer now gives them lane, cycle and builder role. The PR-body line duplicates the head ref, but it costs about 45 fixed characters. The body also says the path is "a pointer for ... `reviewctl`". reviewctl.py:31 targets `ptlnextdoor/Crewship` and never reads reflex1 PR bodies. That claim is in the PR body only, not in code or README.
+- info Security trace, nothing found. The added values are an int cycle, an int lane, a role key from config and a relative path. No ticket text reaches them. `relative_to(self.base_home)` cannot raise, because `home` is `base_home` or `base_home/lane<k>` (:177-181). It also keeps the absolute home path (user name) out of the public PR. The trailer goes through `shlex.quote` at both sinks (`pr_merge` :1175, local merge :1236). The body goes through `gh-body.md` and `redact()` (:1105-1106). `git interpret-trailers --parse` reads all three trailers. There is no new write, no state shared between lanes and no new exception path. The gate, reviewer, protected paths, `claim()`, `recover()`, `discard_strays()`, quota fallback, timeouts, process-group kill and GPU code do not change.
+- info Deletions: none from `forge/prompts/*.md`. Selftest :625-626 keeps both old conditions (`Builder: a/b`, `Forge: ... on`) and adds `Session:`. README row 118 keeps its right column, and the left column only grows. The PR adds no prompt rule.
+- info Selftest on the PR head (tarball of c6ea771d in /tmp, removed after): "forge selftest: all checks passed", 209 `ok` lines, including "PR body names the lane and the builder session log under the state dir" and the changed trailer check.
+- info Sibling PRs: I scanned the diffs of all 29 other open PRs on `forge` for `pr_open`, `trailer`, `log_path`, `session_ref`, `(cycle `, `Session:` and the landing-commit README row. Only #165 (pr_open falls back to `gh pr list --head` after a failed create) and #211 (selftest stubs `pr_open`) touch `pr_open`. Neither touches the body line or the trailer. No contradiction or duplicate.
+- nit Pass 2: the docstring's last sentence repeats the PR body's motivation. The code is a single focused edit with no defensive wrapper.
+Change needed:
+1. forge/forge.py, `session_ref` docstring: replace
+   `` `lane2/sessions/00032-builder.log` under the state dir: the session that wrote the reviewed diff ``
+   `` (log_path gives repairs and merge resolutions `-2`, `-3`). ``
+   with
+   `` `lane2/sessions/00032-builder.log` under the state dir (lane 1 has no `lane1/`): the cycle's first session ``
+   `` of that role. A quota or catalog fallback, the repair and a merge resolution are the `-2`, `-3` logs beside it ``
+   `` (log_path), so after a fallback this file is the refused session and the diff is in `-2`. ``
+2. forge/README.md:118: replace `` `Session: <lane>/sessions/<cycle>-<role>.log` (the builder log under the state dir) `` with `` `Session: [lane<k>/]sessions/<cycle>-<role>.log` (the cycle's first builder log under the state dir, no `lane1/` for lane 1; a fallback, repair or merge session is the `-2`, `-3` log beside it) ``.
+
+
 ## PR #243 · 2026-11-17T06:25:48Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
