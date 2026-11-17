@@ -1114,6 +1114,14 @@ class Forge:
             self.log(f"gh {args.split()[0:2]} failed: {r.stderr.strip()[:200]}")
         return r.stdout.strip()
 
+    def session_ref(self, builder: str) -> str:
+        """`lane2/sessions/00032-builder.log` under the state dir (lane 1 has no `lane1/`): the cycle's first session
+        of that role. A quota or catalog fallback, the repair and a merge resolution are the `-2`, `-3` logs beside it
+        (log_path), so after a fallback this file is the refused session and the diff is in `-2`. The cycle number
+        alone is per lane, so a PR saying "cycle 32" named four candidate logs; the lane was only in the ticket's
+        `status:` line."""
+        return str((self.home / "sessions" / f"{self.state['cycle']:05d}-{builder}.log").relative_to(self.base_home))
+
     def pr_open(self, wt: Path, branch: str, ticket: Path, builder: str) -> str:
         if not self.cfg.get("pull_requests", True):
             return ""
@@ -1126,7 +1134,8 @@ class Forge:
         # The PR is the record that outlives this box: state.json keeps 200 history entries per lane and 0 of
         # reflex1's 121 forge PRs say which prompt set or omp release built them (arXiv 2610.40071: the git log
         # "does not show what an AI agent did, which model it used"). Same stamps `status` groups merge rates by.
-        body = (f"Opened by forge `{self.version}` on `{self.harness}` (cycle {self.state['cycle']}). Builder: `{model}`.\n\n"
+        body = (f"Opened by forge `{self.version}` on `{self.harness}` (lane {self.lane}, cycle {self.state['cycle']}, "
+                f"session `{self.session_ref(builder)}`). Builder: `{model}`.\n\n"
                 # says what pr_merge()/land() do (`--merge` or local --no-ff); the body claimed "squash-merges" for 85 landings
                 f"The gate result and the review (its comment names the model) are posted below as comments; "
                 f"forge merges on approval with a merge commit and deletes the branch.\n\n"
@@ -1184,7 +1193,7 @@ class Forge:
         # Read before rebase_onto_main(): its conflict session can run on a fallback model and overwrite
         # last_model[builder]; the trailer names the model that wrote the reviewed diff (cycle()'s built_by).
         model = self.last_model.get(builder, self.cfg["roles"][builder]["model"])
-        trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}"
+        trailer = f"Builder: {model}\nForge: {self.version} on {self.harness}\nSession: {self.session_ref(builder)}"
         for _ in range(3):
             if not self.rebase_onto_main(wt, builder):
                 return "could not bring the branch up to date with main (conflicts the builder could not resolve)"

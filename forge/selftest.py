@@ -347,6 +347,10 @@ with tempfile.TemporaryDirectory() as d:
     check("PR title reaches gh literally", words[words.index("--title") + 1] == "[0001] `tools/x.py`: $(echo pwned) and `agree`")
     body = (f.home / "gh-body.md").read_text()
     check("PR body names the forge version and omp release", f"`{f.version}` on `{f.harness}`" in body, body[:120])
+    ref = f.session_ref("builder")
+    check("PR body names the lane and the builder session log under the state dir",
+          f"(lane {f.lane}, cycle {f.state['cycle']}, session `{ref}`)" in body
+          and re.fullmatch(r"(lane\d+/)?sessions/\d{5}-builder\.log", ref) is not None, body[:160])
     f.pr_comment("http://pr", "**gate: FAIL**\nexport RUNPOD_API_KEY=rpa_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 sha 9f86d081884c7d659a2feaa0c55ad015\nrpa_ ghp_")
     body = (f.home / "gh-body.md").read_text()
     check("a credential-shaped token in PR-bound text is replaced by its issuer; hex and bare prefixes pass",
@@ -618,8 +622,8 @@ with tempfile.TemporaryDirectory() as d:
           why == "" and "landed" not in git("ls-remote --heads origin", repo), why or git("ls-remote --heads origin", repo))
     # The landing merge names the builder model in a trailer: the git log is the record a clone keeps.
     body = git("log -1 --format=%b origin/main", repo)
-    check("the landing merge commit names the builder model and forge version in trailers",
-          "Builder: a/b" in body and f"Forge: {f.version} on " in body, repr(body))
+    check("the landing merge commit names the builder model, forge version and session in trailers",
+          "Builder: a/b" in body and f"Forge: {f.version} on " in body and f"Session: {f.session_ref('builder')}" in body, repr(body))
 
     git(f"worktree add -q -b unpushed {Path(d) / 'wt2'} main", repo)
     (Path(d) / "wt2" / "other.rs").write_text("fn other() {}\n")
