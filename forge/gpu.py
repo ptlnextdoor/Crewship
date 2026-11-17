@@ -10,6 +10,8 @@
 Guards (agents call this unattended, so the guards are the point):
 - Every pod is named forge-<name>-<deadline epoch>; reap kills any forge pod past its deadline,
   and the forge service runs reap on a timer, so a crashed job cannot leave a pod running.
+- `reap --all` (the loop's deadline step) is refused when FORGE_ROLE is set: a lane shares the account
+  with the other lanes and would end their running jobs.
 - --hours is capped by GPU_MAX_HOURS (default 3) and the job's estimated cost by GPU_BUDGET_USD
   minus what forge pods already spent (ledger in ~/.local/state/forge/gpu-ledger.jsonl).
 - Refuses when the account balance is below GPU_MIN_BALANCE (default 2 USD).
@@ -180,6 +182,12 @@ def main() -> None:
             print(p["id"], p["name"], p.get("desiredStatus"), p.get("costPerHr"))
         print(f"forge spend so far: ${spent():.2f}")
     elif a.action == "reap":
+        # A lane (FORGE_ROLE set by forge.py) shares the RunPod account with the other lanes: `--all` would end
+        # their running jobs. Only the loop's deadline step runs it; the timer and a lane reap past-deadline pods.
+        if a.all and os.environ.get("FORGE_ROLE"):
+            sys.exit("gpu: reap --all refused inside a forge lane: it terminates every forge pod, the other lanes' running "
+                     "jobs included. Your own pod ends when its job returns or at --hours; `gpu.py reap` (no --all) "
+                     "terminates only pods past their deadline.")
         reap(a.all)
     elif a.action == "balance":
         print(f"${balance():.2f}, forge spend so far ${spent():.2f}")

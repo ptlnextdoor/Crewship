@@ -769,6 +769,11 @@ check("gpu pod names carry a deadline epoch", 'f"forge-{a.name}-{deadline}"' in 
 check("gpu has a budget cap", "GPU_BUDGET_USD" in gsrc and "over budget" in gsrc)
 check("gpu terminates in a finally block", "finally:" in gsrc and "terminate(pod" in gsrc)
 check("gpu reap exists", callable(getattr(gpu, "reap", None)))
+# The refusal must come before any RunPod call: run with a lane's FORGE_ROLE and no key, expect exit 1 and no traceback.
+rr = subprocess.run([sys.executable, str(ROOT / "gpu.py"), "reap", "--all"], capture_output=True, text=True,
+                    env={k: v for k, v in os.environ.items() if k != "RUNPOD_API_KEY"} | {"FORGE_ROLE": "builder", "HOME": tempfile.mkdtemp()})
+check("gpu reap --all refuses inside a lane", rr.returncode == 1 and "refused inside a forge lane" in rr.stderr
+      and "Traceback" not in rr.stderr, rr.stderr[-300:])
 
 # 6. Prompts must keep the rules the loop depends on.
 b = (ROOT / "prompts/builder.md").read_text()
