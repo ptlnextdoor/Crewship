@@ -1499,6 +1499,55 @@ with tempfile.TemporaryDirectory() as d:
     check("a reviewer's restored file, scratch and commit do not reach land()",
           at_land == [("", f.reviewed[0], "new\n")], repr(at_land))
 
+# 22b. Every push, PR and merge names the lane's branch, not HEAD. A session that detached HEAD (`git checkout <sha>`
+# for a baseline, a reviewer reading one commit) and committed after that left those commits off the branch; the
+# push is silent because the branch did not move (r/ClaudeCode 1xylnge, 2026-11-17). The branch behind HEAD is
+# fast-forwarded before anything is pushed; a HEAD the branch is not behind fails the attempt with the reason.
+with tempfile.TemporaryDirectory() as d:
+    origin, repo = Path(d) / "origin.git", Path(d) / "repo"
+    git(f"init -q --bare -b main {origin}", Path(d))
+    git(f"clone -q {origin} {repo}", Path(d))
+    (repo / "tickets").mkdir()
+    (repo / "tickets/0001-t.md").write_text("status: open\n\n# t\n")
+    (repo / "tickets/0002-u.md").write_text("status: open\n\n# u\n")
+    (repo / "src.txt").write_text("old\n")
+    (repo / "gate.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "gate.sh").chmod(0o755)
+    git("add -A", repo); git("commit -qm base", repo); git("push -q origin main", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\nmin_queue=1\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    f.plan = lambda: None
+    at_land: list = []
+
+    def build_past_a_detach(role, prompt, cwd, timeout_min=None):
+        if role == "reviewer":
+            return 0, "VERDICT: APPROVE"
+        (cwd / "src.txt").write_text("new\n"); git("commit -qam work", cwd)
+        git("checkout -q --detach", cwd)                       # a subagent or a baseline checkout
+        (cwd / "src.txt").write_text("newer\n"); git("commit -qam more", cwd)   # off the branch
+        return 0, ""
+
+    f.agent = build_past_a_detach
+    f.land = lambda wt, branch, tid, builder: (at_land.append((git("symbolic-ref --short HEAD", wt).strip(), git(f"rev-parse {branch}", wt) == git("rev-parse HEAD", wt), (wt / "src.txt").read_text())), "")[1]
+    f.cycle()
+    check("commits a session made on a detached HEAD are on the branch before it is pushed",
+          len(at_land) == 1 and at_land[0][0].startswith("forge/") and at_land[0][1:] == (True, "newer\n"), repr(at_land))
+
+    def build_then_go_back(role, prompt, cwd, timeout_min=None):
+        (cwd / "src.txt").write_text("new\n"); git("commit -qam work", cwd)
+        git("checkout -q --detach HEAD~1", cwd)                # HEAD at the base: the branch is not behind it
+        (cwd / "stray.txt").write_text("probe\n")
+        return 0, ""
+
+    f.agent = build_then_go_back
+    at_land.clear()
+    f.cycle()
+    note = (repo / "tickets/0002-u.md").read_text()
+    check("a session that left HEAD behind the branch fails the attempt by name, nothing landed",
+          not at_land and "status: retry" in note and "left HEAD detached at" in note and "not on forge/" in note, note[:400])
+
 # 23. `forge status` prints a 95% interval beside each version's merge rate. Agent pass rates move 2-6 points
 # between identical reruns (arXiv 2602.07150), so a bare 3/4 next to 10/16 reads as a difference it is not.
 # reflex1's 85/122 must read 61-77%; 0/0 (a version with no attempt yet) must not divide.
