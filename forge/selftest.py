@@ -791,6 +791,7 @@ check("builder reruns an earlier Must change line before coding to it; the revie
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
 check("builder is told never to reach origin; forge pushes and lands", "`git push`" in b and "reaches `origin`" in b and "Forge pushes this branch" in b)
 check("builder previews a computed delete target before running it", "replaced by `echo` or `ls -d`" in b and "`-print0 | xargs -0`" in b)
+check("builder measures a speed number's `before` itself on the branch point in the same build", "is a pair you measured yourself" in b and "`git checkout origin/main...HEAD -- <the files you changed>`" in b and "same build profile" in b)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
 check("pr audit traces a rule a PR adds to a prompt against the cases the older rules in it already handled", "A rule the diff adds to `forge/prompts/*.md`" in a and "give different answers" in a and "flips a case the older rule had right" in a)
