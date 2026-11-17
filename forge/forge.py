@@ -1115,9 +1115,11 @@ class Forge:
         return r.stdout.strip()
 
     def session_ref(self, builder: str) -> str:
-        """`lane2/sessions/00032-builder.log` under the state dir: the session that wrote the reviewed diff
-        (log_path gives repairs and merge resolutions `-2`, `-3`). The cycle number alone is per lane, so a PR
-        saying "cycle 32" named four candidate logs; the lane was only in the ticket's `status:` line."""
+        """`lane2/sessions/00032-builder.log` under the state dir (lane 1 has no `lane1/`): the cycle's first session
+        of that role. A quota or catalog fallback, the repair and a merge resolution are the `-2`, `-3` logs beside it
+        (log_path), so after a fallback this file is the refused session and the diff is in `-2`. The cycle number
+        alone is per lane, so a PR saying "cycle 32" named four candidate logs; the lane was only in the ticket's
+        `status:` line."""
         return str((self.home / "sessions" / f"{self.state['cycle']:05d}-{builder}.log").relative_to(self.base_home))
 
     def pr_open(self, wt: Path, branch: str, ticket: Path, builder: str) -> str:
