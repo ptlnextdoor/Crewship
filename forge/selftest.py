@@ -402,9 +402,12 @@ with tempfile.TemporaryDirectory() as d:
     why = f.land(wt, "land", "0001-x", "builder")
     check("landing survives main moving during the gate", why == "" and git("show origin/main:PROGRESS.md", repo) == "both\n", why or "not landed")
     # The first pass rebased cleanly (nothing posted); the second landed the conflict session's "both", which
-    # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced.
+    # no reviewer saw. One comment, naming the reviewed commit, the new line and the line it replaced, and a
+    # headline counting main's own line ("main", the other lane's) that the resolution removed.
     check("a conflict resolved after the review posts the lines the reviewer never saw",
           len(comments) == 1 and "abc123" in comments[0] and "+both" in comments[0] and "+branch" in comments[0], str(comments))
+    check("the comment counts main's lines the resolution removed",
+          len(comments) == 1 and "**1 line(s) main has are removed" in comments[0] and "-main" in comments[0], str(comments))
     # 4e. The post-rebase gate is skipped only when the landing tree is the gated commit's, give or take tickets/
     # (another lane's claim/done commits): a lane landing code on main gates again.
     runs: list[int] = []
