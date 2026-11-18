@@ -993,7 +993,7 @@ class Forge:
     # Measured over reflex1 main: `AGENTS.md` has 2 commits, +40 lines and 0 deleted, and no builder commit
     # deletes more than 3 lines of any memory file (the 3 larger prunes are steward commits, another path),
     # so half the file is far outside anything on record and a rule-26 correction stays well under it.
-    CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
+    CONTEXT_FILES = ("AGENTS.md",)
 
     def instruction_rewrite(self, cwd: Path, ticket_text: str, rev: str = "origin/main...HEAD") -> list[str]:
         """Root agent-context files this branch rewrites rather than corrects: at least 10 lines deleted and
