@@ -2,6 +2,49 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #255 · 2026-11-18T11:25:55Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #255 forge: refuse a diff that switches off a gate lint the ticket does not name
+What it changes: The PR adds `lint_silencing()` (forge.py:940-984). This pre-gate guard fails an attempt when the branch adds `#[allow(...)]`/`#[expect(...)]`, a `Cargo.toml` lint set to `"allow"`, or a `clippy.toml`/`rustfmt.toml` line, unless the ticket contains the lint name. `cycle()` calls it on the builder path (1405) and the repair path (1463). builder.md:12 gets one sentence about it, and selftest.py gets section 2d' (5 checks) plus a ninth entry in the "failed git diff raises" list.
+
+Findings:
+- info forge/forge.py:958-984,1405,1463 I traced the guard end to end. It reads `git diff -U0 origin/main...HEAD` in the lane's own worktree with `check=True` and writes no shared state, so two lanes cannot collide. A failed diff raises `RuntimeError`. The `cycle()` handler (1548) then closes the PR and re-raises, and `finally` removes the worktree. That is the same path that `test_tampering()` uses. Ticket text gets to `re.search` only through `re.escape`, never to a shell. `rev` is a constant. Both calls come after `touched_protected()` and before `gate()`. The PR does not change `gate.sh`, reviewer.md, the protected paths, `recover()`, `discard_strays()`, quota fallback, timeouts, the PR and merge flow, or `gpu.py`. `python3 forge/selftest.py` on the PR tree: 220 ok, rc 0.
+- info forge/prompts/builder.md:12, forge/selftest.py:85,90 No layer is removed. In a word diff, builder.md:12 is the old line plus one inserted sentence. The selftest tuple keeps the 8 earlier guards, adds `lint_silencing`, and the expected count goes from 8 to 9.
+- medium forge/prompts/builder.md:12 + forge/forge.py:964 Added-rule trace. The older rule on the same step is builder.md:12, "Make the code pass the checks; never make the checks pass the code", and also `bprompt()`'s "make it pass again without weakening it". Case: the ticket says "clippy 1.92 flags clippy::needless_range_loop in gemm.rs and the gate fails on main; fix it", and the diff adds `#[allow(clippy::needless_range_loop)]`. Before the merge, rule 12 says to fix the code. After the merge, `lint_silencing()` returns `[]` for it (probe in a scratch repo). The new sentence says the check "fails the attempt unless the ticket names that lint", and the builder can read that as permission. Reviewer step 4 also accepts "the ticket naming it", so only reviewer step 2 can still stop the suppression. A ticket names a lint mostly to ask for a fix, so the flip hits exactly the tickets that name one. The old answer was correct.
+- medium forge/forge.py:964 The waiver is a bare whole-word match, so lint names that are common words get waived by ordinary tickets. reflex1 ticket 0004's Done when line reads "`cargo clippy --workspace --all-targets -- -D warnings` clean". With that text, `#![allow(warnings)]` gives `[]`, and with any other ticket it is refused. `all` is a whole word in 81 of reflex1's 140 tickets (text above `## forge`), so `[lints.clippy] all = "allow"` passes for those tickets. On clippy 0.1.100 I checked that both `#![allow(warnings)]` and `[lints.clippy] all = "allow"` turn a `-D warnings` failure (needless_range_loop) into rc 0. For the same kind of switch, `test_tampering()` waives only when the ticket writes the marker (`#[ignore`), not when it contains a word.
+- medium forge/forge.py:972 `LINT_SILENCE` scans every file in the diff. `test_tampering()` limits its scan to `-- '*.rs' '*.py'`. Probe: a PROGRESS.md line that quotes `#[allow(clippy::type_complexity)]` returns `['PROGRESS.md: #[allow(clippy::type_complexity)]']`, and a LEARNINGS.md lesson does the same. The refusal text goes into the ticket's `## forge` note, and the retry builder reads it. Rules 24-25 then tell that builder to write a PROGRESS.md entry and a LEARNINGS.md lesson. A retry that quotes the refused attribute loses a second builder session for text that silences nothing.
+- low forge/forge.py:954-984 The new prose says these shapes are "checked mechanically", but the guard does not catch all of them. Each probe below returned `[]`. (1) An attribute list that rustfmt wraps after `#[allow(`. (2) The second lint in `#[allow(dead_code, clippy::all)]` when the ticket contains "dead_code". (3) `#[cfg_attr(all(), allow(clippy::all))]`. (4) `type_complexity = 'allow'`, which is also rc 0 under clippy. (5) `[lints] clippy = { all = "allow" }`. (6) The existing `#[allow(clippy::type_complexity)]` line edited to add a second lint. (7) One removed `#[allow(X)]` that cancels five added ones in other files, because `gone` is a set keyed on the attribute text with no file and no count. (8) An existing `clippy.toml` with one value changed. Reviewer step 4 still covers all of these, so no older layer gets weaker. They are gaps in the new layer: fix each one when an attempt shows it.
+- low forge/README.md (not in the diff) Each other pre-gate guard has a row in the safeguard table (`invisible_chars()`, `secrets()`, `msg_secrets()`, `fetch_exec()` at README:104-107). This PR adds no row. The fixer cannot touch README.md, so the owner must add the row later.
+- low forge/forge.py:958,962 Slop: no caller passes `rev`, but the docstring describes it. The PR copied it from `fetch_exec()`, where the same parameter is also unused.
+- low forge/forge.py:951 The comment lets `#[rustfmt::skip]` through because it "hides no error, only hand formatting". The guard still refuses a new `rustfmt.toml`, which also changes only formatting. This is inconsistent but does not block.
+- info sibling #248 (builder.md:12): #248 and #255 each insert a sentence after "never make the checks pass the code." The PR that lands second gets a text conflict. The rules do not contradict, because #248 covers a test that contradicts the ticket and #255 covers lints. Neither text needs a change apart from the rebase.
+- info siblings #181 and #196 (forge.py `land()`): each adds the pre-gate guards to `land()` after a conflict resolution. Neither calls `lint_silencing()`, because both are older than it. Whichever of them lands after #255 should add the call. That PR changes, not #255.
+- info PR body claims: "220 checks, all passed" is true. "One hit in reflex1 main" is true on the local clone (627 commits there, not 639). The hit is `f50870d`, ticket 0085, which landed after review. With this PR, that legitimate attempt would have failed once, and the body states this cost.
+
+Change needed: Change the waiver rule once, the same way in code, prompt and selftest. A waiver needs the ticket to write the suppression itself, and the attribute scan reads Rust files only.
+1. forge/forge.py:972-975, in `lint_silencing()`, replace
+```
+            if m := self.LINT_SILENCE.search(line):
+                lint, what = m["lint"], f"#[{m['kind']}({m['lint']})]"
+            elif f.endswith("Cargo.toml") and (m := self.LINT_TOML.match(line[1:])):
+                lint, what = m["lint"], f"lint {m['lint']} set to allow"
+```
+with
+```
+            if f.endswith(".rs") and (m := self.LINT_SILENCE.search(line)):
+                lint, what = f"{m['kind']}({m['lint']}", f"#[{m['kind']}({m['lint']})]"
+            elif f.endswith("Cargo.toml") and (m := self.LINT_TOML.match(line[1:])):
+                lint, what = f"allow({m['lint']}", f"lint {m['lint']} set to allow"
+```
+and in the docstring at 959-960 replace "unless the ticket names that lint (as unrequested_deps() takes a crate the ticket names)" with "unless the ticket writes that suppression (`allow(<lint>)`, as test_tampering() needs the ticket to write `#[ignore`)".
+2. forge/prompts/builder.md:12: replace "fails the attempt unless the ticket names that lint, so fix the code clippy points at" with "fails the attempt unless the ticket itself writes that suppression (`allow(<lint>)`, `expect(<lint>)` or the config file's name). A ticket that names a lint as the one to fix waives nothing, so fix the code clippy points at".
+3. forge/selftest.py section 2d': in the comment at 216 replace "unless the ticket names that lint" with "unless the ticket writes that suppression". After line 219 add `(repo / "PROGRESS.md").write_text("- attempt 1 was refused for `#[allow(clippy::too_many_arguments)]`; a params struct now\n")` and keep the expected `got` list at 225-226 unchanged. Replace the check at 227-228 with `check("the ticket writing each suppression waives it", f.lint_silencing(repo, "keep `#[allow(clippy::type_complexity)]`, `#[expect(dead_code)]` and `allow(unwrap_used)`; add clippy.toml") == [])` followed by `check("a ticket naming a lint as the one to fix waives nothing", len(f.lint_silencing(repo, "fix clippy::type_complexity, dead_code and unwrap_used; clippy.toml")) == 3)`. At 232 change the ticket text `"dead_code is expected here"` to ``"`#[expect(dead_code)]` is expected here"``.
+I applied exactly this to a scratch copy of the PR tree. Selftest: 221 ok, rc 0. With the change, the PROGRESS.md and LEARNINGS.md probes return `[]`. The ticket-0004 `#![allow(warnings)]` probe, the `all = "allow"` probe and the named-to-fix probe are refused. A ticket that writes `#![allow(warnings)]` waives it.
+
+
 ## PR #254 · 2026-11-18T10:21:43Z · MERGE · risk low · gate pass · merged
 
 Verdict: MERGE
