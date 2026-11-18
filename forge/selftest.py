@@ -232,6 +232,24 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "notes.md").write_text("work\n")
     git("add -A", repo); git("commit -qm work", repo)
     check("a member main added after the branch point is not a drop", f.test_tampering(repo, "Fix the parser.") == [])
+    # 2e'''''. `autotests = false` added to a crate manifest is refused: it takes that crate's whole `tests/`
+    # directory out of `cargo test --workspace` with no `.rs` line changed and no member dropped. The ticket
+    # naming the key waives it; another manifest edit beside it passes.
+    git("reset -q --hard origin/main", repo)
+    # Under `pkg/`, not `crates/`: this manifest stays on main for every later check, and the prune_target case
+    # below writes a root manifest with `members = ["crates/*"]` that cargo would then try to load.
+    (repo / "pkg/reflex-cpu").mkdir(parents=True, exist_ok=True)
+    (repo / "pkg/reflex-cpu/Cargo.toml").write_text('[package]\nname = "reflex-cpu"\nedition = "2021"\n')
+    git("add -A", repo); git("commit -qm crate", repo); git("push -q -f origin work2:main", repo)
+    (repo / "pkg/reflex-cpu/Cargo.toml").write_text('[package]\nname = "reflex-cpu"\nedition = "2021"\nautotests = false\n[dependencies]\ncandle-core = "0.9"\n')
+    git("add -A", repo); git("commit -qm off", repo)
+    got = f.test_tampering(repo, "Fix the parser.")
+    check("autotests = false added to a crate manifest is refused", got == ["pkg/reflex-cpu/Cargo.toml: adds autotests = false, dropping the crate's tests/ from the gate's run"], str(got))
+    check("the ticket naming the key waives it", f.test_tampering(repo, "set `autotests = false` and declare the test targets by hand") == [])
+    git("reset -q --hard origin/main", repo)
+    (repo / "pkg/reflex-cpu/Cargo.toml").write_text('[package]\nname = "reflex-cpu"\nedition = "2021"\n[dependencies]\ncandle-core = "0.9"\n')
+    git("add -A", repo); git("commit -qm dep", repo)
+    check("a manifest edit that leaves the key alone passes", f.test_tampering(repo, "Fix the parser.") == [])
     # 2d'. A gate lint switched off instead of satisfied (`#[allow]`, `#[expect]`, a Cargo.toml lint set to allow,
     # a new clippy.toml/rustfmt.toml) is refused unless the ticket writes that suppression; `#[rustfmt::skip]`, which hides
     # no error, passes, and a suppression the branch only moves between files nets to zero.
