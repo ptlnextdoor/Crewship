@@ -82,12 +82,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo), lambda: f.fetch_exec(repo, "")):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo), lambda: f.fetch_exec(repo, ""), lambda: f.lint_silencing(repo, "")):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 8, str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 9, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not. The files every
     # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class. A second
@@ -212,6 +212,33 @@ with tempfile.TemporaryDirectory() as d:
     check("the ticket naming the file or a directory from the fixture root waives it", f.test_tampering(repo, "regenerate ~/Dev/r/bench/fixtures/forward with dump_forward.py; core/tests/fixtures/states.json is replaced by the digest") == [])
     check("the ticket naming only the directory above the fixture root does not", len(f.test_tampering(repo, "touch bench/ and core/tests/")) == 2)
     check("a ticket naming a sibling fixture path does not waive this one", len(f.test_tampering(repo, "train on `bench/fixtures/reflex/sample`")) == 2)
+    # 2d'. A gate lint switched off instead of satisfied (`#[allow]`, `#[expect]`, a Cargo.toml lint set to allow,
+    # a new clippy.toml/rustfmt.toml) is refused unless the ticket names that lint; `#[rustfmt::skip]`, which hides
+    # no error, passes, and a suppression the branch only moves between files nets to zero.
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text("#[allow(clippy::type_complexity)]\n#[test]\nfn one() {}\n#[rustfmt::skip]\n#[expect(dead_code)]\n#[test]\nfn two() {}\n")
+    (repo / "Cargo.toml").write_text('[package]\nname = "x"\n[lints.clippy]\nunwrap_used = { level = "allow" }\n')
+    (repo / "clippy.toml").write_text("too-many-arguments-threshold = 20\n")
+    git("add -A", repo); git("commit -qm silence", repo)
+    got = f.lint_silencing(repo, "status: open\n# x\nFix the parser.\n")
+    check("allow, expect, a Cargo.toml allow and a new clippy.toml are refused; rustfmt::skip is not",
+          got == ["Cargo.toml: lint unwrap_used set to allow", "clippy.toml: adds clippy.toml",
+                  "src/a.rs: #[allow(clippy::type_complexity)]", "src/a.rs: #[expect(dead_code)]"], str(got))
+    check("the ticket naming each lint waives it",
+          f.lint_silencing(repo, "keep `clippy::type-complexity`, dead-code and unwrap-used; add clippy.toml") == [])
+    check("a lint named only in a ## forge note is still refused",
+          "src/a.rs: #[allow(clippy::type_complexity)]" in f.lint_silencing(repo, "x\n\n## forge t (retry)\n['src/a.rs: #[allow(clippy::type_complexity)]']"))
+    check("a ticket naming one lint does not waive the others",
+          f.lint_silencing(repo, "dead_code is expected here") == ["Cargo.toml: lint unwrap_used set to allow", "clippy.toml: adds clippy.toml",
+                                                                   "src/a.rs: #[allow(clippy::type_complexity)]"])
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text("#[allow(clippy::type_complexity)]\n#[test]\nfn one() {}\n")
+    git("add -A", repo); git("commit -qm base-allow", repo); git("push -q -f origin work2:main", repo)
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n")
+    (repo / "src/b.rs").write_text("#[allow(clippy::type_complexity)]\n#[test]\nfn two() {}\n")
+    git("add -A", repo); git("commit -qm move-allow", repo)
+    check("a suppression moved to another file is no finding", f.lint_silencing(repo, "") == [])
+
     # 2e'. A line the branch adds with a bidi control, zero-width or tag character is refused with the file and the
     # code point; emoji (variation selector, joiner) and lines the branch removes are not.
     git("reset -q --hard origin/main", repo)
