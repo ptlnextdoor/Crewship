@@ -999,6 +999,23 @@ with tempfile.TemporaryDirectory() as d:
     rc.run()
     check("a MERGE WITH CHANGE is pinned to the revision the fixer pushed, not the audited one",
           len(merges) == 1 and "--match-head-commit f1xf1xf1xf1x" in merges[0], str(merges))
+    # 9e. Which reviewer wrote a verdict is not in the record: MODEL and THINKING come from the environment
+    # (REVIEW_MODEL, REVIEW_THINKING), so two audits a minute apart can be two different reviewers and all 251
+    # audits on record read the same. The verdict dict carries it, so pr*.json and the PR_AUDIT.md header say
+    # who decided; a dict from before this change still records, as "unknown reviewer".
+    r2 = load("reviewctl_9e", ROOT / "reviewctl.py")  # 9's rc has audit() and record() stubbed out
+    r2.STATE, r2.REPO, r2.log = Path(d), Path(d), lambda m: None
+    r2.MODEL, r2.THINKING = "vendor/model-x", "xhigh"
+    r2.sh = lambda cmd, **k: subprocess.CompletedProcess(cmd, 0, "deadbeefcafe", "")
+    v = r2.audit({"number": 32, "headRefName": "b", "files": []})
+    check("the audit records which reviewer produced the verdict",
+          v.get("model") == "vendor/model-x:xhigh", str(v.get("model")))
+    (Path(d) / "forge").mkdir(exist_ok=True)
+    r2.record({**v, "gate": "pass", "action": "merged"})
+    r2.record({"pr": 33, "at": "t", "verdict": "MERGE", "risk": "low", "audit": "a"})
+    entries = (Path(d) / "forge/PR_AUDIT.md").read_text()
+    check("the in-repo audit header names the reviewer, and an older record says so",
+          "· vendor/model-x:xhigh\n" in entries and "· unknown reviewer\n" in entries, entries[:400])
 
 # 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
 # stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the
