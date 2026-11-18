@@ -154,12 +154,13 @@ def gate(pr: dict) -> tuple[bool, str]:
         sh(f"git worktree remove --force {wt}; git branch -D pr-{n} 2>/dev/null")
 
 
-def fix(pr: dict, v: dict) -> tuple[bool, str]:
+def fix(pr: dict, v: dict) -> tuple[bool, str, str]:
     """Apply the one edit the audit named, on the PR's own branch, then push it.
 
     Only for MERGE WITH CHANGE: the audit already said a single concrete edit makes this
     landable. The fixer may touch only the files the PR already touches, so it cannot grow
-    into a second, unreviewed change. The result is re-gated and re-audited next pass.
+    into a second, unreviewed change. The result is re-gated and re-audited next pass. The third
+    value is the sha this pushed, the revision the gate then runs on and the merge is pinned to.
     """
     n = pr["number"]
     branch = pr["headRefName"]
@@ -168,7 +169,7 @@ def fix(pr: dict, v: dict) -> tuple[bool, str]:
     sh(f"git worktree remove --force {wt} 2>/dev/null; rm -rf {wt}")
     r = sh(f"git fetch -q origin {branch} -f && git worktree add -q -B fixbr-{n} {wt} origin/{branch}")
     if r.returncode:
-        return False, f"could not check out {branch}: {r.stderr[-300:]}"
+        return False, f"could not check out {branch}: {r.stderr[-300:]}", ""
     try:
         pf = STATE / f"pr{n}.fix.md"
         pf.write_text(
@@ -187,15 +188,16 @@ def fix(pr: dict, v: dict) -> tuple[bool, str]:
         if sh("git status --porcelain", cwd=wt).stdout.strip():
             sh("git add -A && git -c user.email=f@f -c user.name=reviewctl commit -qm 'reviewctl: apply the change the audit required'", cwd=wt)
         if not sh(f"git log --oneline origin/{branch}..HEAD", cwd=wt).stdout.strip():
-            return False, "the fixer changed nothing"
+            return False, "the fixer changed nothing", ""
         stray = [f for f in sh(f"git diff --name-only origin/{branch}..HEAD", cwd=wt).stdout.split() if f not in files]
         if stray:
-            return False, f"the fixer touched files outside the PR: {stray}"
+            return False, f"the fixer touched files outside the PR: {stray}", ""
         # No selftest here: gate() runs base's selftest on the merged result right after this.
         u = sh(f"git push -q origin HEAD:{branch}", cwd=wt)
         if u.returncode:
-            return False, f"could not push the fix: {u.stderr[-300:]}"
-        return True, sh(f"git log --oneline origin/{branch}..HEAD", cwd=wt).stdout.strip() or "pushed"
+            return False, f"could not push the fix: {u.stderr[-300:]}", ""
+        return (True, sh(f"git log --oneline origin/{branch}..HEAD", cwd=wt).stdout.strip() or "pushed",
+                sh("git rev-parse HEAD", cwd=wt).stdout.strip())
     finally:
         sh(f"git worktree remove --force {wt}; git branch -D fixbr-{n} 2>/dev/null")
 
@@ -254,11 +256,16 @@ def run() -> None:
         elif bad:
             v["action"] = f"left open: touches {bad} (owner decides)"
         elif v["verdict"] == "MERGE" and landable:
-            m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch")
+            # `--match-head-commit`: moved() read the head before gate(), and gate() takes minutes, so without
+            # the pin a push that lands while the gate runs is what `gh pr merge` squashes - code no audit read
+            # and no gate ran. GitHub refuses the merge when the head is not this sha; the PR stays open and the
+            # next pass audits the new head, since previous() is keyed by it. Nothing on record needed it (0 of
+            # 249 audits saw a moved head), and it costs one flag.
+            m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch --match-head-commit {v['sha']}")
             v["action"] = "merged" if m.returncode == 0 else f"merge failed: {m.stderr[-200:]}"
         elif v["verdict"] == "MERGE WITH CHANGE" and landable:
             # Apply the named edit, then merge: the next pass re-audits the pushed result.
-            ok2, detail = fix(pr, v)
+            ok2, detail, fixed = fix(pr, v)
             if not ok2:
                 v["action"] = f"left open: fixer could not apply the change ({detail})"
             else:
@@ -266,7 +273,7 @@ def run() -> None:
                 if not ok3:
                     v["action"] = f"left open: gate failed after the fix ({gout[-200:]})"
                 else:
-                    m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch")
+                    m = sh(f"gh pr merge {n} -R {GH_REPO} --squash --delete-branch --match-head-commit {fixed}")
                     v["action"] = f"fixed and merged ({detail})" if m.returncode == 0 else f"fixed, merge failed: {m.stderr[-200:]}"
         elif v["verdict"] == "REJECT" and v["risk"] in ("none", "low"):
             cf = STATE / f"pr{n}.close.md"
