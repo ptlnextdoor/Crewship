@@ -843,18 +843,19 @@ class Forge:
     # valid at detection, 1,955 were Postgres connection strings and 116 MongoDB URIs, the largest live bucket);
     # a value that starts with `$`, `{`, `<`, `%`, `(` or `\`, quoted or not, is a reference or a placeholder and
     # passes (a quoted literal does not), so does `mysql -p<pass>`, which is also the prompt flag. `jwt`: a signed
-    # token, header and payload both base64url of a JSON object (`eyJ`), the shape a coding agent's own login takes
-    # where no issuer prefix exists (`~/.codex/auth.json` holds an OAuth `id_token`, `~/.gemini/settings.json` a
-    # token file), and the files scanners now ask web servers for by name (tin.computer, 2026-11-18: one scanner's
-    # AI-tool path list grew from 4 to 26 paths in five weeks, `.codex/auth.json` and `.claude/.credentials.json`
-    # among them); OAuth tokens and JWTs were 12.0% of 710 secrets found across 545 repositories (gitxpose,
-    # IJSRNSC 2026). An Anthropic OAuth token carries the `sk-ant-` prefix and matched already. Measured over
-    # every tracked file: reflex1 main (2c39a79, 627 commits) has no match on any pattern here, and this repo
-    # matches only on this pattern's own line and on selftest's fixtures.
+    # token, header and payload both base64url of a JSON object (`eyJ`), matched only where a run of base64url
+    # characters starts (a start at each `eyJ` inside a run reads the rest of the run again: 5.5 s for one 120 KB
+    # line of `eyJ`), the shape a coding agent's own login takes where no issuer prefix exists (`~/.codex/auth.json`
+    # holds an OAuth `id_token`), and the files scanners now ask web servers for by name (tin.computer, 2026-11-18:
+    # one scanner's AI-tool path list grew from 4 to 26 paths in five weeks, `.codex/auth.json` and
+    # `.claude/.credentials.json` among them); OAuth tokens and JWTs were 12.0% of 710 secrets found across 545
+    # repositories (gitxpose, IJSRNSC 2026). An Anthropic OAuth token carries the `sk-ant-` prefix and matched
+    # already. Measured over every tracked file: reflex1 main (2c39a79, 627 commits) has no match on any pattern
+    # here, and in this repo `jwt` matches only selftest's fixtures.
     SECRET = re.compile(r"(?P<aws>AKIA[0-9A-Z]{16})|(?P<pem>-----BEGIN [A-Z ]*PRIVATE KEY-----)|(?P<github>gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{22,})"
                         r"|(?P<anthropic>sk-ant-[A-Za-z0-9_-]{32,})|(?P<openai>sk-proj-[A-Za-z0-9_-]{32,})|(?P<runpod>rpa_[A-Za-z0-9]{32,})"
                         r"|(?P<slack>xox[bpas]-[0-9A-Za-z-]{10,})|(?P<stripe>sk_live_[0-9a-zA-Z]{24,})|(?P<google>AIza[0-9A-Za-z_-]{35})|(?P<huggingface>hf_[A-Za-z0-9]{34})"
-                        r"|(?P<jwt>eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
+                        r"|(?P<jwt>(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"
                         r"|(?P<password>(?:PGPASSWORD=|MYSQL_PWD=|sshpass -p ?)['\"]?[^\s'\"$<{%(\\]{8,}|Authorization: Bearer [A-Za-z0-9._~+/=-]{20,}"
                         r"|://[A-Za-z0-9._-]*:[^\s'\"$<{%(\\:@/]{8,}@[A-Za-z0-9.-]+\.(?:[a-z]{2,}|[0-9]{1,3}))")
 
