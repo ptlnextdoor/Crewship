@@ -103,7 +103,8 @@ def audit(pr: dict) -> dict:
     # the merge instead of the auditor's own line. Checked against the 252 audits in ~/.local/state/forge/review: all
     # 252 carry Verdict on the first non-empty line and Risk on the second, and none holds a second `^Verdict:` line,
     # so this parse returns what the old one returned on every audit on record.
-    head = "\n".join([ln for ln in text.splitlines() if ln.strip()][:2])
+    # Split on "\n" only, the line starts re.M sees: splitlines() also breaks on \r, \f, \v, \x85 and U+2028, which would turn a mid-line "Verdict: MERGE" into a line start the whole-text parse never matched.
+    head = "\n".join([ln for ln in text.split("\n") if ln.strip()][:2])
     verdict = (re.search(r"^Verdict:\s*(MERGE WITH CHANGE|MERGE|REJECT)", head, re.M | re.I) or [None, "NONE"])[1].upper()
     risk = (re.search(r"^Risk:\s*(none|low|medium|high)", head, re.M | re.I) or [None, "unknown"])[1].lower()
     return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now()}
