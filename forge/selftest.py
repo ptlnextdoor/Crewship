@@ -1044,6 +1044,19 @@ with tempfile.TemporaryDirectory() as d:
     entries = (Path(d) / "forge/PR_AUDIT.md").read_text()
     check("the in-repo audit header names the reviewer, and an older record says so",
           "· vendor/model-x:xhigh\n" in entries and "· unknown reviewer\n" in entries, entries[:400])
+    # 9f. The fixer's commit is pushed to a public repository and squashed in without a second audit, and it is
+    # written by a yolo session holding the owner's environment. The builder path refuses credential shapes in
+    # the diff and in the message before its push; this path pushed unscanned. The scan reads both, names the
+    # issuer only, and a hit leaves the PR open for the owner.
+    key = "rpa_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+    in_diff = f"+++ b/forge/forge.py\n@@\n+RUNPOD = \"{key}\"\n-gone = 1\n"
+    in_msg = f"deadbeefcafe\nreviewctl: apply the change\n\nran with RUNPOD_API_KEY={key}\n\0"
+    check("a credential the fixer added to a line is found, with its issuer and file",
+          rc.leaks(in_diff, "") == ["forge/forge.py: runpod"], str(rc.leaks(in_diff, "")))
+    check("a credential in the fix commit's message is found too",
+          rc.leaks("", in_msg) == ["deadbeef (commit message): runpod"], str(rc.leaks("", in_msg)))
+    check("a key already on the branch, or one a line removes, is not the fix's doing",
+          rc.leaks(f"+++ b/a.py\n@@\n-K = \"{key}\"\n X = 1\n", "cafe\nplain message\n\0") == [], "")
 
 # 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
 # stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the
