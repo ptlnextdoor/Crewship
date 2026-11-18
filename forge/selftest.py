@@ -311,23 +311,28 @@ with tempfile.TemporaryDirectory() as d:
     # 2e''. A line the branch adds with a credential-shaped token is refused with the file and issuer before the
     # push; a bare hex string, a key the branch removes and the key's prefix alone are not. A password typed into
     # a command or a connection string (empty user, IP host) is refused too; a `$VAR`, `{placeholder}`, `<token>`
-    # or short value in the same place is not.
+    # or short value in the same place is not. A signed token with no issuer prefix (a coding agent's own
+    # `auth.json` login) is refused by its `eyJ<header>.eyJ<payload>.<signature>` shape; a string that only
+    # starts with `eyJ`, or whose payload is not base64url of a JSON object, is not.
     (repo / "src/a.rs").write_text("const K: &str = \"AKIAIOSFODNN7EXAMPLE\";\n#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
-    (repo / "NOTES.md").write_text("-----BEGIN RSA PRIVATE KEY-----\nsha 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\nrpa_ sk-ant- ghp_ hf_\n"
+    (repo / "NOTES.md").write_text("-----BEGIN RSA PRIVATE KEY-----\nsha 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\nrpa_ sk-ant- ghp_ hf_ eyJ\n"
                                    "PGPASSWORD=$PGPASSWORD psql\nsshpass -p \"${PASS}\" ssh\nAuthorization: Bearer <token>\npostgres://u:{secret}@127.0.0.1/db\nhttps://user:token@github.com/o/r.git\n"
-                                   "redis://:$REDIS_PASSWORD@cache.example.com:6379\nmongodb://root:<password>@10.0.0.5/db\n")
+                                   "redis://:$REDIS_PASSWORD@cache.example.com:6379\nmongodb://root:<password>@10.0.0.5/db\neyJhbGciOiJIUzI1NiJ9.abcdefghij.klmnopqrst\n")
     (repo / "run.sh").write_text("PGPASSWORD=hunter2hunter2 psql -h db.example.com\n")
     (repo / "env.sh").write_text("export HF_TOKEN=hf_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ\n")
     (repo / "deploy.md").write_text("sshpass -p 'Sup3rSecret!' ssh root@1.2.3.4\ncurl -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefgh.ijklmnop'\npostgres://admin:s3cr3tpass@db.supabase.co:5432/app\n"
                                     "redis://:c4ch3passw0rd@cache.example.com:6379\nmongodb://root:r00tpassw0rd@10.0.0.5:27017/db\n")
+    (repo / "auth.json").write_text("{\"tokens\": {\"id_token\": \"eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9.eyJzdWIiOiJ1c2VyIiwiZXhwIjoxNzk1MDAwMDAwfQ.c2lnbmF0dXJlLXZhbHVlLWhlcmUtMTIz\"}}\n")
     git("add -A", repo); git("commit -qm key", repo)
     got = f.secrets(repo)
-    check("credential-shaped tokens are refused per file with the issuer; hex, bare prefixes and referenced passwords pass", got == ["NOTES.md: pem", "deploy.md: password", "env.sh: huggingface", "run.sh: password", "src/a.rs: aws"], str(got))
+    check("credential-shaped tokens are refused per file with the issuer; hex, bare prefixes and referenced passwords pass", got == ["NOTES.md: pem", "auth.json: jwt", "deploy.md: password", "env.sh: huggingface", "run.sh: password", "src/a.rs: aws"], str(got))
     check("redact replaces a typed password with its class", f.redact("PGPASSWORD=hunter2hunter2 psql -h db.example.com") == "[password redacted] psql -h db.example.com")
     for i, s in enumerate(("PGPASSWORD='hunter2hunter2'", "MYSQL_PWD=hunter2hunter2", "sshpass -p 'Sup3rSecret!'",
                            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.abcdefgh.ijklmnop", "postgres://admin:s3cr3tpass@db.supabase.co",
                            "redis://:c4ch3passw0rd@cache.example.com:6379", "mongodb://root:r00tpassw0rd@10.0.0.5:27017/db")):
         check(f"redact replaces typed-password shape {i}", "[password redacted]" in f.redact(s), f.redact(s))
+    check("redact replaces a signed token with its class",
+          f.redact("id_token=eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9.eyJzdWIiOiJ1c2VyIiwiZXhwIjoxNzk1MDAwMDAwfQ.c2lnbmF0dXJlLXZhbHVlLWhlcmUtMTIz") == "id_token=[jwt redacted]", f.redact("id_token=eyJhbGciOiJSUzI1NiIsImtpZCI6ImFiYyJ9.eyJzdWIiOiJ1c2VyIn0.c2ln"))
     git("push -q -f origin work2:main", repo)
     (repo / "src/a.rs").write_text("#[test]\nfn one() {}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm unkey", repo)
