@@ -212,6 +212,30 @@ with tempfile.TemporaryDirectory() as d:
     check("the ticket naming the file or a directory from the fixture root waives it", f.test_tampering(repo, "regenerate ~/Dev/r/bench/fixtures/forward with dump_forward.py; core/tests/fixtures/states.json is replaced by the digest") == [])
     check("the ticket naming only the directory above the fixture root does not", len(f.test_tampering(repo, "touch bench/ and core/tests/")) == 2)
     check("a ticket naming a sibling fixture path does not waive this one", len(f.test_tampering(repo, "train on `bench/fixtures/reflex/sample`")) == 2)
+    # 2e''''. A crate dropped from the workspace members is refused: its tests leave the gate's run while the
+    # crates that stay still report passing tests, so no other check here sees it. The ticket naming the crate,
+    # by path or by name, waives it; an added member and a member list left alone pass.
+    git("reset -q --hard origin/main", repo)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/reflex-core", "crates/reflex-vision"]\n')
+    git("add -A", repo); git("commit -qm ws", repo); git("push -q -f origin work2:main", repo)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/reflex-core", "crates/reflex-serve"]\n')
+    git("add -A", repo); git("commit -qm drop", repo)
+    got = f.test_tampering(repo, "Fix the parser.")
+    check("a dropped workspace member is refused and an added one is not", got == ["Cargo.toml: drops workspace member crates/reflex-vision the ticket does not name"], str(got))
+    check("the ticket naming the crate waives it", f.test_tampering(repo, "fold reflex-vision into reflex-core") == [])
+    check("the ticket naming the member path waives it", f.test_tampering(repo, "delete `crates/reflex-vision`") == [])
+    check("a ticket naming a different crate does not waive it", len(f.test_tampering(repo, "touch reflex-vision-utils")) == 1)
+    git("reset -q --hard origin/main", repo)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/reflex-core", "crates/reflex-vision"]\nexclude = ["crates/reflex-vision"]\n')
+    git("add -A", repo); git("commit -qm excl", repo)
+    check("a member moved to exclude is the same drop", f.test_tampering(repo, "Fix the parser.") == ["Cargo.toml: drops workspace member crates/reflex-vision the ticket does not name"])
+    git("reset -q --hard origin/main", repo)
+    (repo / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/reflex-core", "crates/reflex-vision", "crates/reflex-policy"]\n')
+    git("add -A", repo); git("commit -qm main-adds", repo); git("push -q -f origin work2:main", repo)
+    git("reset -q --hard HEAD~1", repo)
+    (repo / "notes.md").write_text("work\n")
+    git("add -A", repo); git("commit -qm work", repo)
+    check("a member main added after the branch point is not a drop", f.test_tampering(repo, "Fix the parser.") == [])
     # 2d'. A gate lint switched off instead of satisfied (`#[allow]`, `#[expect]`, a Cargo.toml lint set to allow,
     # a new clippy.toml/rustfmt.toml) is refused unless the ticket writes that suppression; `#[rustfmt::skip]`, which hides
     # no error, passes, and a suppression the branch only moves between files nets to zero.
