@@ -213,10 +213,11 @@ with tempfile.TemporaryDirectory() as d:
     check("the ticket naming only the directory above the fixture root does not", len(f.test_tampering(repo, "touch bench/ and core/tests/")) == 2)
     check("a ticket naming a sibling fixture path does not waive this one", len(f.test_tampering(repo, "train on `bench/fixtures/reflex/sample`")) == 2)
     # 2d'. A gate lint switched off instead of satisfied (`#[allow]`, `#[expect]`, a Cargo.toml lint set to allow,
-    # a new clippy.toml/rustfmt.toml) is refused unless the ticket names that lint; `#[rustfmt::skip]`, which hides
+    # a new clippy.toml/rustfmt.toml) is refused unless the ticket writes that suppression; `#[rustfmt::skip]`, which hides
     # no error, passes, and a suppression the branch only moves between files nets to zero.
     git("reset -q --hard origin/main", repo)
     (repo / "src/a.rs").write_text("#[allow(clippy::type_complexity)]\n#[test]\nfn one() {}\n#[rustfmt::skip]\n#[expect(dead_code)]\n#[test]\nfn two() {}\n")
+    (repo / "PROGRESS.md").write_text("- attempt 1 was refused for `#[allow(clippy::too_many_arguments)]`; a params struct now\n")
     (repo / "Cargo.toml").write_text('[package]\nname = "x"\n[lints.clippy]\nunwrap_used = { level = "allow" }\n')
     (repo / "clippy.toml").write_text("too-many-arguments-threshold = 20\n")
     git("add -A", repo); git("commit -qm silence", repo)
@@ -224,12 +225,12 @@ with tempfile.TemporaryDirectory() as d:
     check("allow, expect, a Cargo.toml allow and a new clippy.toml are refused; rustfmt::skip is not",
           got == ["Cargo.toml: lint unwrap_used set to allow", "clippy.toml: adds clippy.toml",
                   "src/a.rs: #[allow(clippy::type_complexity)]", "src/a.rs: #[expect(dead_code)]"], str(got))
-    check("the ticket naming each lint waives it",
-          f.lint_silencing(repo, "keep `clippy::type-complexity`, dead-code and unwrap-used; add clippy.toml") == [])
+    check("the ticket writing each suppression waives it", f.lint_silencing(repo, "keep `#[allow(clippy::type_complexity)]`, `#[expect(dead_code)]` and `allow(unwrap_used)`; add clippy.toml") == [])
+    check("a ticket naming a lint as the one to fix waives nothing", len(f.lint_silencing(repo, "fix clippy::type_complexity, dead_code and unwrap_used; clippy.toml")) == 3)
     check("a lint named only in a ## forge note is still refused",
           "src/a.rs: #[allow(clippy::type_complexity)]" in f.lint_silencing(repo, "x\n\n## forge t (retry)\n['src/a.rs: #[allow(clippy::type_complexity)]']"))
     check("a ticket naming one lint does not waive the others",
-          f.lint_silencing(repo, "dead_code is expected here") == ["Cargo.toml: lint unwrap_used set to allow", "clippy.toml: adds clippy.toml",
+          f.lint_silencing(repo, "`#[expect(dead_code)]` is expected here") == ["Cargo.toml: lint unwrap_used set to allow", "clippy.toml: adds clippy.toml",
                                                                    "src/a.rs: #[allow(clippy::type_complexity)]"])
     git("reset -q --hard origin/main", repo)
     (repo / "src/a.rs").write_text("#[allow(clippy::type_complexity)]\n#[test]\nfn one() {}\n")

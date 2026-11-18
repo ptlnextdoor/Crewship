@@ -957,7 +957,7 @@ class Forge:
 
     def lint_silencing(self, cwd: Path, ticket_text: str, rev: str = "origin/main...HEAD") -> list[str]:
         """Lines this branch adds that switch a gate lint off rather than fix the code it names, unless the
-        ticket names that lint (as unrequested_deps() takes a crate the ticket names). A suppression the branch
+        ticket writes that suppression (`allow(<lint>)`, as test_tampering() needs the ticket to write `#[ignore`). A suppression the branch
         moves rather than adds nets to zero, so a renamed file or a function carried to another crate passes.
         `rev` is any diff spec."""
         text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")  # a `## forge` note quotes this refusal back
@@ -969,10 +969,10 @@ class Forge:
                 continue
             if line[:1] not in ("+", "-") or line.startswith("---"):
                 continue
-            if m := self.LINT_SILENCE.search(line):
-                lint, what = m["lint"], f"#[{m['kind']}({m['lint']})]"
+            if f.endswith(".rs") and (m := self.LINT_SILENCE.search(line)):
+                lint, what = f"{m['kind']}({m['lint']}", f"#[{m['kind']}({m['lint']})]"
             elif f.endswith("Cargo.toml") and (m := self.LINT_TOML.match(line[1:])):
-                lint, what = m["lint"], f"lint {m['lint']} set to allow"
+                lint, what = f"allow({m['lint']}", f"lint {m['lint']} set to allow"
             elif self.LINT_CONFIG.search(f):
                 lint, what = f.rsplit("/", 1)[-1], f"adds {f.rsplit('/', 1)[-1]}"
             else:
