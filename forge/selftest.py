@@ -881,7 +881,7 @@ check("reviewer is not told to be lenient", "benefit of the doubt" not in r.lowe
 check("reviewer removes each added guard and requires a test to fail", "remove that one check" in r and "require a test to fail" in r)
 check("reviewer checks the diff against existing LEARNINGS entries", "`rg` it for each file" in r and "quotes the entry" in r)
 check("reviewer writes what a complete change must touch before reading the diff", "Before you read the diff below" in r and "never the list against the diff" in r)
-# A dismissal is where an approval rests: 14 of reflex1's 90 approving reviews mark a `Done when` criterion
+# A dismissal is where an approval rests: 8 of reflex1's 90 approving reviews (#42 #47 #75 #87 #88 #97 #107 #117) mark a `Done when` criterion
 # FAIL and then set it aside (measured 2026-11-18 over 123 PRs' review comments; the usual one is `gpu.py list`
 # showing another lane's pod). Sashiko's triage step promotes exactly these "shaky self-dismissals" back for
 # verification and takes no claim or dismissal without code proof (cloud.google.com, 2026-11-18).
