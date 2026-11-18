@@ -107,7 +107,10 @@ def audit(pr: dict) -> dict:
     head = "\n".join([ln for ln in text.split("\n") if ln.strip()][:2])
     verdict = (re.search(r"^Verdict:\s*(MERGE WITH CHANGE|MERGE|REJECT)", head, re.M | re.I) or [None, "NONE"])[1].upper()
     risk = (re.search(r"^Risk:\s*(none|low|medium|high)", head, re.M | re.I) or [None, "unknown"])[1].lower()
-    return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now()}
+    # Which reviewer decided, as asked for (MODEL/THINKING are env overrides), not as served: the session runs
+    # --no-session, so there is no session file to read a resolved model from.
+    return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now(),
+            "model": f"{MODEL}:{THINKING}"}
 
 
 def moved(pr: int, sha: str) -> str:
@@ -211,7 +214,8 @@ def record(v: dict) -> None:
     f = REPO / "forge/PR_AUDIT.md"
     header = "# PR audits\n\nWritten by reviewctl (forge/reviewctl.py). Newest first.\n"
     old = f.read_text().removeprefix(header) if f.exists() else ""
-    entry = f"\n## PR #{v['pr']} · {v['at']} · {v['verdict']} · risk {v['risk']} · gate {v.get('gate')} · {v.get('action', '')}\n\n{v['audit']}\n"
+    entry = (f"\n## PR #{v['pr']} · {v['at']} · {v['verdict']} · risk {v['risk']} · gate {v.get('gate')} · "
+             f"{v.get('action', '')} · {v.get('model', 'unknown reviewer')}\n\n{v['audit']}\n")
     f.write_text(header + Forge.redact(entry) + old)
     sh(f"git add forge/PR_AUDIT.md && git commit -qm 'reviewctl: audit PR #{v['pr']}' && git push -q origin HEAD:{BASE}")
 
