@@ -1274,7 +1274,7 @@ class Forge:
         self.sync_main()
         return True
 
-    def land(self, wt: Path, branch: str, tid: str, builder: str) -> str:
+    def land(self, wt: Path, branch: str, tid: str, builder: str, ticket_text: str) -> str:
         """Bring the branch up to date with main, re-gate, merge (through the PR when there is one). Returns "" or
         why it could not. Main moves while the gate runs (8 to 25 min, four lanes): four approved reflex1 attempts
         in two hours died here on PROGRESS/LEARNINGS conflicts with a lane that landed meanwhile, so a conflict at
@@ -1307,6 +1307,22 @@ class Forge:
             bad = self.secrets(wt) + self.msg_secrets(wt)
             if bad:
                 return f"resolving the conflict with main added credential-shaped tokens {bad}; not pushed."
+            # The same session's other edits were unchecked: these six guards ran on the builder's diff before the
+            # gate and never again, and the gate sees a stripped test or a silenced lint as a pass. Merge-Bench
+            # (Schesch and Ernst, LNCS 2026, 7,938 real conflict hunks) has the best models resolving under 60% of
+            # conflicts correctly, and ConflictBench's calibrated judge accepted 4 of the 5 resolutions that failed
+            # a deterministic structural check, so this commit needs the mechanical checks, not the prompt.
+            # `vulnerable_deps` stays out: its OSV lookup can refuse a landing for an advisory published after the
+            # review, which is not this session's work and would cost the attempt.
+            for run, what in ((lambda: self.unrequested_deps(wt, ticket_text), "added packages to Cargo.lock the ticket does not name"),
+                              (lambda: self.test_tampering(wt, ticket_text), "skipped, deleted or stripped a test, or changed a reference fixture, the ticket does not name"),
+                              (lambda: self.lint_silencing(wt, ticket_text), "switched off a gate lint the ticket does not name"),
+                              (lambda: self.instruction_rewrite(wt, ticket_text), "rewrote an instruction file every later session loads"),
+                              (lambda: self.invisible_chars(wt), "added code points no reader sees"),
+                              (lambda: self.fetch_exec(wt, ticket_text), "added a line that fetches a script and runs it unread")):
+                bad = run()
+                if bad:
+                    return f"resolving the conflict with main {what}: {bad}. Keep the resolution to the conflicting lines."
             # A conflict session's commit is gated, never reviewed: post the +/- lines that differ from the reviewed
             # patch (context shifts on any rebase, so a clean one posts nothing). A `-` line new since the review is
             # a line main has that the resolution took away (another lane's landed work, or main's version of a
@@ -1567,7 +1583,7 @@ class Forge:
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
                 return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
-            why = self.land(wt, branch, tid, builder)
+            why = self.land(wt, branch, tid, builder, ticket.read_text())
             if why:
                 return self.fail(ticket, why)
             done_note = f"Landed by {built_by}, approved by {rev_by}{' (same vendor, no cross-family check)' if kin else ''}." + (f" PR: {self.pr}" if self.pr else "")
