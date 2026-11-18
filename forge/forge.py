@@ -937,6 +937,52 @@ class Forge:
                 out.add(f"{f}: {', '.join(hosts) or 'no fixed host'}")
         return sorted(out)
 
+    # A gate check silenced instead of satisfied. reflex1's gate runs `cargo clippy --workspace --all-targets
+    # -- -D warnings`, so an added `#[allow(...)]` or `#[expect(...)]` attribute, a `Cargo.toml` lint set to
+    # `allow`, or a new `clippy.toml`/`rustfmt.toml` turns a failing gate green without touching the code the
+    # lint names. `.cargo/` and `rust-toolchain.toml` are protected paths already; these are not, and the
+    # gate's own `#[ignore]` grep covers tests only. Builder rule 12 ("make the code pass the checks; never
+    # make the checks pass the code") says this in prose and the reviewer reads the diff after the gate (8 to
+    # 25 min); here it costs seconds. Executable constraints beat prose plus an LLM critic on the same loop:
+    # 88.3% compliance against 67.0% for the instruction file alone and 50.3% for a reflection critic, which
+    # drifted below doing nothing (ContextCov, arXiv 2603.00822, SWE-bench Lite, 300 tasks).
+    # Scanned over reflex1 main (639 commits): one hit, `#[allow(clippy::type_complexity)]` in
+    # crates/reflex-policy/src/lib.rs, no `clippy.toml`, no `rustfmt.toml`, no `[lints]` table, so a ticket
+    # waiver is what a legitimate second one costs. `#[rustfmt::skip]` is left out on purpose: it hides no
+    # error, only hand formatting the author chose (reflex1's one instance, pyjson.rs, is a literal table),
+    # and a guard that fails an attempt for it would have cost a merged commit at no gain.
+    LINT_SILENCE = re.compile(r"#!?\[\s*(?P<kind>allow|expect)\s*\(\s*(?P<lint>[A-Za-z0-9_:]+)")
+    LINT_TOML = re.compile(r"^\s*(?P<lint>[A-Za-z0-9_:-]+)\s*=\s*(?:\"allow\"|\{[^}]*level\s*=\s*\"allow\")")
+    LINT_CONFIG = re.compile(r"(^|/)\.?(clippy|rustfmt)\.toml$")
+
+    def lint_silencing(self, cwd: Path, ticket_text: str, rev: str = "origin/main...HEAD") -> list[str]:
+        """Lines this branch adds that switch a gate lint off rather than fix the code it names, unless the
+        ticket writes that suppression (`allow(<lint>)`, as test_tampering() needs the ticket to write `#[ignore`). A suppression the branch
+        moves rather than adds nets to zero, so a renamed file or a function carried to another crate passes.
+        `rev` is any diff spec."""
+        text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")  # a `## forge` note quotes this refusal back
+        named = lambda n: re.search(rf"(?<![a-z0-9:-]){re.escape(n.lower().replace('_', '-'))}(?![a-z0-9-])", text)
+        out, gone, f = [], set(), ""
+        for line in self.sh(f"git diff -U0 {rev}", cwd=cwd, check=True).stdout.split("\n"):  # `split`, not `splitlines`: test_tampering
+            if line.startswith("+++ "):
+                f = line[6:]
+                continue
+            if line[:1] not in ("+", "-") or line.startswith("---"):
+                continue
+            if f.endswith(".rs") and (m := self.LINT_SILENCE.search(line)):
+                lint, what = f"{m['kind']}({m['lint']}", f"#[{m['kind']}({m['lint']})]"
+            elif f.endswith("Cargo.toml") and (m := self.LINT_TOML.match(line[1:])):
+                lint, what = f"allow({m['lint']}", f"lint {m['lint']} set to allow"
+            elif self.LINT_CONFIG.search(f):
+                lint, what = f.rsplit("/", 1)[-1], f"adds {f.rsplit('/', 1)[-1]}"
+            else:
+                continue
+            if line[:1] == "-":
+                gone.add(what)
+            elif not named(lint):
+                out.append((f, what))
+        return sorted(f"{f}: {w}" for f, w in set(out) if w not in gone)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -1356,6 +1402,9 @@ class Forge:
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
                 return self.fail(ticket, f"diff skips, deletes or strips tests, or changes a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+            bad = self.lint_silencing(wt, ticket.read_text())
+            if bad:
+                return self.fail(ticket, f"diff switches off a gate lint the ticket does not name: {bad}. The gate runs `cargo fmt --check` and clippy at `-D warnings`; fix the code the lint names, or let the ticket name the lint (builder rule on the gate: make the code pass the checks, never the checks pass the code).")
             bad = self.invisible_chars(wt)
             if bad:
                 return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
@@ -1411,6 +1460,9 @@ class Forge:
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests, or changed a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
+                bad = self.lint_silencing(wt, ticket.read_text())
+                if bad:
+                    return self.fail(ticket, f"the repair switched off a gate lint the ticket does not name: {bad}. The gate runs `cargo fmt --check` and clippy at `-D warnings`; fix the code the lint names, or let the ticket name the lint (builder rule on the gate: make the code pass the checks, never the checks pass the code).")
                 bad = self.invisible_chars(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
