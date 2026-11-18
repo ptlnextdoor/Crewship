@@ -954,6 +954,23 @@ with tempfile.TemporaryDirectory() as d:
     rc.run()
     check("a PR standing where the audit found it is gated and decided as before",
           calls == ["audit", "gate"] and acted == ["pass|merged"], f"{calls} {acted}")
+    # 9d. The merge must name the revision the gate passed on. moved() reads the head before gate(), and gate()
+    # takes minutes, so an unpinned `gh pr merge` squashes whatever the head is by then. On the MERGE WITH CHANGE
+    # path (139 of 249 audits on record) the merged revision is never the audited one: fix() pushes a commit, so
+    # the pin is that commit, which is also what gate() then fetched.
+    merges: list[str] = []
+    rc.sh = lambda cmd, **k: (merges.append(cmd) if "gh pr merge" in cmd else None,
+                              subprocess.CompletedProcess(cmd, 0, "OPEN cafecafecafe" if "--json state," in cmd else "newbase", ""))[1]
+    rc.run()
+    check("a MERGE is pinned to the head the audit read",
+          len(merges) == 1 and "--match-head-commit cafecafecafe" in merges[0], str(merges))
+    merges.clear()
+    rc.audit = lambda pr: {"pr": 31, "sha": "cafecafecafe", "verdict": "MERGE WITH CHANGE",
+                           "risk": "low", "audit": "a", "at": "t"}
+    rc.fix = lambda pr, v: (True, "abc1234 fix", "f1xf1xf1xf1x")
+    rc.run()
+    check("a MERGE WITH CHANGE is pinned to the revision the fixer pushed, not the audited one",
+          len(merges) == 1 and "--match-head-commit f1xf1xf1xf1x" in merges[0], str(merges))
 
 # 10. A session takes its vendor out of every role's chain only on the provider's own refusal, which arrives on
 # stderr ("Codex error event: The usage limit has been reached"). An agent's report quotes those words when the
