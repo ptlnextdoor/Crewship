@@ -157,6 +157,28 @@ def gate(pr: dict) -> tuple[bool, str]:
         sh(f"git worktree remove --force {wt}; git branch -D pr-{n} 2>/dev/null")
 
 
+def leaks(diff: str, log: str) -> list[str]:
+    """Credential-shaped tokens the fix commit adds, each as `<where>: <issuer>`.
+
+    The fixer is an agent session at yolo with the owner's environment (RUNPOD_API_KEY, the gh
+    token), and what it writes is pushed to this public repository and squash-merged without a
+    second audit. The builder path refuses the same shapes before its push, in the diff
+    (Forge.secrets) and in the commit message (Forge.msg_secrets); this path scanned neither.
+    One regex for both, so a token refused in a line of code is not waved through in a message.
+    """
+    out, f = set(), ""
+    for line in diff.split("\n"):  # `split`, not `splitlines`, which breaks on \x0b and \u2028 too and would cut a token in half
+        if line.startswith("+++ "):
+            f = line[6:]
+        if line.startswith("+") and (m := Forge.SECRET.search(line)):
+            out.add(f"{f}: {m.lastgroup}")
+    for rec in log.split("\0"):
+        sha, _, msg = rec.partition("\n")
+        if m := Forge.SECRET.search(msg):
+            out.add(f"{sha[:8]} (commit message): {m.lastgroup}")
+    return sorted(out)
+
+
 def fix(pr: dict, v: dict) -> tuple[bool, str, str]:
     """Apply the one edit the audit named, on the PR's own branch, then push it.
 
@@ -195,6 +217,11 @@ def fix(pr: dict, v: dict) -> tuple[bool, str, str]:
         stray = [f for f in sh(f"git diff --name-only origin/{branch}..HEAD", cwd=wt).stdout.split() if f not in files]
         if stray:
             return False, f"the fixer touched files outside the PR: {stray}", ""
+        d, l = (sh(f"git diff -U0 origin/{branch}..HEAD", cwd=wt), sh(f"git log -z --format=%H%n%B origin/{branch}..HEAD", cwd=wt))
+        if d.returncode or l.returncode:
+            return False, f"could not read the fix to scan it: {(d.stderr + l.stderr)[-300:]}", ""
+        if bad := leaks(d.stdout, l.stdout):
+            return False, f"the fix adds credential-shaped tokens {bad}; not pushed", ""
         # No selftest here: gate() runs base's selftest on the merged result right after this.
         u = sh(f"git push -q origin HEAD:{branch}", cwd=wt)
         if u.returncode:
