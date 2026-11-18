@@ -2,6 +2,28 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #266 · 2026-11-18T22:52:54Z · MERGE · risk low · gate pass · merged · anthropic/claude-opus-5-5:xhigh
+
+Verdict: MERGE
+Risk: low
+
+## PR #266 forge: refuse a Cargo.toml that switches off test discovery
+What it changes: `test_tampering()` gets one more read, `git diff -U0 origin/main...HEAD -- '*Cargo.toml'`. It reports each added line that matches `AUTOTESTS_OFF` (`^\+\s*autotests\s*=\s*false\b`) with its file, unless the ticket (the text before `\n## forge`) contains "autotests". selftest.py gets three cases: refused, waived by the ticket, and a manifest edit without the key passes. No prompt or README change.
+Findings:
+- info forge/forge.py:844-849 (PR head 5743468): I traced the call sites. `test_tampering()` runs at both pre-gate points, cycle() base lines 1468 and 1529 (after the repair, before the second gate run). A finding goes through the existing `fail()` messages at 1470/1531. The ticket is charged an attempt, and the retry prompt names the file. `land()` does not run `test_tampering()` after a conflict resolution. That gap exists before this PR. Siblings #258/#196/#181 add the call, and with it this check.
+- info forge/forge.py:845: The command is a fixed string, so ticket text does not get into the shell. `check=True` raises when git fails, as the two other git calls in this function already do (README row 103). The raise reaches cycle()'s handler (base 1620-1637), which closes the PR, removes the worktree and deletes the branch. No new state, lock or shared file. The command only reads the lane's own worktree, so two lanes cannot collide. It spends no quota and no GPU. `out` grows by one short string for each matching added line, so it is bounded by the diff.
+- info: The diff deletes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. The one docstring line it replaces (base forge.py:748) comes back as a superset. No protected path, reviewer input or gate code changes. Builder rule 14 and reviewer steps 3/4 stay as the prose layer. This PR adds a mechanical layer in front of them.
+- low forge/forge.py:740: The regex matches only the bare-key form. I probed it: `+"autotests" = false` (a quoted key, valid TOML) and `+package = { name = "x", autotests = false }` (an inline table) do not match. The shortcut comment does not name these forms. Only reviewer steps 3/4 catch them. This makes the new layer easy to evade, but it does not weaken an existing layer.
+- low forge/forge.py:834-843: The check does not read the same class of switch for unit tests. `[lib] test = false` (and `test = false` under `[[bin]]`/`[[test]]`) drops a target's tests from `cargo test --workspace`. reflex1 origin/main 2c39a79 has 40 of its 77 `#[test]` in `crates/*/src`. The shortcut comment names `[[test]] required-features` but not this. This is a coverage gap, not a regression.
+- low forge/forge.py:848: A false positive is possible. A branch that only re-indents or moves an `autotests = false` line that is already on main gets a report, because `-U0` shows the `+` side. reflex1 has 0 such lines on any ref (`git log -S autotests --all`: 0), and a ticket that names the key waives it.
+- low forge/forge.py:844: The waiver is a substring check. "autotests" anywhere in the planner's text waives the check, a sentence like "do not set autotests" included. This is the same shape as the existing `#[ignore` waiver at base line 750. The `## forge` split keeps out earlier reviews and gate tails, which can quote the key.
+- low forge/forge.py:838 (slop): "no manifest on main sets the key in 9 Cargo.toml commits" has the wrong count. 9 is the number of commits that touch the root `Cargo.toml` on reflex1 main. 16 commits on origin/main touch any `*Cargo.toml`, and 34 do across all refs (the PR body's number, which I checked). Lines 834-837 also repeat the #265 comment just above them (base 814-818). Both are cosmetic.
+- info: I checked the PR body's claims against ~/Dev/reflex1 origin/main 2c39a79. There are 12 `crates/*/tests/*.rs` files across 5 crates, with 37 of the 77 `#[test]`. No manifest has `[[test]]`, `harness`, `test =`, `autotests` or `required-features`. gate.sh runs `cargo test --workspace --quiet` and greps `crates/` for `#[ignore` only, so the bypass the PR describes is real.
+- info forge/selftest.py:235-252: I extracted PR head 5743468 to /tmp and ran `py_compile` and the full `python3 forge/selftest.py`. Result: "forge selftest: all checks passed", and all three new checks print `ok`. The first case would fail without the code change. The comment about the `pkg/` placement is correct: the prune_target case at base line 445 writes `members = ["crates/*"]` in the same repo.
+- info README.md: Row 40 still lists only the `*.rs`/`*.py` counts. It does not list this check or #265's member-drop check. The PR adds no README claim, so no claim is now false.
+- info sibling #235 (forge.py, selftest.py): #235 also edits the `test_tampering()` docstring and its `*.rs` loop (`TAUTOLOGY`). It adds a selftest label `2e''''` that is the same as the label #265 already put on base. The logic is independent and does not contradict or duplicate this PR. The only conflict is text in the docstring (base 740-748). #235 is on a stale base (last update 2026-11-14), so #235 is the side that rebases. #258/#196/#181 call `test_tampering()` in `land()` and add to this check. No other open PR on `forge` reads manifests for test switches.
+
+
 ## PR #265 · 2026-11-18T21:24:05Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed) · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE WITH CHANGE
