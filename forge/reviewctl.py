@@ -97,8 +97,16 @@ def audit(pr: dict) -> dict:
     text = out.read_text() if out.exists() else (p.stdout or "")
     if p.returncode or not text.strip():
         log(f"PR #{n}: audit agent failed (exit {p.returncode}), see {STATE}/pr{n}.omp.log")
-    verdict = (re.search(r"^Verdict:\s*(MERGE WITH CHANGE|MERGE|REJECT)", text, re.M | re.I) or [None, "NONE"])[1].upper()
-    risk = (re.search(r"^Risk:\s*(none|low|medium|high)", text, re.M | re.I) or [None, "unknown"])[1].lower()
+    # Read the verdict only from the first two non-empty lines, the shape prompts/pr_audit.md mandates. The rest of
+    # the file quotes the PR body and its comments, which anyone with a GitHub account can write on this public repo,
+    # and a `Verdict: MERGE` line quoted there is the first match `re.M` finds over the whole text, so it would decide
+    # the merge instead of the auditor's own line. Checked against the 252 audits in ~/.local/state/forge/review: all
+    # 252 carry Verdict on the first non-empty line and Risk on the second, and none holds a second `^Verdict:` line,
+    # so this parse returns what the old one returned on every audit on record.
+    # Split on "\n" only, the line starts re.M sees: splitlines() also breaks on \r, \f, \v, \x85 and U+2028, which would turn a mid-line "Verdict: MERGE" into a line start the whole-text parse never matched.
+    head = "\n".join([ln for ln in text.split("\n") if ln.strip()][:2])
+    verdict = (re.search(r"^Verdict:\s*(MERGE WITH CHANGE|MERGE|REJECT)", head, re.M | re.I) or [None, "NONE"])[1].upper()
+    risk = (re.search(r"^Risk:\s*(none|low|medium|high)", head, re.M | re.I) or [None, "unknown"])[1].lower()
     return {"pr": n, "sha": sha, "verdict": verdict, "risk": risk, "audit": text[-12000:], "at": now()}
 
 
