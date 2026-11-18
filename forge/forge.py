@@ -736,6 +736,9 @@ class Forge:
 
     FIXTURE_DIR = re.compile(r"(^|/)(fixtures?|testdata|golden|__snapshots__|snapshots?)/")
 
+    # `autotests = false` under `[package]`: cargo then builds no target for the crate's `tests/*.rs` files.
+    AUTOTESTS_OFF = re.compile(r"^\+\s*autotests\s*=\s*false\b")
+
     def test_tampering(self, cwd: Path, ticket_text: str) -> list[str]:
         """Tests the branch switches off, drops or strips: an added `#[ignore]`/`pytest.skip` marker, fewer test
         functions, fewer assertion lines than the branch point, or added test functions with no added assertion
@@ -745,7 +748,8 @@ class Forge:
         assertion line, in 627 commits on main, so the prose has held; an agent that deletes the failing test
         instead of fixing the bug is the shape ImpossibleBench, arXiv 2510.20270, measures, and one that keeps
         the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here),
-        and a reference fixture the branch changes or deletes, or a workspace crate it drops, without the ticket naming it."""
+        and a reference fixture the branch changes or deletes, a workspace crate it drops, or a crate manifest it
+        sets `autotests = false` in, without the ticket naming it."""
         text = ticket_text.split("\n## forge")[0].lower()
         skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
         # shortcut: "remove the old test" anywhere in the ticket waives every count, "drop the assert" (within three
@@ -827,6 +831,22 @@ class Forge:
             names = [crate.lower(), crate.lower().rsplit("/", 1)[-1]]
             if not any(re.search(re.escape(n) + r"(?![\w-]|[./][\w-])", text) for n in names):
                 out.append(f"Cargo.toml: drops workspace member {crate} the ticket does not name")
+        # One member keeps its tests out of the gate's run the same way: `autotests = false` in its own manifest
+        # builds no target for its `tests/*.rs`, so those tests never run while every target that stays still
+        # prints `test result: ok. N passed`, no `.rs` line changes for the counts above to read, the crate is
+        # still a workspace member, and `Cargo.toml` is not a protected path (reflex1: 12 files under five
+        # crates' `tests/` hold 37 of the suite's 77 tests, and no manifest on main sets the key in 9 Cargo.toml
+        # commits). The ticket naming the key waives it, as "remove the test" waives a deleted test.
+        # shortcut: a crate that sets the key and declares its test targets by hand in `[[test]]` loses nothing and is
+        # reported anyway, and `[[test]] required-features` gates a target the same way and is not read here, because
+        # `required-features` under `[[bin]]`/`[[example]]` is ordinary and a criterion `[[bench]]` sets `harness = false`
+        # legitimately; read the enclosing table once a manifest here declares a target by hand.
+        if "autotests" not in text:
+            for line in self.sh("git diff -U0 origin/main...HEAD -- '*Cargo.toml'", cwd=cwd, check=True).stdout.split("\n"):
+                if line.startswith("+++ "):
+                    f = line[6:]
+                elif self.AUTOTESTS_OFF.match(line):
+                    out.append(f"{f}: adds autotests = false, dropping the crate's tests/ from the gate's run")
         return out
 
     def ws_members(self, cwd: Path, rev: str) -> set[str]:
