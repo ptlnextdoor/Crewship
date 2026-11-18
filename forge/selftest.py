@@ -171,7 +171,7 @@ with tempfile.TemporaryDirectory() as d:
     # 2e. A test kept but stripped of its assertions is refused (the test stays, the check goes), including the
     # assertions a script makes at column 0; the ticket naming the drop waives it; a rewrite in place nets to zero.
     git("reset -q --hard origin/main", repo)
-    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert_eq!(1, 1);\n    assert!(true);\n}\n#[test]\nfn two() {}\n")
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert_eq!(f(1), 2);\n    assert!(ok());\n}\n#[test]\nfn two() {}\n")
     (repo / "chk.py").write_text("from m import f\nassert f(1) == 2\nassert f(0) == 0\n")
     git("add -A", repo); git("commit -qm asserts", repo); git("push -q -f origin work2:main", repo)
     (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    let _ = 1;\n}\n#[test]\nfn two() {}\n")
@@ -181,13 +181,13 @@ with tempfile.TemporaryDirectory() as d:
     check("the ticket naming the dropped assert waives it", f.test_tampering(repo, "drop the stale asserts in one()") == [])
     check("an assert the ticket keeps does not waive its removal", f.test_tampering(repo, "--drop-no-gas-start: the grid assert is untouched") == ["4 fewer assertion lines than the branch point"])
     git("reset -q --hard origin/main", repo)
-    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert!(1 == 1);\n    debug_assert!(true);\n}\n#[test]\nfn two() {}\n")
+    (repo / "src/a.rs").write_text("#[test]\nfn one() {\n    assert!(f(1) == 2);\n    debug_assert!(ok());\n}\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm rewrite", repo)
     check("an assertion rewritten in place is no finding", f.test_tampering(repo, "") == [])
     # 2e''. A test the branch adds that asserts nothing is refused before the gate: it counts as a test in the
     # gate's `test result:` line and in reviewer step 3 while passing whatever the code does. One assertion added
     # anywhere in the diff passes, so a rewritten assertion beside a new test is not a finding.
-    base = "#[test]\nfn one() {\n    assert_eq!(1, 1);\n    assert!(true);\n}\n#[test]\nfn two() {}\n"
+    base = "#[test]\nfn one() {\n    assert_eq!(f(1), 2);\n    assert!(ok());\n}\n#[test]\nfn two() {}\n"
     git("reset -q --hard origin/main", repo)
     (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    let _ = 1;\n}\n")
     git("add -A", repo); git("commit -qm bare", repo)
@@ -195,9 +195,18 @@ with tempfile.TemporaryDirectory() as d:
     check("a test added with no assertion is refused", got == ["1 added test functions and no added assertion line"], str(got))
     check("the ticket naming an assert drop waives it", f.test_tampering(repo, "drop the stale assert in one()") == [])
     git("reset -q --hard origin/main", repo)
-    (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    assert!(1 == 1);\n}\n")
+    (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    assert!(f(1) == 2);\n}\n")
     git("add -A", repo); git("commit -qm asserting", repo)
     check("a test added with an assertion is no finding", f.test_tampering(repo, "") == [])
+    # 2e'''': an added assertion that cannot fail (same text both sides, a bare `true`) is named and does not
+    # count as the new test's assertion; a ticket cannot waive it.
+    git("reset -q --hard origin/main", repo)
+    (repo / "src/a.rs").write_text(base + "#[test]\nfn three() {\n    assert_eq!(f(1), f(1));\n    assert!(true);\n}\n")
+    (repo / "chk.py").write_text("from m import f\nassert f(1) == 2\nassert f(0) == 0\nx = f(2)\nassert x == x\nassert True, 'reached'\n")
+    git("add -A", repo); git("commit -qm taut", repo)
+    got = f.test_tampering(repo, "Fix the parser.")
+    check("an added assertion that cannot fail is refused and is not the new test's assertion", got == ["chk.py: adds an assertion that cannot fail: assert x == x", "chk.py: adds an assertion that cannot fail: assert True, 'reached'", "src/a.rs: adds an assertion that cannot fail: assert_eq!(f(1), f(1));", "src/a.rs: adds an assertion that cannot fail: assert!(true);", "1 added test functions and no added assertion line"], str(got))
+    check("a ticket naming an assert drop waives the bare test, not the assertion that cannot fail", f.test_tampering(repo, "drop the stale assert in one()") == got[:4])
     # 2e'''. A reference fixture changed or deleted under a fixture directory is refused unless the ticket names the
     # file or a directory of it from the fixture root down; an added fixture and a changed non-fixture file pass.
     git("reset -q --hard origin/main", repo)
