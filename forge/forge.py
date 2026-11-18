@@ -745,7 +745,7 @@ class Forge:
         assertion line, in 627 commits on main, so the prose has held; an agent that deletes the failing test
         instead of fixing the bug is the shape ImpossibleBench, arXiv 2510.20270, measures, and one that keeps
         the test but drops the assertion that fails passed the test count; a test rewritten to assert the opposite nets to zero here),
-        and a reference fixture the branch changes or deletes without the ticket naming it."""
+        and a reference fixture the branch changes or deletes, or a workspace crate it drops, without the ticket naming it."""
         text = ticket_text.split("\n## forge")[0].lower()
         skip_ok = any(m in text for m in ("#[ignore", "pytest.skip", "mark.skip", "unittest.skip"))
         # shortcut: "remove the old test" anywhere in the ticket waives every count, "drop the assert" (within three
@@ -811,7 +811,37 @@ class Forge:
             names = [path] + [path[:i] for i, c in enumerate(path) if c == "/" and i >= root]
             if not any(re.search(re.escape(n.lower()) + r"(?![\w-]|[./][\w-])", text) for n in names):  # a whole path: `bench/fixtures` inside `bench/fixtures/reflex/sample` names nothing
                 out.append(f"{path}: {'deletes' if parts[0][0] == 'D' else 'changes'} a reference fixture the ticket does not name")
+        # A crate dropped from the workspace takes its whole test suite out of the gate's run while every crate
+        # that stays still prints `N passed`, so gate()'s zero-test check (which needs *every* `test result:`
+        # line at 0) does not see it, no `.rs` line changes for the counts above to read, and `Cargo.toml` is
+        # not a protected path (reflex1: 5 members, 77 tests, and its gate runs `cargo test --workspace`).
+        # The ticket naming the crate waives it, as "remove the test" waives a deleted test.
+        # shortcut: a glob member (`crates/*`) is one entry here, so a crate deleted under a glob or excluded from one is invisible, and a member that stays another member's path dependency is reported though cargo still tests it;
+        # compare the directories the globs expand to once a project uses one.
+        # The branch point, not origin/main's tip, as `origin/main...HEAD` is above: main gained a member in 5 of
+        # reflex1's 9 Cargo.toml commits, and against the tip every lane that forked before one of them would
+        # read as dropping it (the three-dot diffs above have the same base, so the guards agree on what is this
+        # branch's work).
+        base = self.sh("git merge-base origin/main HEAD", cwd=cwd, check=True).stdout.strip()
+        for crate in sorted(self.ws_members(cwd, base) - self.ws_members(cwd, "HEAD")):
+            names = [crate.lower(), crate.lower().rsplit("/", 1)[-1]]
+            if not any(re.search(re.escape(n) + r"(?![\w-]|[./][\w-])", text) for n in names):
+                out.append(f"Cargo.toml: drops workspace member {crate} the ticket does not name")
         return out
+
+    def ws_members(self, cwd: Path, rev: str) -> set[str]:
+        """The member paths the root `Cargo.toml` lists under `[workspace]` at `rev`. No root manifest, no
+        `[workspace]` table, or a manifest tomllib cannot read (broken, or TOML 1.1 that cargo accepts) answers
+        the empty set: one unreadable at HEAD reports every base member before the gate runs, one unreadable at
+        the branch point turns the check off."""
+        r = self.sh(f"git show {rev}:Cargo.toml", cwd=cwd)
+        if r.returncode:
+            return set()
+        try:
+            ws = tomllib.loads(r.stdout).get("workspace", {})
+        except tomllib.TOMLDecodeError:
+            return set()
+        return {m.rstrip("/") for m in ws.get("members", [])}  # cargo keeps an explicit member that `exclude` also lists
 
     # Code points a reader does not see and a model does: bidi controls (Trojan Source, Boucher and Anderson 2021:
     # source that reads one way to the reviewer and another to the compiler), zero-width characters and Unicode
