@@ -1683,17 +1683,24 @@ class Forge:
         whole turn away. Stage the paths that exist; a path the role deleted outright is restored there.
         The staged text is pushed to main and to the public repo with no gate, no review and no diff a
         human reads, and every later builder reads PROGRESS.md, LEARNINGS.md and AGENTS.md as instructions
-        (reviewer step 6), so the two checks a builder's branch passes before its first push run here too:
-        a planner or steward turn that stages a credential-shaped token or a code point no reader sees is
-        discarded whole, like a stray edit. Prose in the role prompts is not this check: instructions in a
-        context file hold about two thirds of the time against 88.3% for the same constraints compiled into
-        executable ones (ContextCov, arXiv 2603.00822)."""
+        (reviewer step 6), so the checks a builder's branch passes before its first push run here too:
+        a planner or steward turn that stages a credential-shaped token, a code point no reader sees, or a
+        line that fetches a script and runs it unread is discarded whole, like a stray edit. The last one is
+        the instruction half: a builder session runs at `--approval-mode=yolo` with this box's credentials and
+        reads these files as instructions, so a `curl ... | sh` line committed here is a command the loop
+        hands itself, where the same line in a builder's own diff is already refused (fetch_exec). No waiver:
+        a ticket text waives a host on the builder path, and this path has no ticket, so a legitimate install
+        line in README.md costs the turn (reflex1 main has no match in any tracked file; its three README
+        `curl` lines call localhost and pipe into curl, not out of it). Prose in the role prompts is not this
+        check: instructions in a context file hold about two thirds of the time against 88.3% for the same
+        constraints compiled into executable ones (ContextCov, arXiv 2603.00822)."""
         here = " ".join(p for p in paths.split() if (self.repo / p).exists())
         if here:
             self.sh(f"git add -A {here}")
-        bad = self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}") + self.msg_secrets(self.repo, f"{base}..HEAD")
+        bad = (self.secrets(self.repo, f"--cached {base}") + self.invisible_chars(self.repo, f"--cached {base}")
+               + self.fetch_exec(self.repo, "", f"--cached {base}") + self.msg_secrets(self.repo, f"{base}..HEAD"))
         if bad:
-            self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
+            self.log(f"{msg}: the turn's text carries credential-shaped characters, invisible characters or a fetch-and-run line, discarding: {bad}")
             self.sh(f"git reset -q --hard {base} && git clean -qfd")
             return
         if here:
