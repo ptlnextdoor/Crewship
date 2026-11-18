@@ -816,7 +816,7 @@ class Forge:
         # line at 0) does not see it, no `.rs` line changes for the counts above to read, and `Cargo.toml` is
         # not a protected path (reflex1: 5 members, 77 tests, and its gate runs `cargo test --workspace`).
         # The ticket naming the crate waives it, as "remove the test" waives a deleted test.
-        # shortcut: a glob member (`crates/*`) is one entry here, so a crate deleted under a glob is invisible;
+        # shortcut: a glob member (`crates/*`) is one entry here, so a crate deleted under a glob or excluded from one is invisible, and a member that stays another member's path dependency is reported though cargo still tests it;
         # compare the directories the globs expand to once a project uses one.
         # The branch point, not origin/main's tip, as `origin/main...HEAD` is above: main gained a member in 5 of
         # reflex1's 9 Cargo.toml commits, and against the tip every lane that forked before one of them would
@@ -830,9 +830,10 @@ class Forge:
         return out
 
     def ws_members(self, cwd: Path, rev: str) -> set[str]:
-        """The workspace member paths at `rev`: the crates `cargo test --workspace` runs. A tree with no root
-        manifest, no `[workspace]` table or a manifest that does not parse answers the empty set, so the caller
-        reports only what a readable pair of manifests lost; a manifest broken at HEAD fails the gate itself."""
+        """The member paths the root `Cargo.toml` lists under `[workspace]` at `rev`. No root manifest, no
+        `[workspace]` table, or a manifest tomllib cannot read (broken, or TOML 1.1 that cargo accepts) answers
+        the empty set: one unreadable at HEAD reports every base member before the gate runs, one unreadable at
+        the branch point turns the check off."""
         r = self.sh(f"git show {rev}:Cargo.toml", cwd=cwd)
         if r.returncode:
             return set()
@@ -840,7 +841,7 @@ class Forge:
             ws = tomllib.loads(r.stdout).get("workspace", {})
         except tomllib.TOMLDecodeError:
             return set()
-        return {m.rstrip("/") for m in ws.get("members", [])} - {e.rstrip("/") for e in ws.get("exclude", [])}
+        return {m.rstrip("/") for m in ws.get("members", [])}  # cargo keeps an explicit member that `exclude` also lists
 
     # Code points a reader does not see and a model does: bidi controls (Trojan Source, Boucher and Anderson 2021:
     # source that reads one way to the reviewer and another to the compiler), zero-width characters and Unicode
