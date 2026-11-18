@@ -21,6 +21,8 @@ import datetime as dt
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +43,45 @@ PROMPT = (Path(__file__).parent / "prompts" / "pr_audit.md")
 # push, and the caller pushes from their result. One source for the value (forge.no_push); the shell-quoting
 # is safe because every part is a bare identifier. reviewctl's own git goes through sh(), without it.
 NO_PUSH = " ".join(f"{k}={v}" for k, v in no_push({}).items())
+# A `gh` that only reads, first on the session's PATH. `no_push()` above takes the git push capability off
+# these sessions and its docstring names what it leaves: `gh` still reaches origin. The audit session runs
+# at `--approval-mode=yolo` on a PR body and comments any GitHub account can write on this public repo, so
+# `gh pr merge` from inside it would land a PR without the gate, the risk thresholds, `moved()` or a record
+# in PR_AUDIT.md, and `gh pr comment`/`close` would speak as the owner. prompts/pr_audit.md line 38 forbids
+# all four, which is an instruction on the same substrate as the text attacking it (Parallax, arXiv
+# 2604.12986: prompt-level guardrails stopped none of 280 cases once the reasoning was compromised), so
+# take the capability too. Reads the sessions actually use stay: the prompt names `gh pr diff`, `gh pr view
+# --comments` and `gh pr list`. reviewctl's own gh goes through sh(), without this prefix.
+GH_READ = """#!/bin/sh
+# Written by forge/reviewctl.py. This session reads GitHub; reviewctl merges, comments and closes.
+case "$1 $2" in
+"pr view"|"pr diff"|"pr list"|"pr checks"|"pr status"|"issue view"|"issue list"|"repo view"|"search "*|"--version "|"help "*)
+    exec REAL_GH "$@" ;;
+esac
+echo "forge: 'gh $1 $2' is not available in this session; it may only read (gh pr view/diff/list/checks/status, gh issue view/list, gh repo view, gh search). reviewctl merges, comments and closes from your verdict." >&2
+exit 3
+"""
+
+
+def read_only_gh(d: Path, real: str | None = None) -> str:
+    """`PATH=<d>:$PATH`, with a read-only `gh` written in `d`. Empty when gh is not installed.
+
+    The real gh is resolved here and written into the shim as an absolute path, so the shim cannot
+    find itself. A blocked call exits 3, which the session sees as a failed tool call, not a dead run.
+    """
+    real = real or shutil.which("gh")
+    if not real:
+        return ""
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "gh"
+    f.write_text(GH_READ.replace("REAL_GH", shlex.quote(real)))
+    f.chmod(0o755)
+    return f"PATH={shlex.quote(str(d))}:$PATH"
+
+
+def session_env() -> str:
+    """The env prefix for the two sessions this file starts: no git push, and a gh that only reads."""
+    return f"{NO_PUSH} {read_only_gh(STATE / 'bin')}".strip()
 
 
 def now() -> str:
@@ -92,7 +133,7 @@ def audit(pr: dict) -> dict:
     log(f"PR #{n}: audit with {MODEL}:{THINKING}")
     pf = STATE / f"pr{n}.prompt.md"
     pf.write_text(prompt)
-    p = sh(f"{NO_PUSH} timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
+    p = sh(f"{session_env()} timeout 2400 {OMP} -p --no-session --model={MODEL} --thinking={THINKING} --approval-mode=yolo \"$(cat {pf})\"", timeout=2500)
     (STATE / f"pr{n}.omp.log").write_text(f"exit={p.returncode}\n--- stdout\n{p.stdout}\n--- stderr\n{p.stderr}")
     text = out.read_text() if out.exists() else (p.stdout or "")
     if p.returncode or not text.strip():
@@ -207,7 +248,7 @@ def fix(pr: dict, v: dict) -> tuple[bool, str, str]:
             "made within those files, change nothing and say why.\n\n"
             "Commit with a message that says what the audit asked for and why. Do not push; the caller pushes and runs the gate.\n"
         )
-        p = sh(f"{NO_PUSH} timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
+        p = sh(f"{session_env()} timeout 1200 {OMP} -p --no-session --model={MODEL} --thinking=high --approval-mode=yolo \"$(cat {pf})\"",
                cwd=wt, timeout=1300)
         (STATE / f"pr{n}.fix.log").write_text(f"exit={p.returncode}\n{p.stdout}\n{p.stderr}")
         if sh("git status --porcelain", cwd=wt).stdout.strip():
