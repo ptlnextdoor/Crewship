@@ -1678,7 +1678,8 @@ class Forge:
         a planner or steward turn that stages a credential-shaped token or a code point no reader sees is
         discarded whole, like a stray edit. Prose in the role prompts is not this check: instructions in a
         context file hold about two thirds of the time against 88.3% for the same constraints compiled into
-        executable ones (ContextCov, arXiv 2603.00822)."""
+        executable ones (ContextCov, arXiv 2603.00822). A third check restores any ticket the turn edited that
+        a lane is mid-attempt on; see frozen_tickets()."""
         here = " ".join(p for p in paths.split() if (self.repo / p).exists())
         if here:
             self.sh(f"git add -A {here}")
@@ -1687,10 +1688,36 @@ class Forge:
             self.log(f"{msg}: the turn's text carries credential-shaped or invisible characters, discarding: {bad}")
             self.sh(f"git reset -q --hard {base} && git clean -qfd")
             return
+        frozen = self.frozen_tickets(base)
+        if frozen:
+            self.log(f"{msg}: the turn edited {len(frozen)} ticket(s) a lane is mid-attempt on, restoring: {frozen}")
+            self.sh("git checkout " + shlex.quote(base) + " -- " + " ".join(shlex.quote(f) for f in frozen))
         if here:
             # The message now carries a model id from the config or omp's catalog, so quote it rather than
             # relying on the literal having no shell metacharacter in it.
             self.sh(f"git commit -qm {shlex.quote(msg)} || true")
+
+    def frozen_tickets(self, base: str) -> list[str]:
+        """Staged ticket files that were `status: in_progress` at `base`: a builder lane is mid-attempt on
+        each of them. The ticket is that attempt's whole contract - the builder read it at session start, the
+        reviewer is given it with the diff, and every waiver the pre-gate guards honour (a crate for
+        unrequested_deps, a fixture for test_tampering, a lint for lint_silencing, a file for
+        instruction_rewrite) is read out of it at guard time, after the code is written - so a planner or
+        steward turn that rewrites one moves the contract under a running attempt and can widen a guard for
+        code that already exists. reflex1's main carries 15 such edits in 10 planner commits: 0103 and 0127
+        rewritten title and `## Done when` block included (25 and 33 changed lines), and 0015 and 0026 with
+        their `./gate.sh` criterion replaced. A query that mixes facts from two repository states is the
+        failure arXiv 2611.21616 names for agents that edit the repository they read. Editing an `open`,
+        `retry`, `blocked` or `done` ticket stays allowed: refining the queue is the planner's job."""
+        rel = self.tickets.relative_to(self.repo).as_posix()
+        out = []
+        for f in self.sh(f"git diff --cached --name-only -z {base} -- {shlex.quote(rel)}", check=True).stdout.split("\0"):
+            if not f:
+                continue
+            old = self.sh(f"git show {shlex.quote(f'{base}:{f}')}")
+            if old.returncode == 0 and re.search(r"^status:\s*in_progress\b", old.stdout, re.M):
+                out.append(f)
+        return out
 
     def discard_strays(self, role: str) -> None:
         """Planner and steward may only touch docs/tickets; drop anything else they changed on main."""

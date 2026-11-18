@@ -893,6 +893,46 @@ with tempfile.TemporaryDirectory() as d:
           "local-c" in git("log --oneline --all", repo) and "ours" not in (repo / "PROGRESS.md").read_text(),
           git("log --oneline --all", repo))
 
+# 7b. A planner or steward turn may refine an `open` ticket, but not one a builder lane is mid-attempt on:
+# that ticket is the attempt's contract, and the pre-gate guards read their waivers out of it after the code
+# is written. reflex1's main carries 15 such edits in 10 planner commits (0103 and 0127 rewritten whole, 0015
+# and 0026 with their `./gate.sh` criterion replaced).
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    (repo / "tickets").mkdir(parents=True)
+    live = repo / "tickets/0001-live.md"
+    live.write_text("status: in_progress lane=2\n---\n# live\n- `./gate.sh` passes.\n")
+    held = repo / "tickets/0002-open.md"
+    held.write_text("status: open\n---\n# open\n")
+    (repo / "PROGRESS.md").write_text("base\n")
+    git("init -q -b main", repo); git("add -A", repo); git("commit -qm i", repo)
+    cfg = Path(d) / "c.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\npull_requests=false\n'
+                   f'[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    base = git("rev-parse HEAD", repo).strip()
+    live.write_text("status: in_progress lane=2\n---\n# live, rewritten\n- `cargo test -p x` passes.\n")
+    held.write_text("status: open\n---\n# open, refined\n")
+    (repo / "tickets/0003-new.md").write_text("status: open\n---\n# new\n")
+    (repo / "PROGRESS.md").write_text("steward wrote this\n")
+    f.commit_docs("tickets PROGRESS.md", "forge: planner refills the ticket queue", base)
+    check("a turn's rewrite of a ticket a lane is mid-attempt on is restored",
+          "./gate.sh" in live.read_text() and "rewritten" not in live.read_text(), live.read_text()[:200])
+    check("the same turn's new ticket, open-ticket edit and doc edit are kept",
+          (repo / "tickets/0003-new.md").exists() and "refined" in held.read_text()
+          and "steward wrote this" in (repo / "PROGRESS.md").read_text(), git("show --stat HEAD", repo)[:300])
+    check("the restored ticket is left neither staged nor dirty", not git("status --porcelain", repo).strip(),
+          git("status --porcelain", repo))
+    # A turn whose only ticket edit is the frozen one still commits its docs, and the frozen file is out of it.
+    base = git("rev-parse HEAD", repo).strip()
+    live.write_text("status: in_progress lane=2\n---\n# live, rewritten again\n")
+    (repo / "PROGRESS.md").write_text("steward wrote this too\n")
+    f.commit_docs("tickets PROGRESS.md", "forge: steward update", base)
+    check("the frozen ticket is not in the turn's commit",
+          "0001-live" not in git(f"diff --name-only {base}..HEAD", repo)
+          and "steward wrote this too" in (repo / "PROGRESS.md").read_text(),
+          git(f"diff --name-only {base}..HEAD", repo))
+
 # 8. A free recovery (restart mid-cycle, not counted as an attempt) must not repeat forever. reflex1's ticket
 # 0012 was recovered three times - twice after `./gate.sh timed out after 1800 seconds` - and so spent 6 cycles
 # on 3 counted attempts; 0009 was recovered twice and then merged, so the first two stay free.
