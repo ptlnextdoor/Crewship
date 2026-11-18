@@ -2,6 +2,24 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #256 · 2026-11-18T12:21:50Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #256 reviewctl: record which reviewer produced each verdict
+What it changes: `audit()` adds `"model": f"{MODEL}:{THINKING}"` to the verdict dict, so the reviewer name goes into `pr*.json` through `mark()`. `record()` appends the name to the `PR_AUDIT.md` entry header, or `unknown reviewer` when a dict has no `model` key. Selftest 9e checks both.
+Findings:
+- info forge/reviewctl.py:117-118, 222-223. I traced the new field end to end, and no verdict, gate, merge or protected-path decision reads it. Readers of the verdict dict: `needs_pass` (`gate`, `base`), `run()` (`verdict`, `risk`, `sha`, `action`), `status()` (`verdict`, `action`), `fix()` (`audit`). `record()` puts the name into the header text only. That text goes through `Forge.redact`, and the `sh()` push command interpolates only `v['pr']`. The value comes from the owner's environment and the default in the code, not from PR text, so it opens no injection path. The re-gate path `mark(n, {**prev, "base": base, ...})` (line 248) keeps the name of the auditor who decided, which is correct. `fix()` runs at `--thinking=high` (line 193), but the field names the auditor whose verdict this is, so the label is correct.
+- low forge/reviewctl.py:110-116. The 7-line comment says that "none of the 251 audits on record says which one decided". That is true for `pr*.json` only. `audit()` already logs `PR #n: audit with {MODEL}:{THINKING}` before each session (line 92): `review.log` holds 277 such lines, all `anthropic/claude-opus-5-5:xhigh`. Each GitHub audit comment starts with `**reviewctl** ({MODEL}:{THINKING})` (line 294): there are 255 `pr*.comment.md` files with the same value. The PR adds the name to two stores that did not have it. It does not add information that the system did not have. The comment also cites a Reddit tally and a paper for a one-field change. That rationale belongs in the PR body, which already has it. Also, `forge-review.service` sets no `REVIEW_MODEL` or `REVIEW_THINKING`, so today the field always records the default.
+- info forge/selftest.py:1002-1018. 9e loads a new module instance (`reviewctl_9e`), so the stubs on 9's `rc` stay as they are. The test runs the real `audit()` and `record()` with `sh` stubbed for every call, so no `git`, `gh` or `omp` command runs. Files go only to section 9's tempdir. The test checks wiring and echo only, but it is small and isolated. `gate()` runs base's selftest, so 9e runs for the first time after the merge. To check that it passes, I built the merge of origin/forge 597e6059 and PR head 507e34a3 with `git merge-tree`, archived it to a temp dir, and ran the checks there: `py_compile` ok, `selftest.py` exit 0, 223 ok, 0 FAIL, and both new checks ok. I removed the temp dir and the temp ref after the run.
+- info no deletions. The PR deletes no line from `forge/prompts/*.md`, `forge/selftest.py` or the README safeguard table. It changes no prompt and does not change README. No other code parses the `PR_AUDIT.md` header: grep of `forge/`, `~/.local/bin`, `~/bin` and the user systemd units finds only the writer, and the change only appends to the end of the header line.
+- info siblings. No other open PR on `forge` touches `forge/reviewctl.py`. Twenty-three touch `forge/selftest.py`: #148, 160, 165, 181, 182, 183, 196, 197, 204, 205, 211, 213, 218, 224, 227, 228, 235, 236, 241, 245, 248, 249 and 250. None of their hunks is in section 9. The #249 hunk is in section 10 and is about the forge lane's review-role fallback, which is a different reviewer. No sibling contradicts or duplicates this PR.
+Change needed: In forge/reviewctl.py `audit()`, replace the 7 comment lines above the `return` (lines 110-116, from `# Record which reviewer wrote this verdict.` to `the way forge.session_counts does.`) with these two lines:
+    # Which reviewer decided, as asked for (MODEL/THINKING are env overrides), not as served: the session runs
+    # --no-session, so there is no session file to read a resolved model from.
+
+
 ## PR #255 · 2026-11-18T11:25:55Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed)
 
 Verdict: MERGE WITH CHANGE
