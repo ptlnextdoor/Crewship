@@ -1776,27 +1776,55 @@ with tempfile.TemporaryDirectory() as d:
           f"push={pushed.returncode} force={forced.returncode} read={read.returncode} {read.stderr[-200:]}")
     check("the loop's own push is not caught by it", ours.returncode == 0, ours.stderr[-200:])
 
-# 28b. The sessions reviewctl starts must not be able to write to GitHub: `gh pr merge` from the audit session
-# lands a PR with no gate, no risk threshold and no record, and prompts/pr_audit.md forbidding it is prose on
-# the same substrate as the PR text it audits (reviewctl.read_only_gh). Reads the prompt names must still work.
+# 28b. No session forge or reviewctl starts may write to GitHub: `gh pr merge` from the audit session lands a
+# PR with no gate, no risk threshold and no record, and a lane session's gh login can push `origin main` or
+# open and merge a PR of its own. The prompts forbid it, which is prose on the same substrate as the PR text,
+# repo text and tool output those sessions read (forge.read_only_gh). Reads the prompts name must still work.
 with tempfile.TemporaryDirectory() as d:
-    rc_gh = load("reviewctl_gh", ROOT / "reviewctl.py")
     real = Path(d) / "real-gh"
     real.write_text("#!/bin/sh\necho ran \"$@\"\n"); real.chmod(0o755)
-    prefix = rc_gh.read_only_gh(Path(d) / "bin", str(real))
+    ghdir = forge.read_only_gh(Path(d) / "bin", str(real))
     def gh(args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(f"{prefix} gh {args}", shell=True, capture_output=True, text=True,
+        return subprocess.run(f"PATH={shlex.quote(ghdir)}:$PATH gh {args}", shell=True, capture_output=True, text=True,
                               env={**os.environ, "PATH": os.environ.get("PATH", "")})
     reads = [gh("pr diff 12 -R o/r"), gh("pr view 12 -R o/r --comments"), gh("pr list -R o/r --state open")]
     writes = [gh("pr merge 12 -R o/r --squash"), gh("pr comment 12 -R o/r --body hi"),
               gh("pr close 12 -R o/r"), gh("pr edit 12 -R o/r --base main"),
               gh("api -X POST repos/o/r/merges"), gh("auth token")]
-    check("the audit session's gh reads the PR it audits",
+    check("a session's gh reads the PR it was given",
           all(r.returncode == 0 and r.stdout.startswith("ran ") for r in reads),
           "; ".join(f"{r.returncode} {r.stdout.strip()}{r.stderr.strip()}" for r in reads))
-    check("the audit session's gh cannot merge, comment, close, edit or read the token",
+    check("a session's gh cannot merge, comment, close, edit or read the token",
           all(w.returncode == 3 and "not available" in w.stderr for w in writes),
           "; ".join(f"{w.returncode} {w.stdout.strip()}{w.stderr.strip()[:60]}" for w in writes))
+    check("the shim cannot find itself: the real gh is written in as an absolute path",
+          shlex.quote(str(real)) in (Path(ghdir) / "gh").read_text(), (Path(ghdir) / "gh").read_text()[:200])
+    check("reviewctl's session prefix carries both the push block and the read-only gh",
+          "GIT_CONFIG_KEY_0=remote.origin.pushurl" in (senv_rc := load("reviewctl_gh", ROOT / "reviewctl.py").session_env())
+          and "PATH=" in senv_rc, senv_rc[:200])
+
+# 28c. The same gh goes on the PATH of every session the lane loop starts (builder, reviewer, planner,
+# steward), before the inherited PATH, and forge's own gh runs through sh() without it. Run through
+# _agent_once with a stand-in for omp that prints the PATH it was given, so this checks the env the
+# session really gets, not the helper on its own.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir(); subprocess.run(f"git init -q -b main {repo}", shell=True, check=True)
+    cfg = Path(d) / "t.toml"
+    cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
+    f = forge.Forge(cfg)
+    fake_omp = Path(d) / "omp"
+    fake_omp.write_text('#!/bin/sh\nprintf "%s" "$PATH"\n'); fake_omp.chmod(0o755)
+    real_omp, forge.OMP = forge.OMP, str(fake_omp)
+    try:
+        rc, seen = f._agent_once("builder", "a/b", "high", "p", repo, 1)
+    finally:
+        forge.OMP = real_omp
+    first = seen.split(":")[0]
+    check("a lane session gets the read-only gh first on PATH, and the loop's own env does not",
+          rc == 0 and first == str(f.home / "bin") and (Path(first) / "gh").exists()
+          and str(f.home / "bin") not in f.env["PATH"],
+          f"rc={rc} first={first} env_path={f.env['PATH'][:120]}")
 
 # 29. The done line's turns= and tools= are read from omp's session file: one assistant message per model turn,
 # one toolResult per tool call; user messages, non-message entries and a torn last line count nothing, and a
