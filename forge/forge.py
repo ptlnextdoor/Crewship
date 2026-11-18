@@ -983,6 +983,33 @@ class Forge:
                 out.append((f, what))
         return sorted(f"{f}: {w}" for f, w in set(out) if w not in gone)
 
+    # The root `AGENTS.md` is the one instruction file a builder may edit: rule 26 asks it to correct a line
+    # the code disagrees with. The nested ones are protected by HARNESS_CONFIG above, and the steward's prune
+    # of PROGRESS.md/LEARNINGS.md runs through commit_docs(), not this path. Correcting a line is not
+    # rewriting the file, and every later session loads this one before its first turn, so a rewrite is paid
+    # by every ticket after this one. Delegated document editing is where models damage what they were not
+    # asked to touch: 19 models over 20 edit rounds corrupted an average 25% of the document's content, and
+    # the four re-run with file tools lost a further 6% (DELEGATE-52, arXiv 2604.15597, 52 domains).
+    # Measured over reflex1 main: `AGENTS.md` has 2 commits, +40 lines and 0 deleted, and no builder commit
+    # deletes more than 3 lines of any memory file (the 3 larger prunes are steward commits, another path),
+    # so half the file is far outside anything on record and a rule-26 correction stays well under it.
+    CONTEXT_FILES = ("AGENTS.md", "CLAUDE.md")
+
+    def instruction_rewrite(self, cwd: Path, ticket_text: str, rev: str = "origin/main...HEAD") -> list[str]:
+        """Root agent-context files this branch rewrites rather than corrects: at least 10 lines deleted and
+        more than half the file, unless the ticket names the file. `rev` is any two- or three-dot diff spec;
+        the line count comes from its left side."""
+        text = ticket_text.split("\n## forge")[0].lower()  # a `## forge` note quotes this refusal back
+        base, out = rev.split(".")[0], []
+        for row in self.sh(f"git diff --numstat {rev} -- {' '.join(self.CONTEXT_FILES)}", cwd=cwd, check=True).stdout.splitlines():
+            added, deleted, f = (row.split("\t") + ["", "", ""])[:3]
+            if not deleted.isdigit() or int(deleted) < 10 or f.lower() in text:
+                continue
+            was = len(self.sh(f"git show {base}:{f}", cwd=cwd, check=True).stdout.splitlines())
+            if int(deleted) * 2 > was:
+                out.append(f"{f}: {deleted} of {was} lines deleted, {added} added")
+        return sorted(out)
+
     def main_gated(self) -> str:
         """Subject of the landing merge whose gated tree is local main's, or "". land() gates the rebased branch
         tip and merges it unchanged, so a merge commit whose tree equals its second parent's is a tree the gate
@@ -1405,6 +1432,9 @@ class Forge:
             bad = self.lint_silencing(wt, ticket.read_text())
             if bad:
                 return self.fail(ticket, f"diff switches off a gate lint the ticket does not name: {bad}. The gate runs `cargo fmt --check` and clippy at `-D warnings`; fix the code the lint names, or let the ticket name the lint (builder rule on the gate: make the code pass the checks, never the checks pass the code).")
+            bad = self.instruction_rewrite(wt, ticket.read_text())
+            if bad:
+                return self.fail(ticket, f"diff rewrites an instruction file every later session loads instead of correcting it: {bad}. Correct the lines the code disagrees with and leave the rest (builder rule on a stale `AGENTS.md`); only the ticket naming the file accepts a rewrite.")
             bad = self.invisible_chars(wt)
             if bad:
                 return self.fail(ticket, f"diff adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")
@@ -1463,6 +1493,9 @@ class Forge:
                 bad = self.lint_silencing(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair switched off a gate lint the ticket does not name: {bad}. The gate runs `cargo fmt --check` and clippy at `-D warnings`; fix the code the lint names, or let the ticket name the lint (builder rule on the gate: make the code pass the checks, never the checks pass the code).")
+                bad = self.instruction_rewrite(wt, ticket.read_text())
+                if bad:
+                    return self.fail(ticket, f"the repair rewrites an instruction file every later session loads instead of correcting it: {bad}. Correct the lines the code disagrees with and leave the rest (builder rule on a stale `AGENTS.md`); only the ticket naming the file accepts a rewrite.")
                 bad = self.invisible_chars(wt)
                 if bad:
                     return self.fail(ticket, f"the repair adds code points no reader sees (bidi controls, zero-width or tag characters) {bad}; not allowed. Text the reviewer cannot see is not reviewed; write it out or drop it.")

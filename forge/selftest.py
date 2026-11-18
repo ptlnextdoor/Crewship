@@ -82,12 +82,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo), lambda: f.fetch_exec(repo, ""), lambda: f.lint_silencing(repo, "")):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo), lambda: f.fetch_exec(repo, ""), lambda: f.lint_silencing(repo, ""), lambda: f.instruction_rewrite(repo, "")):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 9, str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 10, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not. The files every
     # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class. A second
@@ -239,6 +239,34 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "src/b.rs").write_text("#[allow(clippy::type_complexity)]\n#[test]\nfn two() {}\n")
     git("add -A", repo); git("commit -qm move-allow", repo)
     check("a suppression moved to another file is no finding", f.lint_silencing(repo, "") == [])
+
+    # 2d''. The root `AGENTS.md` a branch rewrites (at least 10 lines deleted and more than half the file) is
+    # refused unless the ticket names it; the line-level correction rule 26 asks for, and a deletion under the
+    # threshold, pass. The nested copies are protected by 2c above, so this guard only has to see the root one.
+    git("reset -q --hard origin/main", repo)
+    (repo / "AGENTS.md").write_text("".join(f"line {i}\n" for i in range(20)))
+    git("add -A", repo); git("commit -qm agents", repo); git("push -q -f origin work2:main", repo)
+    (repo / "AGENTS.md").write_text("the repo, as this session reads it\n")
+    git("add -A", repo); git("commit -qm rewrite", repo)
+    got = f.instruction_rewrite(repo, "status: open\nFix the parser.\n")
+    check("a wholesale AGENTS.md rewrite is refused", got == ["AGENTS.md: 20 of 20 lines deleted, 1 added"], str(got))
+    check("the ticket naming the file waives it", f.instruction_rewrite(repo, "rewrite AGENTS.md for the new crate layout") == [])
+    check("a rewrite named only in a ## forge note is still refused",
+          f.instruction_rewrite(repo, "x\n\n## forge t (retry)\n['AGENTS.md: 20 of 20 lines deleted, 1 added']") == got, "waived by its own refusal")
+    git("reset -q --hard origin/main", repo)
+    kept = [f"line {i}" for i in range(20)]
+    kept[3] = "the policy crate is crates/reflex-policy"
+    (repo / "AGENTS.md").write_text("\n".join(kept) + "\n")
+    git("add -A", repo); git("commit -qm correct", repo)
+    check("a line-level correction is no finding", f.instruction_rewrite(repo, "") == [])
+    git("reset -q --hard origin/main", repo)
+    (repo / "AGENTS.md").write_text("".join(f"line {i}\n" for i in range(11, 20)) + "nine kept lines above\n")
+    git("add -A", repo); git("commit -qm half", repo)
+    check("eleven of twenty lines deleted is a rewrite", len(f.instruction_rewrite(repo, "")) == 1, str(f.instruction_rewrite(repo, "")))
+    git("reset -q --hard origin/main", repo)
+    (repo / "AGENTS.md").write_text("".join(f"line {i}\n" for i in range(9, 20)))
+    git("add -A", repo); git("commit -qm nine", repo)
+    check("nine lines deleted is under the threshold", f.instruction_rewrite(repo, "") == [])
 
     # 2e'. A line the branch adds with a bidi control, zero-width or tag character is refused with the file and the
     # code point; emoji (variation selector, joiner) and lines the branch removes are not.
