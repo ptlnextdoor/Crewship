@@ -101,7 +101,8 @@ def log(msg: str) -> None:
 
 
 def open_prs() -> list[dict]:
-    r = sh(f"gh pr list -R {GH_REPO} --base {BASE} --state open --json number,title,headRefName,files,additions,deletions,isCrossRepository")
+    # --limit: gh stops at 30 by default, so with 67 open on 2026-11-19 run() and status() saw only the newest 30
+    r = sh(f"gh pr list -R {GH_REPO} --base {BASE} --state open --limit 200 --json number,title,headRefName,files,additions,deletions,isCrossRepository,createdAt")
     return json.loads(r.stdout or "[]")
 
 
@@ -379,16 +380,25 @@ def conflicts(pr: dict) -> str:
     return "conflict: " + " ".join(names) if r.returncode == 1 and names else "?"
 
 
+def age_days(pr: dict) -> int:
+    return (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(pr["createdAt"].replace("Z", "+00:00"))).days
+
+
 def status() -> None:
     """Smallest diff first: patch size is the strongest creation-time predictor of review effort on agent PRs
-    (MSR 2026, 33,707 PRs, AUC 0.96), so the owner's queue starts with what is cheapest to decide."""
+    (MSR 2026, 33,707 PRs, AUC 0.96), so the owner's queue starts with what is cheapest to decide. The header
+    gives the queue's age tail, not its mean: the Harvard/Jellyfish paper (Chen and Stratton, 14 Nov 2026) puts
+    the agent-era merge wait at +56% on the mean with the growth in the tail, and on 2026-11-19 this queue
+    held 67 PRs, median 14 days, oldest 27, which no line here showed."""
     prs = sorted(open_prs(), key=lambda p: p["additions"] + p["deletions"])
-    print(f"{GH_REPO} base={BASE}: {len(prs)} open")
+    ages = sorted(age_days(p) for p in prs)
+    tail = f" · age median {ages[len(ages) // 2]} d · oldest {ages[-1]} d" if ages else ""
+    print(f"{GH_REPO} base={BASE}: {len(prs)} open{tail}")
     for pr in prs:
         marks = sorted(STATE.glob(f"pr{pr['number']}.*.json"))
         last = json.loads(marks[-1].read_text()) if marks else {}
         size = f"{len(pr['files'])}f +{pr['additions']}/-{pr['deletions']}"
-        print(f"  #{pr['number']:>3} {pr['title'][:50]:52s} {size:14s} {last.get('verdict', '-'):6s} "
+        print(f"  #{pr['number']:>3} {pr['title'][:50]:52s} {size:14s} {age_days(pr):>3}d {last.get('verdict', '-'):6s} "
               f"{last.get('action', 'not audited')} · {conflicts(pr)}")
     if (STATE / "review.log").exists():
         print("".join((STATE / "review.log").read_text().splitlines(True)[-6:]))
