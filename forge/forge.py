@@ -737,18 +737,20 @@ class Forge:
 
     def licenses(self, pkgs: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
         """The SPDX licence expression crates.io records for each version (`non-standard` when the crate ships a
-        `license-file` instead). {} on any error, as `osv()`: a lookup that cannot reach the network never costs
+        `license-file` instead). An entry crates.io cannot answer is left out; the others are kept: a lookup that cannot reach the network never costs
         an attempt. One request per crate, a second apart, as crates.io asks."""
         out = {}
-        try:
-            for n, v in pkgs:
-                req = urllib.request.Request(f"https://crates.io/api/v1/crates/{n}/{v}", headers={"User-Agent": "forge (github.com/ptlnextdoor/Crewship)"})
+        for n, v in pkgs:
+            req = urllib.request.Request(f"https://crates.io/api/v1/crates/{n}/{v}", headers={"User-Agent": "forge (github.com/ptlnextdoor/Crewship)"})
+            try:
                 out[(n, v)] = json.load(urllib.request.urlopen(req, timeout=30))["version"].get("license") or "non-standard"
-                time.sleep(1)
-            return out
-        except Exception as e:
-            self.log(f"crates.io licence check skipped ({e})")
-            return {}
+            except urllib.request.HTTPError as e:  # 404: a git or other-registry entry crates.io does not serve
+                self.log(f"crates.io licence lookup failed for {n} {v} ({e})")
+            except Exception as e:
+                self.log(f"crates.io licence check stopped at {n} {v} ({e})")
+                return out
+            time.sleep(1)
+        return out
 
     @classmethod
     def copyleft(cls, expr: str) -> str | None:
