@@ -616,6 +616,13 @@ class Forge:
     # second instruction file in the convention every agent reads: loaded for any session started in its directory,
     # and listed as "read before editing" once `includeWorkspaceTree` is on. The root file stays editable (builder
     # rule 24). reflex1 has exactly one, at the root.
+    # A `build.rs` beside a `Cargo.toml` is the same class from the other side: cargo compiles and runs it before
+    # the crate, in the gate and in the reviewer's own `cargo test`, as the owner's user with the owner's env, and
+    # `unrequested_deps()` sees no lock entry for it. An agent that finds code where a trusted module loads ran
+    # it in 51% of direct and 87% of indirect trials with no prompt attack (arXiv 2610.40716, 15 models, 90 trials).
+    # reflex1 has no build script (0 of 6 Cargo.toml dirs); one a ticket needs is an owner change, like `.cargo/`.
+    # shortcut: a `build = "<path>"` key in Cargo.toml and a `[patch]` table name the same hazard by other paths;
+    # add them to lint_silencing()'s Cargo.toml scan when a reflex1 diff first carries one.
     HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
                                 r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
@@ -631,7 +638,8 @@ class Forge:
         # `-z`: without it git quotes a name holding a non-ASCII byte, `"`, `\` or a control character
         # (`"tickets/caf\303\251.md"`), which matches no prefix below and no `^` anchor in HARNESS_CONFIG (selftest 2c').
         files = self.sh(f"git diff --name-only -z {base}...HEAD", cwd=cwd, check=True).stdout.split("\0")
-        return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)]
+        return [f for f in files if any(f == p or f.startswith(p) for p in self.protected) or self.HARNESS_CONFIG.search(f)
+                or (f.rsplit("/", 1)[-1] == "build.rs" and (cwd / f).parent.joinpath("Cargo.toml").exists())]
 
     def lock_pkgs(self, cwd: Path, rev: str) -> dict[tuple[str, str], list[str]]:
         """Third-party `Cargo.lock` entries at `rev`: (name, version) -> the package names it depends on."""
