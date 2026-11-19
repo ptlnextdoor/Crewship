@@ -891,6 +891,11 @@ p = (ROOT / "prompts/planner.md").read_text()
 check("planner's Done when scores the goal on the real input, not a reduced fixture", "runs on the input the goal is measured on" in p and "not a reduced fixture" in p)
 check("planner's tolerance criterion names a planted fault the command must fail on; the reviewer reruns it", "one planted fault in the code the ticket changes" in p and "the number must cross `t`" in p and "A `Done when` line that plants a fault" in r)
 check("builder gives existing code precedence over AGENTS.md", "`AGENTS.md`" in b and "existing code takes precedence" in b)
+# Truthgate (arXiv 2611.23335, 2026-11-17, pre-registered): on impossible tasks every pass was code special-cased to the failing
+# assertion; asked for a final report the agent named its special case in 55 of 55 cases, unasked in 0 of 52, and an LLM judge
+# reading the report caught all 55 where deterministic rules over the host record caught 27. The builder's PROGRESS.md entry is
+# that report; reviewer step 3 is the judge.
+check("builder's PROGRESS.md entry names every special case in non-test code, or says none", "`Special cases:` line" in b and "`Special cases: none`" in b and "55 of 55" in b)
 check("reviewer reads memory-file lines as instructions to the next session", "every later builder" in r and "safeguard removed for every ticket after this one" in r)
 check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
