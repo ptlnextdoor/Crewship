@@ -733,6 +733,50 @@ class Forge:
         left = {k: [i for i in ids if i.lower() not in text] for k, ids in self.osv(added).items()}
         return sorted(f"{n} {v} ({', '.join(ids)})" for (n, v), ids in left.items() if ids)
 
+    COPYLEFT = re.compile(r"(A?GPL|LGPL|SSPL|EUPL|OSL|CC-BY-SA|CECILL)(-|$)", re.I)
+
+    def licenses(self, pkgs: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
+        """The SPDX licence expression crates.io records for each version (`non-standard` when the crate ships a
+        `license-file` instead). An entry crates.io cannot answer is left out; the others are kept: a lookup that cannot reach the network never costs
+        an attempt. One request per crate, a second apart, as crates.io asks."""
+        out = {}
+        for n, v in pkgs:
+            req = urllib.request.Request(f"https://crates.io/api/v1/crates/{n}/{v}", headers={"User-Agent": "forge (github.com/ptlnextdoor/Crewship)"})
+            try:
+                out[(n, v)] = json.load(urllib.request.urlopen(req, timeout=30))["version"].get("license") or "non-standard"
+            except urllib.request.HTTPError as e:  # 404: a git or other-registry entry crates.io does not serve
+                self.log(f"crates.io licence lookup failed for {n} {v} ({e})")
+            except Exception as e:
+                self.log(f"crates.io licence check stopped at {n} {v} ({e})")
+                return out
+            time.sleep(1)
+        return out
+
+    @classmethod
+    def copyleft(cls, expr: str) -> str | None:
+        """The copyleft licence a crate cannot be used without: `MIT OR GPL-3.0` (or the old `MIT/GPL-3.0`) lets
+        the user take MIT, `MIT AND GPL-3.0` does not. None when some alternative is free of one."""
+        hits = [next((t.strip(" ()") for t in alt.split(" AND ") if cls.COPYLEFT.match(t.strip(" ()"))), None) for alt in re.split(r" OR |/", expr)]
+        return hits[0] if all(hits) else None
+
+    def copyleft_deps(self, cwd: Path, ticket_text: str) -> list[str]:
+        """Crates the branch adds to or bumps in `Cargo.lock` whose licence is copyleft (GPL, AGPL, LGPL, SSPL,
+        EUPL, OSL, CC-BY-SA, CeCILL) with no permissive alternative. The two guards above ask whether the ticket
+        named the crate and whether the version has an advisory, never what licence it carries, and a crate the
+        ticket names pulls its transitive tree in unread; arXiv 2611.23299 (Nov 2026) finds agents that pass the
+        functional check still select or vendor code whose licence the task forbids. Rust links statically, so
+        LGPL binds like GPL here. A ticket naming the licence id waives it, as naming the advisory id does above.
+        shortcut: a `license-file` crate reads `non-standard` and passes, and the project's own licence is not
+        read (a copyleft project needs the waiver on every such ticket); read both through `cargo metadata` if
+        either case lands."""
+        text = ticket_text.split("\n## forge")[0].lower()
+        try:
+            added = self.lock_added(cwd)
+        except LockUnreadable as e:
+            return [str(e)]  # unreachable in cycle(): unrequested_deps reads the same lock first and fails the attempt
+        hits = {k: self.copyleft(lic) for k, lic in self.licenses(added).items()}
+        return sorted(f"{n} {v} ({lic})" for (n, v), lic in hits.items() if lic and lic.lower() not in text)
+
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
     # The lookahead, not `[^-+]`: a class consumes the line's first content character, so an assertion that
@@ -1493,6 +1537,9 @@ class Forge:
             deps = self.vulnerable_deps(wt, ticket.read_text())
             if deps:
                 return self.fail(ticket, f"diff adds or bumps Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
+            deps = self.copyleft_deps(wt, ticket.read_text())
+            if deps:
+                return self.fail(ticket, f"diff adds Cargo.lock entries under a copyleft licence: {deps}. This project is not; use a permissively licensed crate or leave the dependency out; only the ticket naming the licence id accepts one.")
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
                 return self.fail(ticket, f"diff skips, deletes or strips tests, or changes a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
@@ -1554,6 +1601,9 @@ class Forge:
                 deps = self.vulnerable_deps(wt, ticket.read_text())
                 if deps:
                     return self.fail(ticket, f"the repair pinned Cargo.lock entries at a version with a public advisory: {deps}. Pin a fixed version (`cargo update -p <crate> --precise <version>`) or leave the crate at the version main has; only the ticket naming the advisory id accepts one.")
+                deps = self.copyleft_deps(wt, ticket.read_text())
+                if deps:
+                    return self.fail(ticket, f"the repair added Cargo.lock entries under a copyleft licence: {deps}. This project is not; use a permissively licensed crate or leave the dependency out; only the ticket naming the licence id accepts one.")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests, or changed a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
