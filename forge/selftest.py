@@ -1635,12 +1635,12 @@ with tempfile.TemporaryDirectory() as d:
     check("an errored cycle still raises and writes one history entry",
           died and len(f.state["history"]) == before + 1 and last["cycle"] == f.state["cycle"] and last["result"] == "error", str(last))
     check("the errored entry's cause is the exception, first line only",
-          last.get("why", "").startswith("cycle error: TimeoutExpired:") and "\n" not in last["why"], str(last))
+          last.get("why", "").startswith("TimeoutExpired: Command './gate.sh' timed out") and "\n" not in last["why"], str(last))
     with contextlib.redirect_stdout(io.StringIO()) as out:
         f.status()
     row = next(l for l in out.getvalue().splitlines() if l.startswith("merged/attempts by the ticket's attempt number"))
     check("status counts the errored cycle per cause and in the version rate, not as an attempt number",
-          "cycle error: TimeoutExpired: 1" in out.getvalue() and f"{f.version} {f.harness} " in out.getvalue()
+          "TimeoutExpired: Command './gate.sh' 1" in out.getvalue() and f"{f.version} {f.harness} " in out.getvalue()
           and sum(int(n) for n in re.findall(r"#\d+ \d+/(\d+)", row)) == sum(h["result"] != "error" for h in f.state["history"]), out.getvalue())
 
 # 22. The reviewer is told to run the diff's tests against the old code by restoring a source file from

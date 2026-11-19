@@ -1650,7 +1650,7 @@ class Forge:
             # ledger is written by the control plane, as here, not by the model).
             # shortcut: a process killed mid-cycle (systemd restart) records nothing; recover() knows the ticket
             # but not the claim time, so its entry would carry a wrong `secs`. Count `## forge-recover` for those.
-            self.record(tid, "error", f"cycle error: {type(e).__name__}: {str(e).partition(chr(10))[0][:200]}")
+            self.record(tid, "error", f"{type(e).__name__}: {str(e).partition(chr(10))[0][:200]}")
             raise
         finally:
             self.sh(f"git worktree remove --force {wt}")
