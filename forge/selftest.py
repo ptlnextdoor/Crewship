@@ -1614,6 +1614,35 @@ with tempfile.TemporaryDirectory() as d:
           and "approved by c/d." in notes,   # the cross-vendor cycles above keep the plain note
           notes[-300:])
 
+    # 21c. A cycle that dies on an exception (gate timeout, gh or git error) left no history entry: reflex1's
+    # state.json held 122 entries, 0 of them for the 9 interrupted cycles its tickets' `## forge-recover`
+    # notes count, so `status` divided every rate by the attempts that reached a verdict (arXiv 2611.23678).
+    # The entry is `error`, carries the exception as its cause, and is not an attempt in the attempt-number row.
+    (repo / "tickets/0005-w.md").write_text("status: open\n\n# w\n")
+    git("add -A", repo); git("commit -qm t5", repo); git("push -q origin main", repo)
+
+    def build_then_die(role, prompt, cwd, timeout_min=None):
+        raise subprocess.TimeoutExpired("./gate.sh", 1800, output=b"== test\nline 2\n")
+
+    f.agent = build_then_die
+    before = len(f.state["history"])
+    try:
+        f.cycle()
+        died = False
+    except subprocess.TimeoutExpired:
+        died = True
+    last = f.state["history"][-1]
+    check("an errored cycle still raises and writes one history entry",
+          died and len(f.state["history"]) == before + 1 and last["cycle"] == f.state["cycle"] and last["result"] == "error", str(last))
+    check("the errored entry's cause is the exception, first line only",
+          last.get("why", "").startswith("TimeoutExpired: Command './gate.sh' timed out") and "\n" not in last["why"], str(last))
+    with contextlib.redirect_stdout(io.StringIO()) as out:
+        f.status()
+    row = next(l for l in out.getvalue().splitlines() if l.startswith("merged/attempts by the ticket's attempt number"))
+    check("status counts the errored cycle per cause and in the version rate, not as an attempt number",
+          "TimeoutExpired: Command './gate.sh' 1" in out.getvalue() and f"{f.version} {f.harness} " in out.getvalue()
+          and sum(int(n) for n in re.findall(r"#\d+ \d+/(\d+)", row)) == sum(h["result"] != "error" for h in f.state["history"]), out.getvalue())
+
 # 22. The reviewer is told to run the diff's tests against the old code by restoring a source file from
 # origin/main. A reviewer that forgets `git checkout HEAD -- .` left a dirty worktree for land(): the rebase
 # refuses unstaged changes, the merge too when main touched the file, and the conflict session's `git add -A`
