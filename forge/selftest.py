@@ -1031,6 +1031,9 @@ with tempfile.TemporaryDirectory() as d:
     rc.gate = lambda pr: (calls.append("gate"), (True, "ok"))[1]
     rc.run()
     check("a PR that merges cleanly after the base moved gets its audit", "audit" in calls, str(calls))
+    three_days = (rc.dt.datetime.now(rc.dt.timezone.utc) - rc.dt.timedelta(days=3, hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    check("status reads a PR's age in whole days from gh's createdAt",
+          rc.age_days({"createdAt": three_days}) == 3, three_days)
     check("a decided PR is not re-run while its branch stands still",
           not rc.needs_pass({"gate": "pass", "base": "oldbase"}, "newbase")
           and not rc.needs_pass({"gate": "fail", "base": "newbase"}, "newbase")
