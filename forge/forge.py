@@ -1643,6 +1643,14 @@ class Forge:
             # two `./gate.sh timed out after 1800 seconds` cycles, still open with no gate comment.
             if self.pr and self.gh(f"pr view {self.pr} --json state --jq .state") == "OPEN":
                 self.pr_close(self.pr, f"cycle error: {type(e).__name__}: {e}")
+            # The ledger held merged/retry/blocked only: reflex1's state.json has 122 entries and 0 for the 9
+            # interrupted cycles its tickets' `## forge-recover` notes count (2 of them this in-process
+            # TimeoutExpired), so every rate in `status` divided by the attempts that reached a verdict
+            # (arXiv 2611.23678: a loop logging only finished trials left no record of 43 of 50; the paper's
+            # ledger is written by the control plane, as here, not by the model).
+            # shortcut: a process killed mid-cycle (systemd restart) records nothing; recover() knows the ticket
+            # but not the claim time, so its entry would carry a wrong `secs`. Count `## forge-recover` for those.
+            self.record(tid, "error", f"cycle error: {type(e).__name__}: {str(e).partition(chr(10))[0][:200]}")
             raise
         finally:
             self.sh(f"git worktree remove --force {wt}")
@@ -1974,6 +1982,8 @@ class Forge:
         by_first: dict[str, list[int]] = {}
         nth: dict[str, int] = {}
         for h in sorted((h for s in states for h in s.get("history", [])), key=lambda h: h["at"]):
+            if h["result"] == "error":
+                continue  # an interrupted cycle is not an attempt: attempts() reads the ticket's notes, where recover() writes `## forge-recover`, not a failure
             nth[h["ticket"]] = k = nth.get(h["ticket"], 0) + 1
             for t in [by_try.setdefault(k, [0, 0])] + ([by_first.setdefault(h.get("role") or "pre", [0, 0])] if k == 1 else []):
                 t[0] += h["result"] == "merged"
