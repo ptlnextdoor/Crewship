@@ -623,9 +623,13 @@ class Forge:
     # reflex1 has no build script (0 of 6 Cargo.toml dirs); one a ticket needs is an owner change, like `.cargo/`.
     # shortcut: a `build = "<path>"` key in Cargo.toml and a `[patch]` table name the same hazard by other paths;
     # add them to lint_silencing()'s Cargo.toml scan when a reflex1 diff first carries one.
-    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo)(/|$)"
+    # `.vscode/tasks.json` (`runOn: folderOpen`), `.devcontainer/` (`initializeCommand` on the host), `.idea/` startup
+    # tasks, `.envrc` and `mise.toml` run a command when a checkout is opened or entered on the owner's own machine,
+    # which no lane session, gate or reviewer here exercises (Bitdefender, 2026-11-17: 22 repos hijacked coding
+    # agents through `AGENTS.md`, a Claude hook, MCP configs and VS Code tasks). reflex1 and reflex carry none.
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo|\.devcontainer|\.idea)(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
-                                r"|\.?mcp\.json|\.vscode/mcp\.json|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|\.vscode/tasks\.json|\.envrc|\.?mise\.toml|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
                                 r"|/AGENTS\.md$")  # nested only: paths are repo-relative, so the root file has no slash
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
