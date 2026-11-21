@@ -2,6 +2,33 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #274 · 2026-11-21T07:18:53Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed) · anthropic/claude-opus-5-5:xhigh
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #274 forge: refuse a builder diff that adds an editor or shell autorun file
+What it changes: `HARNESS_CONFIG` (forge/forge.py:630-633) adds `.devcontainer/` and `.idea/` as directory components and `.vscode/tasks.json`, `.envrc`, `(.)mise.toml` as file names. `touched_protected()` now fails a branch that adds or edits them. selftest 2c and README row 124 get the same names.
+Findings:
+- info forge/forge.py:630-633 The change only adds alternatives to one class regex. Its three callers are `land()` (1415), the cycle guard (1531) and the repair guard (1595). All three fail closed through `fail()` or a `land()` reason. Claim, `recover()`, `discard_strays()`, quota fallback, timeouts, the process-group kill and PR merge do not change. A probe of every selftest 2c path gives the same answer on base and head, so nothing the base refused now passes.
+- low forge/forge.py:630 A root `.devcontainer.json` is not matched (probe: miss). The devcontainer spec lists `.devcontainer.json` as a valid location (devcontainers/spec, devcontainer-reference.md line 20), with the same `initializeCommand`. The guard that names devcontainer config lets that file through.
+- low forge/forge.py:632 Only `mise.toml`, `.mise.toml` and `.config/mise.toml` match. mise also loads `mise.local.toml`, `.mise.local.toml`, `mise.<env>.toml`, `mise/config.toml`, `.mise/config.toml`, `.config/mise/config.toml` and `conf.d/*.toml` (mise.jdx.dev/configuration.html), and its hooks run on `cd`. The probe misses all of them.
+- low forge/forge.py:630-633 The new names match case-sensitively: `.VSCode/tasks.json`, `.ENVRC` and `.Idea/workspace.xml` pass. The hazard is the owner's checkout. On a case-insensitive APFS volume, a lookup of `.vscode/tasks.json` finds `.VSCode/tasks.json` [INFERENCE: the owner's volume format is not checked]. The old entries target omp on this Linux host, so they must stay case-sensitive. Scope the flag to the new names only.
+- info false positives and quota: `git ls-files` on ~/Dev/reflex1 and ~/code/reflex shows none of the new names, and neither `.gitignore` lists them. mise, direnv and code are not on this host, so no lane tool makes these files. A ticket that needs one fails after one full builder session, up to `max_attempts = 3` (projects/reflex1.toml:8), then goes `blocked` (forge.py:1758). That is the same bounded path as `.cargo/`. planner.md warns about neither (pre-existing).
+- info forge/selftest.py:98-107 The diff deletes 4 lines and adds 6. Each new line is a superset of the old one: the fixture list, the expected-hit set and the expected-miss set keep every old element. No assertion is removed. I ran `python3 forge/selftest.py` on head 08f81c51 in a temp clone: rc 0, 254 ok, 2c passes.
+- info forge/README.md:124 The diff replaces one safeguard row. A word diff shows one insertion after "depth)" and no removed text. No layer is retired.
+- info forge/prompts/*.md No prompt changes. There is no added or deleted rule to cross-check.
+- info sibling #205 edits the same `HARNESS_CONFIG` line and the same selftest 2c lines (it adds `.github/workflows`). The two do not contradict or duplicate each other. They give only a text conflict. #205 is on an older base (its hunk is at forge.py:521, and its selftest has no `build.rs` entries). #205 must rebase and keep both sets of entries. #274 does not change for this. In the other 27 open PRs on `forge` that touch forge.py, selftest.py or README.md, no hunk edits `HARNESS_CONFIG`, `touched_protected()`, selftest 2c or README row 124. #196 names `touched_protected()` in a different README row only.
+- info citation: the Bitdefender 2026-11-17 post names `.vscode/tasks.json` and "22 malicious GitHub links". The comment at forge.py:628 is accurate. I did not check the Pantry Show HN claim in the PR body, because the code does not depend on it.
+- nit forge/README.md:124 The reason for the new class ("no lane session, gate or reviewer here exercises them", Bitdefender) is in the rule column. The "failure it prevents" column still names only session-context injection. Pass 2 found no other slop: the edit is focused, has no try/except, and the comment gives the why.
+Change needed (only for MERGE WITH CHANGE):
+1. forge/forge.py:630: replace `|\.cargo|\.devcontainer|\.idea)(/|$)"` with `|\.cargo|(?i:\.devcontainer|\.idea|\.?mise))(/|$)"`.
+2. forge/forge.py:632: replace `|\.vscode/tasks\.json|\.envrc|\.?mise\.toml|` with `|(?i:\.vscode/tasks\.json|\.devcontainer\.json|\.envrc|\.?mise(\.[^/]+)?\.toml)|`.
+3. forge/selftest.py:99 and :106: add `".devcontainer.json", "mise.local.toml", ".mise/config.toml", "crates/x/.VSCode/tasks.json"` to the fixture list and to the expected-hit set.
+4. forge/README.md:124: change "`.devcontainer/` with `initializeCommand` on the host" to "`.devcontainer/` or `.devcontainer.json` with `initializeCommand` on the host". Change "`mise.toml`" to "mise config (`mise*.toml`, `mise/`, `.mise/`), in any letter case".
+I tested this regex in Python 3.12 against the PR head. It gives the same answer on all 25 selftest 2c paths. It catches 12 gap paths (the names above and their case variants). It matches none of 9 look-alikes, for example `src/idea.rs`, `.ideas/x`, `notmise.toml`, `docs/mise.md`, `src/premise.toml` and `crates/devcontainer/lib.rs`. Old entries stay case-sensitive (`tools/claude.md`, `.Cargo/config` miss). Side effect: any directory named `mise` becomes protected. reflex1 and reflex have none.
+
+
 ## PR #273 · 2026-11-21T00:34:29Z · MERGE · risk low · gate pass · merged · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE
