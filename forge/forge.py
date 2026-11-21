@@ -159,6 +159,46 @@ def no_push(env: dict[str, str]) -> dict[str, str]:
             f"GIT_CONFIG_VALUE_{n}": "forge-pushes-not-sessions://"}
 
 
+# A `gh` that only reads, for the PATH of every session forge and reviewctl start. `no_push()` above takes
+# the git push capability off those sessions and its docstring names what it leaves: `gh` still reaches
+# origin, and this box's gh login can push `origin main` or open and merge a PR with no gate, no review and
+# no record. prompts/builder.md rule 19 says so in its own last sentence ("nothing mechanical refuses that
+# from here"), and prose is the same substrate as the repo text, crate pages and tool output a session reads
+# (Parallax, arXiv 2604.12986: prompt-level guardrails stopped none of 280 cases once the reasoning was
+# compromised), so take the capability too. The reads stay: 83 session logs on this box
+# (~/.local/state/forge/reflex1) show no `gh` call at all from a lane session, and the audit session's prompt
+# names `gh pr diff`, `gh pr view --comments` and `gh pr list`. forge's and reviewctl's own gh run through
+# sh(), without this directory on PATH.
+GH_READ = """#!/bin/sh
+# Written by forge/forge.py. This session reads GitHub; forge and reviewctl push, comment, merge and close.
+case "$1 $2" in
+"pr view"|"pr diff"|"pr list"|"pr checks"|"pr status"|"issue view"|"issue list"|"repo view"|"search "*|"--version "|"help "*)
+    exec REAL_GH "$@" ;;
+esac
+echo "forge: 'gh $1 $2' is not available in this session; it may only read (gh pr view/diff/list/checks/status, gh issue view/list, gh repo view, gh search). forge pushes the branch, opens the PR, comments, merges and closes." >&2
+exit 3
+"""
+
+
+def read_only_gh(d: Path, real: str | None = None) -> str:
+    """Write a read-only `gh` in `d` and return `d` to put first on a session's PATH; "" when gh is absent.
+
+    The real gh is resolved here and written into the shim as an absolute path, so the shim cannot find
+    itself. A blocked call exits 3, which the session sees as a failed tool call, not a dead run. The file
+    is replaced, not truncated in place: a lane rewrites it at every session start while an earlier session
+    may be running it, and os.replace leaves that process on the old inode instead of a half-written script.
+    """
+    real = real or shutil.which("gh")
+    if not real:
+        return ""
+    d.mkdir(parents=True, exist_ok=True)
+    tmp = d / f"gh.{os.getpid()}"
+    tmp.write_text(GH_READ.replace("REAL_GH", shlex.quote(real)))
+    tmp.chmod(0o755)
+    tmp.replace(d / "gh")
+    return str(d)
+
+
 class Forge:
     def __init__(self, cfg_path: Path, lane: int = 1):
         self.cfg_path = cfg_path
@@ -408,13 +448,15 @@ class Forge:
         cmd = [OMP, "-p", f"--session-dir={out.with_suffix('')}", f"--model={model}", f"--thinking={thinking}",
                "--approval-mode=yolo", f"--config={OMP_CONFIG}", f"@{pfile}"]
         self.log(f"agent {role} model={model}:{thinking} cwd={cwd.name}")
+        env = no_push({**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)})
+        if (ghdir := read_only_gh(self.home / "bin")):
+            env["PATH"] = f"{ghdir}:{env['PATH']}"
         try:
             # New session so a timeout kills the whole tree (cargo, rustc, test binaries), not just omp.
             # stdin from /dev/null: `omp -p` waits for EOF on a piped stdin (startup phase readPipedInput) before
             # it reads the prompt, so a loop started over `ssh host forge.py run` would hang every session.
             p = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                 start_new_session=True,
-                                 env=no_push({**self.env, "FORGE_ROLE": role, "FORGE_STATE_DIR": str(self.home)}))
+                                 start_new_session=True, env=env)
             try:
                 so, se = p.communicate(timeout=timeout)
             except subprocess.TimeoutExpired:
