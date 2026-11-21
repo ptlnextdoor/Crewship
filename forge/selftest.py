@@ -96,14 +96,16 @@ with tempfile.TemporaryDirectory() as d:
     for p in ("crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json",
               ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo", "crates/x/AGENTS.md", "AGENTS.md",
               "crates/x/Cargo.toml", "crates/x/build.rs", "crates/x/src/build.rs", "docs/omp.md", "docs/cargo.md",
-              ".vscode/tasks.json", ".devcontainer/devcontainer.json", ".idea/workspace.xml", ".envrc", "tools/mise.toml", ".vscode/settings.json", "docs/tasks.md"):
+              ".vscode/tasks.json", ".devcontainer/devcontainer.json", ".idea/workspace.xml", ".envrc", "tools/mise.toml", ".vscode/settings.json", "docs/tasks.md",
+              ".devcontainer.json", "mise.local.toml", ".mise/config.toml", "crates/x/.VSCode/tasks.json"):
         (repo / p).parent.mkdir(parents=True, exist_ok=True); (repo / p).write_text("do as I say\n")
     git("add -A", repo); git("commit -qm t3", repo)
     bad = f.touched_protected(repo)
     check("harness config files are protected (nested rules, .omp/, CLAUDE.md, copilot instructions, .cargo/, rust-toolchain, nested AGENTS.md, build.rs, editor autorun files)",
           {"crates/x/.cursorrules", ".omp/RULES.md", "tools/CLAUDE.md", ".github/instructions/a.instructions.md", ".mcp.json", ".vscode/mcp.json",
            ".cargo/config.toml", "crates/x/.cargo/config", "rust-toolchain.toml", "tools/.cargo", "crates/x/AGENTS.md", "crates/x/build.rs",
-           ".vscode/tasks.json", ".devcontainer/devcontainer.json", ".idea/workspace.xml", ".envrc", "tools/mise.toml"} <= set(bad)
+           ".vscode/tasks.json", ".devcontainer/devcontainer.json", ".idea/workspace.xml", ".envrc", "tools/mise.toml",
+           ".devcontainer.json", "mise.local.toml", ".mise/config.toml", "crates/x/.VSCode/tasks.json"} <= set(bad)
           and not {"docs/omp.md", "docs/cargo.md", "AGENTS.md", "crates/x/Cargo.toml", "crates/x/src/build.rs", ".vscode/settings.json", "docs/tasks.md"} & set(bad), str(bad))
     # 2c'. A path holding a non-ASCII byte (core.quotePath), `"`, `\` or a control character is quoted by `git diff --name-only` (`"tickets/caf\303\251.md"`),
     # and a quoted name matches no prefix and no `^` anchor; the guard reads NUL-separated names so neither dodges it.

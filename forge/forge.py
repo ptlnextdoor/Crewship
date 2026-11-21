@@ -627,9 +627,9 @@ class Forge:
     # tasks, `.envrc` and `mise.toml` run a command when a checkout is opened or entered on the owner's own machine,
     # which no lane session, gate or reviewer here exercises (Bitdefender, 2026-11-17: 22 repos hijacked coding
     # agents through `AGENTS.md`, a Claude hook, MCP configs and VS Code tasks). reflex1 and reflex carry none.
-    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo|\.devcontainer|\.idea)(/|$)"
+    HARNESS_CONFIG = re.compile(r"(^|/)(\.omp|\.claude|\.codex|\.gemini|\.cursor|\.windsurf|\.agents?|\.opencode|\.clinerules|\.github/instructions|\.github/skills|\.cargo|(?i:\.devcontainer|\.idea|\.?mise))(/|$)"
                                 r"|(^|/)(CLAUDE\.md|GEMINI\.md|\.cursorrules|\.clinerules|\.windsurfrules|\.github/copilot-instructions\.md"
-                                r"|\.?mcp\.json|\.vscode/mcp\.json|\.vscode/tasks\.json|\.envrc|\.?mise\.toml|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
+                                r"|\.?mcp\.json|\.vscode/mcp\.json|(?i:\.vscode/tasks\.json|\.devcontainer\.json|\.envrc|\.?mise(\.[^/]+)?\.toml)|opencode\.jsonc?|rust-toolchain(\.toml)?)$"
                                 r"|/AGENTS\.md$")  # nested only: paths are repo-relative, so the root file has no slash
 
     def touched_protected(self, cwd: Path, base: str = "main") -> list[str]:
