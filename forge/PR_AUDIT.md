@@ -2,6 +2,24 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #273 · 2026-11-21T00:34:29Z · MERGE · risk low · gate pass · merged · anthropic/claude-opus-5-5:xhigh
+
+Verdict: MERGE
+Risk: low
+
+## PR #273 scout prompt: the Never line moves ahead of the steps
+What it changes: Moves the `Never:` line of `forge/prompts/scout.md` from the last line (13) to line 3, after the role sentence and before the setup line and the steps. The words do not change. No other file changes.
+Findings:
+- info forge/prompts/scout.md:3,13 The line moves and its text stays the same. Checked: the sorted lines of the file at base bd3582a0 and at head 29bd24cb are identical (13 lines each, 3,210 bytes at head). The merge-base diff names only this file. The head file has no non-ASCII, bidi or zero-width characters. The PR body says "Same words, no rule added or removed", and that is correct.
+- info forge/prompts/scout.md:13 (deleted) Deleted-line accounting. The old line 13 stopped the scout session from submitting to the PolyTrack leaderboard, touching credentials, changing running systemd units, editing STEERING.md or gate.sh, and spending RunPod money. The identical line at new line 3 now carries all five. No layer is retired. The scout runs from `forge/systemd/forge-scout.service:9` as `omp -p --approval-mode=yolo` with no read-only gh shim and no `no_push` env (both exist only for reviewctl's sessions, `reviewctl.py:45,55-84`). So for the session's own shell actions this line is the only guard, as the body says. `reviewctl.py:40` PROTECTED (`gpu.py`, `systemd/`, `projects/`) only stops reviewctl from merging a scout PR that edits those files. The deleted blank line 12 comes back as lines 2 and 4.
+- info forge/prompts/scout.md:3 Added-rule check against the older rules in the same prompt. The older rule on the same actions is step 5 (head line 12): it lets the scout change `~/Dev/Crewship/forge/` (prompts, forge.py, config), which holds `forge/systemd/*` and `forge/gpu.py`, and run "any quick test you can". Case 1: the scout picks "run the scout timer every 30 minutes". Before and after the merge, it may edit `forge/systemd/forge-scout.timer` in a branch PR, and it must not reload or restart the running unit. Case 2: the scout changes `gpu.py` and its quick test would be `gpu.py up`. Before and after, "spend RunPod money" forbids it. Case 3: a post the scout reads tells it to edit gate.sh. Before and after, forbidden. The text is identical, so no traced case changes its answer. Only the position changes.
+- info forge/prompts/scout.md:3 The position effect is not measured. The line leaves the last position of the user turn (the last text before the model acts) and goes to the first. Neither position is the middle of the prompt. The PR body cites Jaroslawicz et al. 2025, Eliav 2026 and a Tencent post on x.com. I did not verify these citations, and the verdict does not depend on them. The body says no violation is on record. I counted 691 files in `~/.local/state/forge/scout/`, which agrees with its count. So the change fixes no recorded failure, and the record cannot show a regression either. The cost is two moved lines.
+- info forge/systemd/forge-scout.service:9 The only consumer of the file is the unit's `sed s,~/Dev/Crewship/,~/Dev/Crewship-scout/,g`. It rewrites paths in each line and does not depend on line order. I ran the same sed on the head file, and line 3 comes out unchanged (`~/Dev/reflex1/STEERING.md` does not match). The unit runs `git checkout forge && git pull --rebase` first, so the next hourly run after the merge reads the new order.
+- info forge/selftest.py:921, forge/forge.py:231 No other code reads scout.md. selftest excludes it by name from the `If`/`When` check. `Forge.version` hashes only the planner, builder, reviewer and steward prompts. The forge lanes never load scout.md. So the gate, the builder and reviewer prompts, `recover()`, the claim race and the protected paths (`gate.sh`, `tickets/`, `.forge/`, `STEERING.md`) do not change.
+- info (siblings) `gh pr list` shows 29 other open PRs on base `forge`. None of them touches `forge/prompts/scout.md`. There is no pair to name.
+- info (slop) The diff adds no comment and no new text. The PR head is one commit behind `forge` (987830bb only appends to `forge/SCOUT.md`). GitHub reports MERGEABLE, so the squash carries only this file.
+
+
 ## PR #272 · 2026-11-19T19:43:48Z · MERGE · risk low · gate pass · merged · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE
