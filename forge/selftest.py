@@ -915,7 +915,7 @@ check("reviewer reads memory-file lines as instructions to the next session", "e
 check("builder reruns an earlier Must change line before coding to it; the reviewer re-checks it", "`Must change:` line names the command" in b and "run it against your own work before you change code for it" in b and "an earlier `Must change:` line is a thing to re-check against this diff" in r)
 check("builder is told the clock time its session is killed at and to check `date -u` before a long step", "killed at {KILL}" in b and "`date -u`" in b)
 check("builder is told never to reach origin; forge pushes and lands", "`git push`" in b and "reaches `origin`" in b and "Forge pushes this branch" in b)
-check("builder previews a computed delete target before running it", "replaced by `echo` or `ls -d`" in b and "`-print0 | xargs -0`" in b)
+check("builder previews a computed delete target before running it", "replaced by `realpath -m --`" in b and "`-print0 | xargs -0`" in b)
 check("builder measures a wall-clock number's `before` on the untouched tree in the same build, beside the ticket's named one", "gets a `before` you measured yourself" in b and "before you edit any file, run the same command on the untouched tree" in b and "same build profile" in b and "passes or fails against that number as written" in b)
 a = (ROOT / "prompts/pr_audit.md").read_text()
 check("pr audit reads a deleted prompt, selftest or safeguard-table line as a layer removed", "DELETES" in a and "layer removed for every later run" in a)
