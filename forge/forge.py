@@ -739,19 +739,24 @@ class Forge:
 
     COPYLEFT = re.compile(r"(A?GPL|LGPL|SSPL|EUPL|OSL|CC-BY-SA|CECILL)(-|$)", re.I)
 
-    def licenses(self, pkgs: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
-        """The SPDX licence expression crates.io records for each version (`non-standard` when the crate ships a
-        `license-file` instead). An entry crates.io cannot answer is left out; the others are kept: a lookup that cannot reach the network never costs
+    CRATES: dict[tuple[str, str], dict] = {}  # crates.io version records this process has fetched; the two guards below read the same ones
+
+    def crate_versions(self, pkgs: list[tuple[str, str]]) -> dict[tuple[str, str], dict]:
+        """The version record crates.io keeps for each entry (`license`, `created_at`, ...). An entry crates.io
+        cannot answer is left out; the others are kept: a lookup that cannot reach the network never costs
         an attempt. One request per crate, a second apart, as crates.io asks."""
         out = {}
         for n, v in pkgs:
+            if (n, v) in self.CRATES:
+                out[(n, v)] = self.CRATES[(n, v)]
+                continue
             req = urllib.request.Request(f"https://crates.io/api/v1/crates/{n}/{v}", headers={"User-Agent": "forge (github.com/ptlnextdoor/Crewship)"})
             try:
-                out[(n, v)] = json.load(urllib.request.urlopen(req, timeout=30))["version"].get("license") or "non-standard"
+                out[(n, v)] = self.CRATES[(n, v)] = json.load(urllib.request.urlopen(req, timeout=30))["version"]
             except urllib.request.HTTPError as e:  # 404: a git or other-registry entry crates.io does not serve
-                self.log(f"crates.io licence lookup failed for {n} {v} ({e})")
+                self.log(f"crates.io lookup failed for {n} {v} ({e})")
             except Exception as e:
-                self.log(f"crates.io licence check stopped at {n} {v} ({e})")
+                self.log(f"crates.io lookup stopped at {n} {v} ({e})")
                 return out
             time.sleep(1)
         return out
@@ -778,8 +783,33 @@ class Forge:
             added = self.lock_added(cwd)
         except LockUnreadable as e:
             return [str(e)]  # unreachable in cycle(): unrequested_deps reads the same lock first and fails the attempt
-        hits = {k: self.copyleft(lic) for k, lic in self.licenses(added).items()}
+        hits = {k: self.copyleft(d.get("license") or "non-standard") for k, d in self.crate_versions(added).items()}
         return sorted(f"{n} {v} ({lic})" for (n, v), lic in hits.items() if lic and lic.lower() not in text)
+
+    FRESH_DAYS = 7
+
+    def fresh_deps(self, cwd: Path, ticket_text: str) -> list[str]:
+        """Crates the branch adds to or bumps in `Cargo.lock` at a version crates.io published under `FRESH_DAYS`
+        days before this check. The three guards above ask what the ticket named, what OSV lists and what licence
+        the crate carries; none asks how old the release is, and a compromised release is pulled before OSV lists
+        it (LiteLLM 1.107.0 lived 104 minutes on PyPI, 2026-10-21, and read `~/.ssh`, `gh` hosts and Codex and
+        Claude tokens, all present on this box). `cargo add` resolves to the newest release, so the day a crate's
+        pipeline is compromised is the day a ticket naming that crate pulls the release in. A ticket naming the
+        exact version (`axum 0.9.3`) waives it; the retry message tells the builder to pin an older release.
+        shortcut: the bar is one number for every crate (straitjacket-rs uses 30 days with a star bar beside it);
+        raise it, or add a download-count floor, if a release under a week old ever lands on main through a waiver."""
+        text = ticket_text.split("\n## forge")[0].lower().replace("_", "-")
+        try:
+            added = self.lock_added(cwd)
+        except LockUnreadable as e:
+            return [str(e)]  # unreachable in cycle(): unrequested_deps reads the same lock first and fails the attempt
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=self.FRESH_DAYS)
+        out = []
+        for (n, v), d in self.crate_versions(added).items():
+            at = d.get("created_at")
+            if at and dt.datetime.fromisoformat(at.replace("Z", "+00:00")) > cutoff and f"{n} {v}".lower().replace("_", "-") not in text:
+                out.append(f"{n} {v} (published {at[:10]})")
+        return sorted(out)
 
     SKIP_MARK = re.compile(r"^([-+])\s*(#\[ignore\b|@pytest\.mark\.skip|pytest\.skip\(|@unittest\.skip)")
     TEST_MARK = re.compile(r"^([-+])\s*(#\[test\]|(async )?def test_)")
@@ -1544,6 +1574,9 @@ class Forge:
             deps = self.copyleft_deps(wt, ticket.read_text())
             if deps:
                 return self.fail(ticket, f"diff adds Cargo.lock entries under a copyleft licence: {deps}. This project is not; use a permissively licensed crate or leave the dependency out; only the ticket naming the licence id accepts one.")
+            deps = self.fresh_deps(wt, ticket.read_text())
+            if deps:
+                return self.fail(ticket, f"diff adds or bumps Cargo.lock entries at a release under {self.FRESH_DAYS} days old: {deps}. A compromised release is pulled before any advisory lists it; pin an older release (`cargo update -p <crate> --precise <version>`; crates.io lists versions with dates) or leave the crate at the version main has; only the ticket naming that exact version (`<crate> <version>`) accepts one.")
             bad = self.test_tampering(wt, ticket.read_text())
             if bad:
                 return self.fail(ticket, f"diff skips, deletes or strips tests, or changes a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
@@ -1608,6 +1641,9 @@ class Forge:
                 deps = self.copyleft_deps(wt, ticket.read_text())
                 if deps:
                     return self.fail(ticket, f"the repair added Cargo.lock entries under a copyleft licence: {deps}. This project is not; use a permissively licensed crate or leave the dependency out; only the ticket naming the licence id accepts one.")
+                deps = self.fresh_deps(wt, ticket.read_text())
+                if deps:
+                    return self.fail(ticket, f"the repair pinned Cargo.lock entries at a release under {self.FRESH_DAYS} days old: {deps}. A compromised release is pulled before any advisory lists it; pin an older release (`cargo update -p <crate> --precise <version>`; crates.io lists versions with dates) or leave the crate at the version main has; only the ticket naming that exact version (`<crate> <version>`) accepts one.")
                 bad = self.test_tampering(wt, ticket.read_text())
                 if bad:
                     return self.fail(ticket, f"the repair skipped, deleted or stripped tests, or changed a reference fixture, the ticket does not name: {bad}. A test switched off, removed, left with fewer assertions, or added asserting nothing, and a fixture file changed or deleted, needs the ticket to say so (builder rule on tests); fix the code the test checks.")
