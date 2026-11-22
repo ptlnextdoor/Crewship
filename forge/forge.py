@@ -1536,7 +1536,7 @@ class Forge:
                                    GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
                                                if gated else
                                                f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."
-                                               + (f" The tree the gate last passed is `{floor}` (`git log --oneline {floor}..main` lists what landed ungated since): run only the failing check over that range (`git bisect start main {floor}`, `git bisect run <that check>`, then `git bisect reset` before anything else) to find the commit that broke it, and fix that commit's code." if floor else "")))
+                                               + (f" The tree the gate last passed is `{floor}` (`git log --oneline --first-parent {floor}..main` lists what landed on main since). Run the failing check alone at `{floor}` first (`git checkout -q {floor}`, the check, `git checkout -q -`): if it fails there too, the cause is not in that range, so do not bisect. If it passes there, run `git bisect start --first-parent main {floor}`, `git bisect run <that check>`, then `git bisect reset` before anything else, to find the main commit that broke it, and fix the code that commit changed." if floor else "")))
             rc, out = self.agent(builder, bprompt(), wt)
             why = self.attach(wt, branch)
             if why:
