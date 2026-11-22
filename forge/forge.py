@@ -1134,17 +1134,33 @@ class Forge:
         positions; the gate is 8 to 25 minutes of a builder session."""
         c = "main"
         for _ in range(12):
-            parents = self.sh(f"git log -1 --format=%P {c}").stdout.split()
-            if len(parents) == 2:
-                trees = self.sh(f"git rev-parse {c}^{{tree}} {parents[1]}^{{tree}}").stdout.split()
-                subject = self.sh(f"git log -1 --format=%s {c}").stdout.strip()
-                # Only land()'s merges: an owner's PR merge of an up-to-date branch has the same tree shape, ungated.
-                landing = re.match(r"forge: land |Merge pull request #\d+ from \S+/forge/l\d+-", subject)
-                return subject if landing and len(trees) == 2 and trees[0] == trees[1] else ""
+            if len(self.sh(f"git log -1 --format=%P {c}").stdout.split()) == 2:
+                return self.gated_landing(c)
             files = self.sh(f"git diff --name-only {c}^ {c}").stdout.split()
             if not files or any(not f.startswith("tickets/") for f in files):
                 return ""
             c += "^"
+        return ""
+
+    def gated_landing(self, c: str) -> str:
+        """Subject of commit `c` when it is a land() merge whose tree is its second parent's, else ""."""
+        parents = self.sh(f"git log -1 --format=%P {c}").stdout.split()
+        if len(parents) != 2:
+            return ""
+        trees = self.sh(f"git rev-parse {c}^{{tree}} {parents[1]}^{{tree}}").stdout.split()
+        subject = self.sh(f"git log -1 --format=%s {c}").stdout.strip()
+        # Only land()'s merges: an owner's PR merge of an up-to-date branch has the same tree shape, ungated.
+        landing = re.match(r"forge: land |Merge pull request #\d+ from \S+/forge/l\d+-", subject)
+        return subject if landing and len(trees) == 2 and trees[0] == trees[1] else ""
+
+    def last_gated(self) -> str:
+        """Short hash of the newest first-parent commit of main whose tree the gate passed (a landing merge, as
+        main_gated() reads it), or "". When main's starting gate is red, everything above it landed ungated
+        (owner commits, steward edits, a merge main moved under), so that range is the builder's bisect floor."""
+        for row in self.sh("git log --first-parent -n 60 --format='%H %P' main").stdout.splitlines():
+            c, *parents = row.split()
+            if len(parents) == 2 and self.gated_landing(c):
+                return c[:12]
         return ""
 
     def startable(self) -> list[Path]:
@@ -1503,6 +1519,10 @@ class Forge:
             if self.attempts(ticket) >= 2:
                 builder = "builder_hard"  # escalate after repeated failure
             gated = self.main_gated()
+            # Red main: the builder's first job is to fix it, and without a floor it debugs the whole suite from
+            # the failure text. The last gated tree bounds the suspects (Pi Dash's port: a red run after a merge
+            # files one fix issue naming the merges since the last green run, bisected with the failing tests only).
+            floor = "" if gated else self.last_gated()
             drift = self.ticket_drift(ticket)
             def bprompt() -> str:
                 # Rendered per session: the repair pass starts after the gate and gets its own kill time.
@@ -1515,7 +1535,8 @@ class Forge:
                                    KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm), DRIFT=drift,
                                    GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
                                                if gated else
-                                               f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."))
+                                               f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."
+                                               + (f" The tree the gate last passed is `{floor}` (`git log --oneline --first-parent {floor}..main` lists what landed on main since). Run the failing check alone at `{floor}` first (`git checkout -q {floor}`, the check, `git checkout -q -`): if it fails there too, the cause is not in that range, so do not bisect. If it passes there, run `git bisect start --first-parent main {floor}`, `git bisect run <that check>`, then `git bisect reset` before anything else, to find the main commit that broke it, and fix the code that commit changed." if floor else "")))
             rc, out = self.agent(builder, bprompt(), wt)
             why = self.attach(wt, branch)
             if why:
