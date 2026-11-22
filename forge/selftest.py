@@ -1788,18 +1788,22 @@ with tempfile.TemporaryDirectory() as d:
     cfg.write_text(f'name="t"\nrepo="{repo}"\nstate_dir="{d}/s"\n[roles.builder]\nmodel="a/b"\n[roles.reviewer]\nmodel="c/d"\n')
     f = forge.Forge(cfg)
     check("main_gated: a plain commit is not gated", f.main_gated() == "", f.main_gated())
+    check("last_gated: no landing yet, no bisect floor", f.last_gated() == "", f.last_gated())
     git("checkout -q -b forge/x", repo); (repo / "src.txt").write_text("v2\n"); git("commit -qam work", repo)
     git("checkout -q main", repo); git("merge -q --no-ff -m 'forge: land 0001' forge/x", repo)
     (repo / "tickets/0001.md").write_text("status: done\n"); git("commit -qam 'forge: done 0001'", repo)
     check("main_gated: landing merge under a tickets/-only commit", f.main_gated() == "forge: land 0001", f.main_gated())
     (repo / "src.txt").write_text("owner\n"); git("commit -qam 'owner: pivot'", repo)
     check("main_gated: an owner commit on top keeps the starting run", f.main_gated() == "", f.main_gated())
+    landed = git("rev-parse --short=12 HEAD~2", repo).strip()
+    check("last_gated: the landing merge under the owner commit is the bisect floor", f.last_gated() == landed, f"{f.last_gated()} != {landed}")
     git("checkout -q -b forge/y HEAD~2", repo); (repo / "new.txt").write_text("y\n"); git("add -A", repo); git("commit -qm y", repo)
     git("checkout -q main", repo); git("merge -q --no-ff -m 'forge: land 0002' forge/y", repo)
     check("main_gated: a merge main moved under is not gated", f.main_gated() == "", f.main_gated())
     git("checkout -q -b docs/z", repo); (repo / "doc.txt").write_text("z\n"); git("add -A", repo); git("commit -qm z", repo)
     git("checkout -q main", repo); git("merge -q --no-ff -m 'Merge pull request #7 from o/docs/z' docs/z", repo)
     check("main_gated: an owner's merge of an up-to-date branch is not gated", f.main_gated() == "", f.main_gated())
+    check("last_gated: ungated merges on top do not move the floor", f.last_gated() == landed, f"{f.last_gated()} != {landed}")
 
 # 26. The prompt file is the renderer between what the loop knows and what the session reads, and a dropped
 # placeholder costs nothing visible: the reviewer still returns a verdict, the cycle still merges or fails.
