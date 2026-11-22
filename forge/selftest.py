@@ -7,6 +7,7 @@ Each check is a fact about the loop that a careless edit could break.
 from __future__ import annotations
 
 import importlib.util
+import datetime as dt
 import json
 import os
 import re
@@ -82,12 +83,12 @@ with tempfile.TemporaryDirectory() as d:
     check("protected paths catch a gate edit", "gate.sh" in f.touched_protected(repo))
     # A diff a guard cannot list (a base ref that does not exist; this repo has no origin/main yet) is an error, not an empty finding.
     raised = []
-    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo), lambda: f.fetch_exec(repo, ""), lambda: f.lint_silencing(repo, ""), lambda: f.instruction_rewrite(repo, ""), lambda: f.copyleft_deps(repo, "")):
+    for guard in (lambda: f.touched_protected(repo, "no-such-ref"), lambda: f.unrequested_deps(repo, ""), lambda: f.test_tampering(repo, ""), lambda: f.invisible_chars(repo), lambda: f.vulnerable_deps(repo, ""), lambda: f.secrets(repo), lambda: f.msg_secrets(repo), lambda: f.fetch_exec(repo, ""), lambda: f.lint_silencing(repo, ""), lambda: f.instruction_rewrite(repo, ""), lambda: f.copyleft_deps(repo, ""), lambda: f.fresh_deps(repo, "")):
         try:
             guard(); raised.append(False)
         except RuntimeError:
             raised.append(True)
-    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 11, str(raised))
+    check("a guard whose git diff fails raises instead of passing empty", raised == [True] * 12, str(raised))
     # 2c. Files omp loads into every later session (and the reviewer's own) are protected whatever the config lists:
     # a nested rules file and a .omp/ directory are caught, a doc that merely mentions them is not. The files every
     # gate's cargo calls read first (.cargo/config.toml, rust-toolchain.toml) are the same class, and so is a `build.rs`
@@ -145,14 +146,24 @@ with tempfile.TemporaryDirectory() as d:
     got = f.vulnerable_deps(repo, "axum, evil; RUSTSEC-2026-0001 is accepted here")
     check("naming one advisory id waives only that id", got == ["evil 0.1.0 (RUSTSEC-2026-0002)"], str(got))
     # 2b'''. A lock entry under a copyleft licence with no permissive alternative is refused unless the ticket
-    # names the licence id; `licenses` is stubbed like `osv`. `MIT OR GPL-3.0` and the old `MIT/GPL-3.0` are a choice.
+    # names the licence id; `crate_versions` is stubbed like `osv`. `MIT OR GPL-3.0` and the old `MIT/GPL-3.0` are a choice.
     lics = {("evil", "0.1.0"): "GPL-3.0-or-later", ("axum", "0.8.0"): "MIT OR Apache-2.0", ("tower", "0.5.0"): "MIT/GPL-2.0", ("serde_derive", "1.0.1"): "MIT AND LGPL-2.1"}
-    f.licenses = lambda pkgs: {k: lics[k] for k in pkgs}
+    f.crate_versions = lambda pkgs: {k: {"license": lics[k]} for k in pkgs}
     got = f.copyleft_deps(repo, "axum, evil and a serde-derive bump")
     check("a copyleft crate is refused, an OR choice passes, an AND is refused", got == ["evil 0.1.0 (GPL-3.0-or-later)", "serde_derive 1.0.1 (LGPL-2.1)"], str(got))
     check("a ticket naming the licence id waives that crate", f.copyleft_deps(repo, "evil; GPL-3.0-or-later is accepted here") == ["serde_derive 1.0.1 (LGPL-2.1)"])
     check("a licence id quoted in a ## forge note does not waive it", "evil 0.1.0 (GPL-3.0-or-later)" in f.copyleft_deps(repo, "evil\n\n## forge t (retry)\n['evil 0.1.0 (GPL-3.0-or-later)']"))
-    check("a lookup that fails is no finding", (setattr(f, "licenses", lambda pkgs: {}), f.copyleft_deps(repo, ""))[1] == [])
+    check("a lookup that fails is no finding", (setattr(f, "crate_versions", lambda pkgs: {}), f.copyleft_deps(repo, ""))[1] == [])
+    # 2b''''. A lock entry at a release crates.io published under FRESH_DAYS days ago is refused unless the ticket
+    # names that exact version; an older release passes, and so does one crates.io did not answer.
+    day = lambda n: (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=n)).strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+    ages = {("evil", "0.1.0"): day(1), ("axum", "0.8.0"): day(40), ("tower", "0.5.0"): day(f.FRESH_DAYS - 1)}
+    f.crate_versions = lambda pkgs: {k: {"created_at": ages[k]} for k in pkgs if k in ages}
+    got = f.fresh_deps(repo, "axum, evil and a serde-derive bump")
+    check("a release under a week old is refused, an older one and an unanswered one pass",
+          got == [f"evil 0.1.0 (published {day(1)[:10]})", f"tower 0.5.0 (published {day(f.FRESH_DAYS - 1)[:10]})"], str(got))
+    check("a ticket naming the exact version waives that crate", f.fresh_deps(repo, "pin evil 0.1.0 and tower") == [f"tower 0.5.0 (published {day(f.FRESH_DAYS - 1)[:10]})"])
+    check("a version quoted in a ## forge note does not waive it", len(f.fresh_deps(repo, "evil\n\n## forge t (retry)\n['evil 0.1.0 (published x)']")) == 2)
     check("MPL and a license-file crate pass", f.copyleft("MPL-2.0") is None and f.copyleft("non-standard") is None and f.copyleft("GPL-2.0 WITH Classpath-exception-2.0") == "GPL-2.0 WITH Classpath-exception-2.0")
     # 2b''. A Cargo.lock that does not parse reads as "no new dependency" to every guard that walks it: block
     # the attempt instead, naming the revision, for both dependency guards.
