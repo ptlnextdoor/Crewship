@@ -410,6 +410,8 @@ with tempfile.TemporaryDirectory() as d:
     check("the whole gate output is kept in a file the cut line names", f"the full output is at {glog}]" in gout and glog.read_text().count("Diff in x.rs:") == 2000, gout[:200])
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== fmt'\necho 'gate: PASS'\n")
     check("a short gate output is untouched", f.gate(repo) == (True, "== fmt\ngate: PASS\n"))
+    # 2f'. Each gate run leaves its verdict, seconds and load in forge.log, the slice agent()'s `done ... Ns` line lacks.
+    check("a gate run logs its verdict, seconds and load", re.search(r"gate FAIL \d+s loadavg [\d.?]+\n(?:.*\n)*.*gate PASS \d+s loadavg", f.log_file.read_text()), f.log_file.read_text()[-300:])
     # 2g. A green gate whose test stage ran nothing is a FAIL; one binary at 0 passed beside one that ran is not.
     (repo / "gate.sh").write_text("#!/bin/sh\necho '== test'\necho 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out'\necho 'gate: PASS'\n")
     ok, gout = f.gate(repo)
