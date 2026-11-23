@@ -2,6 +2,29 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #283 · 2026-11-23T17:37:38Z · MERGE · risk low · gate pass · merged · anthropic/claude-opus-5-5:xhigh
+
+Verdict: MERGE
+Risk: low
+
+## PR #283 forge: log each gate run's verdict, seconds and load
+What it changes: `gate()` sets `t0` before the run and, after the zero-test check, writes one `forge.log` line `gate PASS|FAIL <n>s loadavg <x>`. Selftest 2f' checks that a FAIL line and then a PASS line appear after the two 2f runs. The diff deletes no line (+7 -0) and changes no prompt.
+Findings:
+- info forge/forge.py:561,586-589 The verdict does not change. The log line comes after the last assignment to `ok`/`tail` (the zero-test check at :583-584), so the logged word is the returned verdict, and `return ok, tail` stays as it was. All three callers get the line: the builder gate (:1583), the repair gate (:1647) and the landing gate (:1466). The skip path in `land()` keeps its own `gate not rerun` line. The timeout branch (:563-575) raises before the new code and stays as it was, as the body says.
+- info forge/forge.py:589 No injection path. The line holds a bool, an int and the first token of `/proc/loadavg`. No ticket, diff or gate output text goes into it, and no shell runs it. No GPU, quota, claim, `recover()`, `discard_strays()` or protected-path code is touched.
+- info forge/forge.py:262-266,589 Concurrency and failure: the line goes through the existing `log()`, which appends one short line to the shared `forge.log` (open "a"), as every other lane line does. The new code adds no state file. The only new raise sources are the `/proc/loadavg` read (the same expression the timeout branch already uses) and the log write. `gate_tail()` writes the full gate log file (:593) before both, so ENOSPC already raised there. No new path leaves a ticket `in_progress` or a worktree behind.
+- info forge/forge.py:2091 + prompts/steward.md:3-4 Growth is bounded. The PR adds about 60 bytes per gate run, at most one builder, one repair and three landing runs per cycle. The steward's `{STATE}` takes only the last 8 lines of `forge.log`, so its prompt does not grow, but gate lines now use some of those 8 slots. A `gate FAIL` line in the tail cannot replace the steward's own gate state, because steward step 1 runs `{GATE}` itself. `forge-watchdog@.service` restarts only after 2 h with no log write. A gate line is written only when a gate returns, and the timeout caps a gate at 30 min, so the new line cannot hide a hung session.
+- low forge/forge.py:589 Measurement quality: field `[0]` is the 1-minute load, read when the gate ends. For an 8 to 25 minute run it shows the last minute only, and that minute includes the gate's own cargo processes. The 15-minute field (`split()[2]`) covers more of the run. This does not block the merge, because the line matches the timeout branch's existing format, but use it with care when you correlate seconds with load.
+- info forge/forge.py:586-587 I checked the comment's source claim. Commit f70c6f3b (scout 2026-10-23) says "the gate takes 8 to 25 minutes between PR open and review start (forge.log, 23 cycles)". That agrees with "read by hand from PR-to-review gaps". The clause "the load is what stretches it" gives a cause that no measurement on this box shows yet. This line exists to measure it (nit, see Pass 2).
+- info forge/selftest.py:414 I applied the diff to a /tmp copy of `origin/forge` (a6959515, the PR's base) and ran `python3 forge/selftest.py`. Result: exit 0, 258 ok, 0 FAIL, and `ok   a gate run logs its verdict, seconds and load`. The check uses the selftest's temp `state_dir`, not the live forge log. The only earlier `f.gate()` calls are the two 2f runs (:407, :412), so the FAIL-then-PASS order the regex needs is exact. If the log line is removed, the check fails.
+- info CI: 6 checks fail on this PR (changelog fragment, configuration and python checks, project database runtime smoke, pull request body, python and configuration tests, worker image behavior smoke). Siblings #282 and #278 on the same `forge` base fail the same 6 checks and pass the same 4. The failures do not come from this diff.
+- info siblings: 25 other open PRs on `forge` touch `forge/forge.py` or `forge/selftest.py`. I listed the hunk ranges of all 25 diffs, searched them for `gate()` body lines and 2f text, and read #205 and #237 in full. None changes the `gate()` body or the selftest 2f block. #205's hunk has `gate_tail` in its header only as context (the HARNESS_CONFIG regex). #224, #227, #228 and #250 add fields to `agent()`'s done line. That line measures model sessions, and this PR measures forge's own gate runs, so they do not duplicate each other. #237 (one jobserver for all lanes) does not contradict this PR, but it changes what the new column means: a rustc that waits for a fifo token sleeps and does not add to loadavg. After #237, gate seconds will show lane contention better than the loadavg figure does. Neither side needs a change.
+- nit forge/forge.py:573,588 Pass 2: the `Path("/proc/loadavg")` read is now written twice in one function. You can define `load` once above the `try`.
+- nit forge/forge.py:586-587 Pass 2: remove "and the load is what stretches it" or write it as the question this line answers. The comment states as fact a cause that the line is there to measure.
+- nit forge/README.md:71,99 Pass 2: rows 51 and 71 record other `forge.log` measurement lines, and row 99 records the gate's output files. No row names the new per-run gate line. The README makes no false claim, but it does not record this line.
+Change needed (only for MERGE WITH CHANGE): none.
+
+
 ## PR #282 · 2026-11-23T13:33:23Z · MERGE · risk low · gate fail · left open: gate failed · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE
