@@ -558,6 +558,7 @@ class Forge:
     def gate(self, cwd: Path) -> tuple[bool, str]:
         g = self.cfg.get("gate", "./gate.sh")
         mins = self.cfg.get("limits", {}).get("gate_timeout_min", 30)
+        t0 = time.monotonic()
         try:
             r = self.sh(g, cwd=cwd, timeout=60 * mins)
         except subprocess.TimeoutExpired as e:
@@ -582,6 +583,10 @@ class Forge:
         passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
         if ok and passed and not any(int(n) for n in passed):
             ok, tail = False, "gate: exit 0 but every test result line reads 0 passed; no test ran\n" + tail
+        # The gate's own slice of the cycle, beside agent()'s `done ... Ns` line: the "8 to 25 min" above and in the
+        # prompts was read by hand from PR-to-review gaps in forge.log, and the load is what stretches it.
+        load = Path("/proc/loadavg")
+        self.log(f"gate {'PASS' if ok else 'FAIL'} {int(time.monotonic() - t0)}s loadavg {load.read_text().split()[0] if load.exists() else '?'}")
         return ok, tail
 
     def gate_tail(self, out: str) -> str:
