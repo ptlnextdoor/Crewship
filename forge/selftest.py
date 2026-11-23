@@ -248,8 +248,9 @@ with tempfile.TemporaryDirectory() as d:
     git("add -A", repo); git("commit -qm work", repo)
     check("a member main added after the branch point is not a drop", f.test_tampering(repo, "Fix the parser.") == [])
     # 2e'''''. `autotests = false` added to a crate manifest is refused: it takes that crate's whole `tests/`
-    # directory out of `cargo test --workspace` with no `.rs` line changed and no member dropped. The ticket
-    # naming the key waives it; another manifest edit beside it passes.
+    # directory out of `cargo test --workspace` with no `.rs` line changed and no member dropped; `test = false`
+    # under `[lib]` and `doctest = false` take one target out the same way. The ticket writing `<key> = false`
+    # waives it (a bare "test" is in every ticket); another manifest edit beside it passes.
     git("reset -q --hard origin/main", repo)
     # Under `pkg/`, not `crates/`: this manifest stays on main for every later check, and the prune_target case
     # below writes a root manifest with `members = ["crates/*"]` that cargo would then try to load.
@@ -259,8 +260,16 @@ with tempfile.TemporaryDirectory() as d:
     (repo / "pkg/reflex-cpu/Cargo.toml").write_text('[package]\nname = "reflex-cpu"\nedition = "2021"\nautotests = false\n[dependencies]\ncandle-core = "0.9"\n')
     git("add -A", repo); git("commit -qm off", repo)
     got = f.test_tampering(repo, "Fix the parser.")
-    check("autotests = false added to a crate manifest is refused", got == ["pkg/reflex-cpu/Cargo.toml: adds autotests = false, dropping the crate's tests/ from the gate's run"], str(got))
+    check("autotests = false added to a crate manifest is refused", got == ["pkg/reflex-cpu/Cargo.toml: adds autotests = false, dropping tests from the gate's run"], str(got))
     check("the ticket naming the key waives it", f.test_tampering(repo, "set `autotests = false` and declare the test targets by hand") == [])
+    git("reset -q --hard origin/main", repo)
+    (repo / "pkg/reflex-cpu/Cargo.toml").write_text('[package]\nname = "reflex-cpu"\nedition = "2021"\n[lib]\ntest = false\ndoctest = false\n')
+    git("add -A", repo); git("commit -qm lib-off", repo)
+    got = f.test_tampering(repo, "Fix the parser.")
+    check("test = false and doctest = false under [lib] are each refused", got == ["pkg/reflex-cpu/Cargo.toml: adds test = false, dropping tests from the gate's run", "pkg/reflex-cpu/Cargo.toml: adds doctest = false, dropping tests from the gate's run"], str(got))
+    check("a ticket that says test but not test = false waives neither", len(f.test_tampering(repo, "add a test for the parser")) == 2)
+    check("the ticket writing both keys waives both", f.test_tampering(repo, "set `test = false` and `doctest = false` under [lib]; the bin holds the tests") == [])
+    check("the ticket writing one key waives only that one", f.test_tampering(repo, "set `doctest = false` on reflex-cpu") == ["pkg/reflex-cpu/Cargo.toml: adds test = false, dropping tests from the gate's run"])
     git("reset -q --hard origin/main", repo)
     (repo / "pkg/reflex-cpu/Cargo.toml").write_text('[package]\nname = "reflex-cpu"\nedition = "2021"\n[dependencies]\ncandle-core = "0.9"\n')
     git("add -A", repo); git("commit -qm dep", repo)
