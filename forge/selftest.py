@@ -1762,8 +1762,9 @@ check("rate_interval: Wilson bounds", forge.rate_interval(85, 122) == "85/122 (6
       f"{forge.rate_interval(85, 122)} {forge.rate_interval(3, 4)}")
 check("rate_interval: empty tally", forge.rate_interval(0, 0) == "0/0", forge.rate_interval(0, 0))
 
-# 24. `version` is one hash per file (forge.py, planner, builder, reviewer, steward), so two `status` rows
-# tell which file changed between them; the joint hash (PR #12) only said "something did".
+# 24. `version` is one hash per file (forge.py, planner, builder, reviewer, steward, omp.yml), so two `status`
+# rows tell which file changed between them; the joint hash (PR #12) only said "something did". omp.yml is in
+# because it decides the tools every session gets, and a tool schema steers the model like prompt text.
 with tempfile.TemporaryDirectory() as d:
     repo, cfg = Path(d) / "repo", Path(d) / "t.toml"
     repo.mkdir(); git("init -q -b main", repo)
@@ -1771,13 +1772,20 @@ with tempfile.TemporaryDirectory() as d:
     (Path(d) / "p").mkdir()
     for r in ("planner", "builder", "reviewer", "steward"):
         (Path(d) / "p" / f"{r}.md").write_text(f"{r} v1\n")
+    real_cfg, forge.OMP_CONFIG = forge.OMP_CONFIG, Path(d) / "omp.yml"
+    forge.OMP_CONFIG.write_text("skills:\n  enabled: false\n")
     f = forge.Forge(cfg)
     before = f.version.split(".")
     (Path(d) / "p/reviewer.md").write_text("reviewer v2\n")
     after = f.version.split(".")
-    check("version: five hashes, only the edited prompt's segment moves",
-          len(before) == 5 and before[3] != after[3] and [b for i, b in enumerate(before) if i != 3] == [a for i, a in enumerate(after) if i != 3],
+    check("version: six hashes, only the edited prompt's segment moves",
+          len(before) == 6 and before[3] != after[3] and [b for i, b in enumerate(before) if i != 3] == [a for i, a in enumerate(after) if i != 3],
           f"{before} -> {after}")
+    forge.OMP_CONFIG.write_text("skills:\n  enabled: true\n")
+    omp_after = f.version.split(".")
+    check("version: an omp.yml-only edit moves only the last segment",
+          omp_after[5] != after[5] and omp_after[:5] == after[:5], f"{after} -> {omp_after}")
+    forge.OMP_CONFIG = real_cfg
 
 # 25. The builder's starting gate run is skipped only on a tree the gate passed: a landing merge whose tree is
 # its branch tip's, with forge's tickets/-only status commits on top. An owner commit on main (reflex1 10-23:
