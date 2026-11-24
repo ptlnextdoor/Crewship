@@ -2,6 +2,37 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #287 · 2026-11-24T10:14:46Z · MERGE · risk low · gate fail · left open: gate failed · anthropic/claude-opus-5-5:xhigh
+
+Verdict: MERGE
+Risk: low
+
+## PR #287 forge: hash omp.yml into the version stamp
+What it changes: `Forge.version` (forge.py:225-235, PR head) adds a sixth `sha256[:4]` segment for `OMP_CONFIG` (`forge/omp.yml`, the `--config` overlay at forge.py:412). The stamp becomes `forge.py.planner.builder.reviewer.steward.omp`. Selftest 24 now expects six segments and adds one check: an omp.yml-only edit moves only segment 6. README row 120 and the `status` paragraph (README:180) name the new segment.
+Findings:
+- info forge/forge.py:234 The change only reads a file, and no decision depends on the result. `self.version` has four readers: the PR body (:1372), the landing trailer (:1431), the history entry (:1820) and the `status` tally (:2012). No code in forge.py, reviewctl.py or prompts/*.md compares versions or branches on them (rg). `OMP_CONFIG` (:48) is the same path the argv passes to `--config` (:412), so the hash covers the file the sessions load. No ticket text reaches it, no lane writes it, and no shell runs. The gate, the reviewer, the protected paths, the claim race, `recover()`, `discard_strays()`, the timeouts, PR create/merge, the quota fallback and gpu.py do not change.
+- info forge/forge.py:234 Exception path, traced: a missing omp.yml now makes `self.version` raise FileNotFoundError.
+  - `fail()` pushes the `retry`/`blocked` status (:1792-1794) before `record()` (:1796).
+  - The raise reaches `cycle()`'s `except` (:1731). Its own `record(tid, "error")` raises again, and `finally` (:1746) still removes the worktree and the branch.
+  - `lane_loop` (:1974) runs `recover()` and the circuit breaker. No ticket stays `in_progress`. One history entry is lost.
+  - Before this PR a missing omp.yml already stopped every session at start (rc=1 `Config overlay not found`, #106 audit, PR_AUDIT.md:6372), so the lane did no work in either case. Now it backs off after the first failed attempt instead of charging attempts with no backoff. A missing prompt file already takes this path.
+- info forge/forge.py:2012 Growth is bounded. A new omp.yml hash adds one row to the `status` version line, which is the steward's `{STATE}`. History is capped at 200 entries per lane (:1820). omp.yml changed 3 times in 25 days (`git log -- forge/omp.yml`). The landing splits the current tally row once, as any forge.py edit does.
+- info Deletions: no line is deleted from `forge/prompts/*.md`.
+  - forge/selftest.py: the check "version: five hashes, only the edited prompt's segment moves" (`len(before) == 5`) becomes the same assertion at `len(before) == 6` (:1781). It prevented a file dropping out of the stamp, or the stamp collapsing back to one joint hash. The six-segment check carries that now, and the new omp.yml check (:1785-1787) adds to it. The comment above check 24 is rewritten with omp.yml added.
+  - README safeguard table row 120 ("The PR body names the forge version") is rewritten, not removed. The safeguard is the same, with `.omp` added to the format, and `pr_open()` (:1372) still writes `self.version` into the body. No layer is retired.
+- info Added rules: the PR changes no file in `forge/prompts/`, so there is no added prompt rule to trace against an older one.
+- nit forge/selftest.py:1787 If the stamp goes back to five segments, the new check indexes `omp_after[5]` and raises IndexError. Reproduced: PR-head selftest.py with base forge.py prints `FAIL version: six hashes, ...`, then a traceback at :1787. Checks 25 onward do not run, and `forge.OMP_CONFIG` is not restored. The exit is still nonzero, so the gate still fails; only the report stops early. `omp_after[5:] != after[5:]` would report FAIL and continue. Not blocking.
+- nit PR body: three claims do not match the repo. Only the body text is wrong; the diff is correct.
+  - The follow-up it cites is the #106 audit's low finding (PR_AUDIT.md:6386-6390), not the #284 audit's.
+  - "Neither change moved the version stamp" is wrong for skills: #159 (11-08) also edited forge.py (+2 lines), so the forge.py segment moved. Only #187 (memory off, 2026-11-11 UTC) changed omp.yml and README alone.
+  - "README rows 86": the row is now README.md:120.
+- nit forge/forge.py:230-233, forge/README.md:180, forge/selftest.py:1765-1767 The docstring and the README both carry the Artificial Analysis citation, and the selftest comment gives the same reason a third time. The house style does the same for `harness`, so this is not a blocker. The figure is correct: the thread (x.com/ArtificialAnlys/status/2125069743229125092) says the definition of Codex's exec_command shell tool alone switched the terse style on in 12 of 12 first-turn replays. The thread text I read does not contain the body's "322 tasks". The body's "up to 5x" cost matches the GPT-6 Luna spread ($0.11 to $0.62). Both are in the body only.
+- info forge/README.md:180 "it sets which tools and skills every role session gets" is true for the keys omp.yml holds (`task.maxRecursionDepth`, `skills.enabled`, `memory.backend`). The owner's `~/.omp` user config and MCP servers also change the tool set, and they stay unhashed. The body names only `projects/reflex1.toml` as not done. This gap was there before the PR, and the diff does not cause it.
+- info Siblings: 28 other open PRs on `forge` touch forge.py, README.md or selftest.py. I grepped every diff. None edits `version`, `OMP_CONFIG`, selftest 24, README:120 or README:180. #284 (user-scope MCP servers off) is the only one on the same subject. It writes a per-checkout `.omp/mcp.json` from `~/.omp/agent/mcp.json`, a tool-set input outside omp.yml. The two PRs do not contradict or duplicate each other: #284 disables every server the user file names, and its own forge.py edit moves segment 1. The hunks do not overlap (#284: forge.py:46-50 and :336-377, selftest after :1941, README after :128).
+- info Slop pass: the forge.py code change is one list element. The selftest uses the existing `real_x, forge.X = forge.X, ...` save and restore pattern (selftest.py:804/815, 1585/1618). There is no defensive try/except and no broad rewrite. The change is worth its size: it closes the gap the #106 audit named.
+- info Evidence: I extracted `git archive ebf5d385` (PR head) into /tmp and ran `python3 forge/selftest.py`: rc=0, "all checks passed", both `version:` checks ok. Mutant (PR-head selftest with base forge.py): the six-hash check FAILs, so the test detects the regression. The PR's parent (22e70daf) differs from origin/forge (5f970c33) by one scout findings commit only, with no forge code change.
+
+
 ## PR #286 · 2026-11-24T09:12:06Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed) · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE WITH CHANGE
