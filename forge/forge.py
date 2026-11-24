@@ -223,12 +223,15 @@ class Forge:
 
     @property
     def version(self) -> str:
-        """`forge.py.planner.builder.reviewer.steward`, four hex each, of the files as they are on disk now;
+        """`forge.py.planner.builder.reviewer.steward.omp`, four hex each, of the files as they are on disk now;
         prompt() re-reads the prompts on every call and a prompt-only merge does not restart the lanes, so
         hash at stamp time. One hash per file so two `status` rows show which file moved between them: a
         prompt edit is a regression risk to test, not an improvement to assume (arXiv 2601.22025), and a
-        single joint hash made every scout PR the same kind of change."""
-        files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward"))]
+        single joint hash made every scout PR the same kind of change. `omp.yml` is the last segment: it sets
+        which tools and skills every role session gets, and a tool definition steers the model like prompt
+        text (Artificial Analysis, 2026-11-24: one shell tool's schema alone switched GLM-5.3-Flash to
+        fragment reasoning in 12 of 12 replays), so an omp.yml-only change must move the tally's row too."""
+        files = [Path(__file__), *(self.prompts / f"{r}.md" for r in ("planner", "builder", "reviewer", "steward")), OMP_CONFIG]
         return ".".join(hashlib.sha256(p.read_bytes()).hexdigest()[:4] for p in files)
 
     @property
