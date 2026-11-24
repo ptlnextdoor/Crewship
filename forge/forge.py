@@ -1541,6 +1541,8 @@ class Forge:
                 kill = dt.datetime.now(UTC) + dt.timedelta(minutes=tm)
                 return self.prompt("builder", TICKET=ticket.read_text(), TICKET_PATH=str(ticket.relative_to(self.repo)),
                                    KILL=kill.strftime("%Y-%m-%d %H:%M UTC"), TIMEOUT_MIN=str(tm), DRIFT=drift,
+                                   START=dt.datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+                                   LOG=self.sh("git log --oneline -15", cwd=wt).stdout.strip(),
                                    GATE_START=(f"Skip the starting gate run: forge ran `{self.cfg.get('gate', './gate.sh')}` on this exact tree when it landed on main (`{gated}`), so a gate failure at the end comes from your change."
                                                if gated else
                                                f"Run the gate `{self.cfg.get('gate', './gate.sh')}` once to see the starting state. If it already fails on main, your first job is to make it pass again without weakening it."
