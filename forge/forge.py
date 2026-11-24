@@ -1718,7 +1718,13 @@ class Forge:
                 # input) sits at the head and the `Must change:` block at the end; the next attempt needs both. In
                 # 3 of reflex1's 10 REJECT reviews the last 3,000 characters dropped all or all but one FAIL line. `review`
                 # is the session's last 6,000 characters (every REJECT so far fit) with omp's `[stderr]` chatter off.
-                return self.fail(ticket, f"reviewer did not approve.\n{review or rout[-3000:]}")
+                # Before it, the builder's own PROGRESS.md entry: the branch is thrown away with the worktree, and that
+                # entry is the only record of what the session tried and dropped (rule 24). A fresh session given the
+                # code alone answered 11 of 20 "why is it this way" questions, 20 of 20 with the recorded decisions,
+                # one run each (r/ClaudeCode 1y4cfan, 2026-11-24). Added lines only, 2,000 characters: the review stays whole.
+                entry = "\n".join(ln[1:] for ln in self.sh("git diff origin/main...HEAD -- PROGRESS.md", cwd=wt).stdout.split("\n") if ln[:1] == "+" and not ln.startswith("+++"))
+                own = f"The builder's own PROGRESS.md entry for this attempt (its claims, unchecked):\n{entry[:2000]}\n\n" if entry else ""
+                return self.fail(ticket, f"reviewer did not approve.\n{own}{review or rout[-3000:]}")
             why = self.land(wt, branch, tid, builder)
             if why:
                 return self.fail(ticket, why)
@@ -1791,7 +1797,7 @@ class Forge:
         self.sync_main()
         tries = self.attempts(ticket) + 1
         status = "blocked" if tries >= self.cfg.get("max_attempts", 3) else "retry"
-        self.set_status(ticket, status, why[-7000:])  # room for a whole 6,000-character review plus its PR line
+        self.set_status(ticket, status, why[-9000:])  # room for a whole 6,000-character review, the builder's 2,000-character PROGRESS.md entry and the PR line
         self.sh(f"git add {ticket} && git commit -qm 'forge: {status} {tid}'")
         self.push()
         self.state["failed"] += 1
