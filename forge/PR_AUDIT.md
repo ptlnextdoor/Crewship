@@ -2,6 +2,44 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #286 · 2026-11-24T09:12:06Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed) · anthropic/claude-opus-5-5:xhigh
+
+Verdict: MERGE WITH CHANGE
+Risk: low
+
+## PR #286 builder: a fix for a review finding keeps the feature
+What it changes: Builder rule 24 (`forge/prompts/builder.md:24`, the `## forge` notes rule) gets one added sentence: deleting the file, function, match arm or test that a finding sits in is not a fix, and the `Done when` command that reached that code must still pass with that code present. The sentence "The reviewer re-checks the same lines against your diff" is extended with ", and reads a file or function the ticket asked for and the diff lacks as the ticket not done". The PR changes only the prompt. It grows by 564 bytes (20,925 to 21,489) for each builder and repair session.
+
+Findings:
+- medium forge/prompts/builder.md:24 The added sentence has no scope. It covers any code a finding sits in, not only code the ticket asks for, so it flips cases that the older rules in this prompt had right. These older rules speak to the same step (what a fix for a reproduced finding keeps):
+  - rule 24's own "A finding that reproduces, fix"
+  - rule 25's `Special cases:` line, together with reviewer.md:8 (a branch keyed on the measured input is a finding, "not ... code the ticket's `## Do` asks for")
+  - rule 12 (a command is not made to pass with "a `_ =>` arm that returns a value")
+  - rule 10 ("a second code path for the same behaviour is not done")
+  I traced one case through. Attempt 1 adds a `"monza" =>` arm in `src/ctrl.rs` that selects a tuned constant. The review REJECTs with `Must change: src/ctrl.rs:88 arm keyed on the Done when's track; remove it`. The retry builder starts from main (forge.py:1521 `git worktree add -q -b {branch} {wt} main`, comment at forge.py:993-994), and rule 24 is the only text that reads that `Must change:` line. Before the merge, rule 24 and rule 25 give one answer: write the general path with no arm. After the merge, the arm is "the match arm the finding sits in" and the monza `Done when` "reached that code". That command "must still pass with that code present", so read literally, the answer is to rebuild the arm. The same flip applies to three more cases:
+  - an `Err(_) => Ok(default)` arm flagged under reviewer step 5 (rule 12)
+  - a duplicate helper file flagged under reviewer step 7 (rule 10)
+  - a ticket whose `## Do` is a removal, where the finding is the arm still present
+  No mechanical guard reads special-case arms or swallowing arms. `lint_silencing()` covers lint attributes and config, and `test_tampering()` covers tests and fixtures. So reviewer steps 3 and 5 alone catch these cases. If they hold, the cost is a lost attempt toward `max_attempts`/blocked. If a weaker fallback reviewer misses one, the hack lands. The PR's own case keeps its improved answer when the sentence is scoped: the retry drops the feature the ticket asks for to clear a finding. The sentence that the PR edits is already scoped ("a file or function the ticket asked for"), so the first sentence only has to use the same scope. With that scope, the rule weakens no gate, reviewer step or protected path. See "Change needed".
+- low forge/prompts/builder.md:24 The setting of the paper is in-place repair. In forge, the only session that reads a `Must change:` line is a fresh builder from main, so the file that the earlier patch added does not exist and cannot be deleted. In forge, the sentence works through "with that code present" (which tells the builder to rebuild that code) and through the reviewer clause. Reviewer step 2 already REJECTs the omission that the PR targets ("all of it", with a list built from the ticket at the merge-base before the diff is read, reviewer.md:5, and REJECT per reviewer.md:14). Builder rule 9 covers it too. The new text moves the catch one attempt earlier, as the PR body says. The repair pass (forge.py ~1600) also gets the whole builder prompt, on a branch that holds the code, and there the sentence agrees with its header ("Fix the code (never the gate or tests' expectations ...)"). The change is worth one sentence when it is scoped.
+- low forge/prompts/builder.md:24 The citation is overstated. "only a check for deleted files stopped it" is not in the abstract of arXiv 2611.29162 (fetched). The abstract says that the check "largely prevents this", and its ablation gives removals of 9 of 375 runs with the check and 65 of 375 without it. The figure of 44 of 125 runs matches the abstract. This text goes to the model as evidence, so it must say what the source says.
+- info forge/prompts/builder.md:24 Deletions: the diff removes only the period after "against your diff". The sentence "The reviewer re-checks the same lines against your diff" stays whole, so no layer is removed. The selftest pin at selftest.py:916 ("`Must change:` line names the command", "run it against your own work before you change code for it") still matches. I ran `python3 forge/selftest.py` on a `git archive` copy of the PR head and got "forge selftest: all checks passed". `py_compile forge/forge.py` passes.
+- info forge/prompts/builder.md:24 The reviewer claim in the added clause agrees with reviewer.md:5 (step 2 lists the files and functions that a complete change must touch, and then checks the diff against that list) and with reviewer.md:14 (a problem in steps 1 to 6 is a REJECT). The PR does not change reviewer.md, so the reviewer is not weakened.
+- info security sweep The diff does not change forge.py. No ticket text goes into a command, and the diff adds no spend or GPU path. The sentence names no protected path and grants no edit. "deleting the ... test" agrees with `test_tampering()`, which refuses a net loss of test functions that the ticket does not name. The prompt growth is a fixed 564 bytes and is not unbounded. The PR body and its comments contain no HTML comments. The only comment is Copilot's "unable to review" note.
+- info siblings Seven other open PRs on `forge` touch `forge/prompts/builder.md`, and none of them edits line 24:
+  - #277 (rule 17), #275 (rule 20), #262 (rule 19) and #245 (rule 16) have no overlap with this PR.
+  - #229 (rule 25): no overlap.
+  - #248 (rule 12) says that a test which contradicts the ticket is changed to match the ticket. It changes the test and deletes nothing, so it does not contradict #286.
+  - #218 inserts a rule directly above line 24 ("for each `## Do` line you met another way ... a reason that lives in this session ... does not"). It shares the theme (dropping part of `## Do` to make the work easier) but starts from a different trigger (the first approach, not a review finding). The two rules support each other and do not contradict. The hunks touch, so the PR that lands second may need a mechanical rebase. Neither text needs a change.
+- info pass 2 The wording follows the prompt's style (a rule, then the evidence in a parenthetical). "must still pass" partly repeats rule 23 (every `Done when` line passes before the last commit). The only new content is "with that code present", and that is the clause the scope fix keeps. No README row was added. Recent prompt-only builder PRs (#281, #269, #252, #251, #243) did not add one either, so this is not a defect.
+
+Change needed (only for MERGE WITH CHANGE): In `forge/prompts/builder.md` line 24, replace
+"A fix keeps the feature: deleting the file, function, match arm or test the finding sits in makes the finding go away and the ticket undone (asked to repair planted rule violations in 25 pull requests, the largest of three models cleared the finding by deleting a newly added file in 44 of 125 runs, and only a check for deleted files stopped it; arXiv 2611.29162), so after your fix"
+with
+"A fix keeps the feature: deleting a file, function, match arm or test the ticket's `## Do` asks for, because a finding sits in it, makes the finding go away and the ticket undone (asked to repair planted rule violations in 25 pull requests, the largest of three models cleared the finding by deleting a newly added file in 44 of 125 runs, and a check for deleted files held such removals to 9 of 375 runs against 65 without it; arXiv 2611.29162), so after your fix"
+Do not change the rest of the line.
+
+
 ## PR #285 · 2026-11-24T05:34:05Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed) · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE WITH CHANGE
