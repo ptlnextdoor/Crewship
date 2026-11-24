@@ -579,10 +579,13 @@ class Forge:
         ok = r.returncode == 0
         # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
         # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
-        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307).
+        # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307). The line names where to look:
+        # the repair session reads this tail.
         passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
         if ok and passed and not any(int(n) for n in passed):
-            ok, tail = False, "gate: exit 0 but every test result line reads 0 passed; no test ran\n" + tail
+            ok, tail = False, ("gate: exit 0 but every test result line reads 0 passed; no test ran. Look for a crate "
+                               "dropped from the workspace members list, a `#[cfg]` or feature gate around the test "
+                               "modules, or a test filter that matches nothing; restore the tests, do not add a stub.\n" + tail)
         # The gate's own slice of the cycle, beside agent()'s `done ... Ns` line: the "8 to 25 min" above and in the
         # prompts was read by hand from PR-to-review gaps in forge.log, and the load is what stretches it.
         load = Path("/proc/loadavg")
