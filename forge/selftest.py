@@ -1941,6 +1941,25 @@ with tempfile.TemporaryDirectory() as d:
     check("a session that wrote no file logs no counts", forge.session_counts(Path(d) / "none") == "",
           repr(forge.session_counts(Path(d) / "none")))
 
+# 13. The owner's user-scope MCP servers are opted out per checkout: every server named in the user file gets an
+# `enabled: false` entry in `<cwd>/.omp/mcp.json`, the file is excluded from git in the clone (one line, written
+# once), and a user file with no servers writes nothing.
+with tempfile.TemporaryDirectory() as d:
+    repo = Path(d) / "repo"
+    repo.mkdir(); git("init -q -b main", repo)
+    forge.OMP_MCP = Path(d) / "mcp.json"
+    forge.OMP_MCP.write_text(json.dumps({"mcpServers": {"a": {"type": "http", "url": "https://x"}, "b": {"type": "stdio", "command": "c"}}}))
+    f.no_mcp(repo, repo / ".git"); f.no_mcp(repo, repo / ".git")
+    got = json.loads((repo / ".omp/mcp.json").read_text())
+    check("no_mcp disables every user-scope MCP server in the checkout", got == {"mcpServers": {"a": {"enabled": False}, "b": {"enabled": False}}}, str(got))
+    check("no_mcp keeps .omp/ out of git status, one exclude line for two calls",
+          (repo / ".git/info/exclude").read_text().count("/.omp/\n") == 1 and git("status --porcelain", repo) == "", git("status --porcelain", repo))
+    empty = Path(d) / "empty"
+    empty.mkdir(); git("init -q -b main", empty)
+    forge.OMP_MCP.write_text("{}")
+    f.no_mcp(empty, empty / ".git")
+    check("no_mcp writes nothing when the user file names no server", not (empty / ".omp").exists())
+
 print()
 if fails:
     print(f"{len(fails)} check(s) failed: {', '.join(fails)}")
