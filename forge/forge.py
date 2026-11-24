@@ -580,8 +580,7 @@ class Forge:
         # A green run in which every `test result:` line reads `0 passed` ran no test (a members list or cfg that
         # drops every crate's tests; dropping only some is not caught here): the README's "Done when" no-test
         # rule, applied to the gate's own run (Silent Success, arXiv 2609.30307). The line names where to look:
-        # the repair session reads this tail, and a refusal that names its fix got a better page than a bare
-        # refusal in one blind test (42 vs 37 of 50, one judge; r/ClaudeCode 1y43r3n, 2026-11-24).
+        # the repair session reads this tail.
         passed = re.findall(r"^test result: \w+\. (\d+) passed", out, re.M)
         if ok and passed and not any(int(n) for n in passed):
             ok, tail = False, ("gate: exit 0 but every test result line reads 0 passed; no test ran. Look for a crate "
