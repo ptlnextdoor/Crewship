@@ -2,6 +2,44 @@
 
 Written by reviewctl (forge/reviewctl.py). Newest first.
 
+## PR #83 · 2026-11-24T22:06:08Z · REJECT · risk low · gate fail · left open: gate failed · anthropic/claude-opus-5-5:xhigh
+
+Verdict: REJECT
+Risk: low
+
+## PR #83 forge: landing commit carries Ticket/Built-by/Reviewed-by/Forge trailers, one subject on both merge paths
+What it changes: `cycle()` builds a trailer block (`Ticket:`, `Built-by:`, `Reviewed-by:`, `Forge: <version> <harness>`, `PR:`) and passes it through `land()` to `gh pr merge -t 'forge: land NNNN' -b <trailers>` and to the local `git merge` as a second `-m`. It also adds one README row, rewrites selftest 4f and adds selftest 26.
+Findings:
+- high forge/forge.py:560,576,583,604,607 The base already has this feature, so the PR cannot land.
+  - #151 (commit 96eefbe3, merged 2026-11-07) puts `Builder:`, `Forge: <version> on <harness>` and `Session:` trailers on the landing merge on both paths. See current forge.py:1391-1482, README.md:121 and selftest.py:742-745.
+  - `git merge-tree --write-tree origin/forge <PR head>` reports content conflicts in forge.py, selftest.py and README.md. `gh pr view` gives `mergeable: CONFLICTING`, `mergeStateStatus: DIRTY`.
+  - The PR base b547a1c is 987 commits behind `origin/forge`. reviewctl's gate stops at its merge step (reviewctl.py:186-188). No single edit makes this branch land.
+- medium forge/forge.py:576,604,727 The PR contradicts a decision that is already in base.
+  - Base keeps GitHub's default subject on the gh path (current forge.py:1393-1394, README.md:121 "the subject unchanged"). This PR sets it to `forge: land NNNN` with `-t`.
+  - The PR uses a second set of keys: `Built-by:` where base writes `Builder:`, and `Forge: <v> <h>` where base writes `Forge: <v> on <h>`. A rebase that keeps both gives main two trailer vocabularies. Then `%(trailers:key=Built-by)` misses every landing that base's code wrote.
+  - The #151 audit (forge/PR_AUDIT.md:4362-4367) already named #83 as the side to change. This PR is that side.
+  - Only `Ticket:`, `Reviewed-by:` and `PR:` are new compared to base. They belong in a new PR on the current `land()`, under base's key names.
+- ok security trace of the diff itself, in case a later PR reuses it:
+  - `subject` and `body` go through `shlex.quote` on both paths. The values come from config model names, `last_model`, hex hashes, line 1 of `omp --version` and the PR URL. No ticket text reaches them. The unquoted `'forge: land {tid}'` at :607 is older code.
+  - `main_gated()` (:392, current :1161) matches `^forge: land ` first. Gh-path landings with the new subject still count as gated. An owner's GitHub merge keeps gh's default subject and stays ungated.
+  - `reviewed_by`, `self.version` and `self.harness` are now read before `land()`, inside the same `try` in `cycle()`. A raise there closes the PR and requeues the ticket, as before. `land()` runs only builder sessions, so `last_model[reviewer]` does not change and the done note is the same.
+  - Added cost: one `omp --version` subprocess per landing (30 s timeout, `?` fallback). No model quota, no GPU, no shared state, fixed trailer size.
+  - The diff does not touch gate.sh, the reviewer prompt, `forge/prompts/*.md`, protected paths, `claim()`, `recover()`, `discard_strays()` or quota fallback.
+- ok forge/selftest.py I ran the PR-head tree from `git archive`, isolated: `python3 forge/selftest.py` printed 81 ok and "all checks passed", rc 0. That matches the PR body. reviewctl's recorded gate failure (TypeError at selftest :146) comes from reviewctl.py:190, which checks out base's `selftest.py` with the old 2-argument `pr_merge` call. It does not show a bug in the PR.
+- low forge/selftest.py:149-151 deleted assertion. The old 4f check required `calls[-1].startswith("pr merge ...")`, so the merge had to come after the three mergeability polls.
+  - The new check counts 3 polls and 1 `pr merge`, and regex-matches the merge line anywhere in the log. A `pr_merge()` that called `gh pr merge` before its poll loop now passes.
+  - That order is what the check name says ("polls mergeability, then merges once"). It guards the stale-mergeability failure in the comment at forge.py:564-565 (24 of reflex1's first 37 merges fell to the local path).
+  - After this PR no selftest carries the order. The PR body does not name the layer it retires. Current base keeps the old assertion (selftest.py:551), so any rework must keep it.
+- low forge/README.md:79 The "prevents" column lists "a shared git identity on every commit so `git blame` names the owner". The diff changes no author, committer, `user.name` or `user.email`. Trailers sit only on the merge commit, and `git blame` reports the builder commits' authors with or without them. The README claims a fix that the code does not make.
+- nit forge/README.md:79, forge/forge.py:725-726 "16 of reflex1's 80 landings carry gh's `Merge pull request`". `git log main --first-parent --merges --until=2026-10-29T18:05:00Z` in ~/Dev/reflex1 gives 64 `forge: land` and 16 `Merge pull request`. Only 14 of the 16 match `/forge/l\d+-`, and the other 2 are owner docs PRs. Forge landings were 14 of 78.
+- nit forge/forge.py:721-726, forge/selftest.py:950-953, forge/README.md:79 The same reasoning (ticket note can be rewritten, 200-entry history, 16/64 split) is written three times.
+- info siblings: I fetched the diffs of all 66 other open `forge` PRs that touch forge.py, selftest.py or README.md. I searched them for `pr_merge`, `land(`, `forge: land`, `gh pr merge`, trailer keys and `done_note`. No open sibling adds landing trailers.
+  - #111 changes the same three lines. It adds a required 3rd `head` parameter to `pr_merge`, `--match-head-commit` to the gh merge line, and `{head}` to the local merge. With #83's positional `subject, body`, a careless textual merge could pass the subject as `head`.
+  - #84, #136, #181, #196 and #258 each add a 5th positional parameter to `land()` (`gated` or `ticket_text`), the same slot as #83's `trailers`, and edit the same `f.land` lambdas (selftest :551, :897).
+  - These are textual collisions, not opposing logic. #83 is the side that should change, because base has superseded it.
+- none prompts and safeguard table: the diff does not touch `forge/prompts/*.md` and deletes no README row.
+
+
 ## PR #290 · 2026-11-24T13:25:10Z · MERGE WITH CHANGE · risk low · gate pass · fixed and merged (pushed) · anthropic/claude-opus-5-5:xhigh
 
 Verdict: MERGE WITH CHANGE
