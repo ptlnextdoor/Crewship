@@ -46,6 +46,10 @@ OMP = shutil.which("omp") or str(Path.home() / ".local/bin/omp")
 # `skills.enabled: false` drops the owner's user-scope skill list (29 entries, 1,060 tokens, plus the
 # "MUST read skill://<name> first" rule) from every session; no forge prompt names a skill.
 OMP_CONFIG = Path(__file__).with_name("omp.yml")
+# The owner's user-scope MCP servers (4 in this file on 2026-11-24; `21st` added 11-22) reach every lane
+# session as mounted commands plus each server's instruction block, and `omp -p` waits for each to answer
+# before the first turn. No omp.yml key turns them off: no_mcp() writes the per-checkout opt-out instead.
+OMP_MCP = Path.home() / ".omp/agent/mcp.json"
 UTC = dt.timezone.utc
 # The levels `omp --thinking=` takes (`omp --help`, omp 18.12.6, 2026-11-11). An unknown one is refused before any
 # request (`Error: Invalid --thinking value`, rc 2, ~2 s); agent() returns that from the role's first model without
@@ -336,6 +340,7 @@ class Forge:
         # the session, so nothing a session writes there outlives it.
         gitcfg = Path(self.sh("git rev-parse --path-format=absolute --git-common-dir", cwd=cwd, check=True).stdout.strip()) / "config"
         cfg_before = gitcfg.read_bytes() if gitcfg.is_file() else None
+        self.no_mcp(cwd, gitcfg.parent)
         for model in chain:
             if self.spent(model):
                 continue
@@ -371,6 +376,28 @@ class Forge:
             self.last_model[role] = model
             return rc, text
         raise QuotaExhausted(role)
+
+    def no_mcp(self, cwd: Path, gitdir: Path) -> None:
+        """Keep the owner's user-scope MCP servers out of the session that runs in `cwd`. omp reads
+        `<cwd>/.omp/mcp.json` (no ancestor walk) and a project entry with `enabled: false` hides the same-named
+        user server (omp docs/mcp-config.md); measured 2026-11-24 with a Haiku probe under omp.yml: without
+        the file the prompt carried 4 servers, 60-70 command lines and 3 instruction blocks (the session's
+        own estimate, about 3,000 tokens), with it none. `/.omp/` goes into the clone's info/exclude, shared
+        by its worktrees, so the file stays out of `git status` and every diff; HARNESS_CONFIG still refuses
+        a `.omp/` path a session adds by force."""
+        try:
+            names = list(json.loads(OMP_MCP.read_text()).get("mcpServers", {}))
+        except (OSError, ValueError):
+            names = []
+        if not names:
+            return
+        (cwd / ".omp").mkdir(exist_ok=True)
+        (cwd / ".omp/mcp.json").write_text(json.dumps({"mcpServers": {n: {"enabled": False} for n in names}}, indent=1) + "\n")
+        exclude = gitdir / "info/exclude"
+        if "/.omp/" not in (exclude.read_text() if exclude.is_file() else ""):
+            exclude.parent.mkdir(exist_ok=True)
+            with exclude.open("a") as f:
+                f.write("/.omp/\n")
 
     def log_path(self, name: str) -> Path:
         """`sessions/<cycle>-<name>.log`, `-2`, `-3` when the name ran before this cycle: the builder repairs
